@@ -1,0 +1,96 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap");
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, monospace;
+
+  --color-canvas: #09090b;
+  --color-surface: #121214;
+  --color-raised: #1a1a1e;
+  --color-ink: #ececee;
+  --color-mute: #8b8b94;
+  --color-faint: #63636c;
+  --color-line: rgb(236 236 238 / 0.1);
+  --color-line-strong: rgb(236 236 238 / 0.18);
+  --color-accent: #d7dbe3;
+  --color-accent-fg: #0a0a0b;
+  --color-claude: #c9a27a;
+  --color-claude-dim: rgb(201 162 122 / 0.16);
+  --color-codex: #7aa3b0;
+  --color-codex-dim: rgb(122 163 176 / 0.16);
+  --color-ok: #8aa88a;
+  --color-warn: #c4a46a;
+  --color-crit: #c47a72;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-2xl: 28px;
+
+  --shadow-border: 0 0 0 1px rgb(255 255 255 / 0.08);
+  --shadow-border-hover: 0 0 0 1px rgb(255 255 255 / 0.13);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-fill {
+  transition: width 400ms cubic-bezier(0.22, 1, 0.36, 1);
+}

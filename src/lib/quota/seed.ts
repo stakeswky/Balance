@@ -1,0 +1,191 @@
+import { eventWeekShare, eventWindowShare, inWindow } from "./engine";
+import { planById } from "./plans";
+import type { AgentId, ModelId, SessionState, UsageEvent } from "./types";
+import { WEEK_MS, WINDOW_MS } from "./types";
+
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a += 0x6d2b79f5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const CLAUDE_TASKS = [
+  "重构鉴权中间件",
+  "补齐 dashboard 类型",
+  "拆分 route 组件",
+  "修 hydration 不一致",
+  "写 PGLite 迁移",
+  "扫描依赖漏洞",
+  "整理 server function",
+  "压测用量计算",
+  "接入 ingest 协议",
+  "校准 5 小时窗口",
+];
+
+const CODEX_TASKS = [
+  "生成 API client",
+  "补测试夹具",
+  "迁移 Zod schema",
+  "优化打包配置",
+  "整理 eslint 规则",
+  "写 ingest 适配器",
+  "核对 token 权重",
+  "补齐错误边界",
+  "导出周报 JSON",
+  "同步套餐预设",
+];
+
+function pick<T>(rng: () => number, list: T[]): T {
+  return list[Math.floor(rng() * list.length)] as T;
+}
+
+function id(rng: () => number, prefix: string) {
+  return `${prefix}_${Math.floor(rng() * 1e9).toString(36)}${Math.floor(rng() * 1e9).toString(36)}`;
+}
+
+function claudeModel(rng: () => number): ModelId {
+  const r = rng();
+  if (r < 0.14) return "opus";
+  if (r < 0.84) return "sonnet";
+  return "haiku";
+}
+
+function codexModel(rng: () => number): ModelId {
+  const r = rng();
+  if (r < 0.2) return "gpt-5.4";
+  if (r < 0.8) return "gpt-5.3-codex";
+  return "gpt-5-codex-mini";
+}
+
+function makeEvent(
+  rng: () => number,
+  agent: AgentId,
+  ts: number,
+  sessionId: string,
+  task: string,
+  model: ModelId,
+  intensity = 1,
+): UsageEvent {
+  if (agent === "claude") {
+    const heavy = model === "opus";
+    const tokensIn = Math.round((heavy ? 24000 : 11000) * (0.7 + rng()) * intensity);
+    const tokensOut = Math.round((heavy ? 2800 : 1400) * (0.6 + rng()) * intensity);
+    const cacheRead = Math.round((heavy ? 36000 : 14000) * (0.4 + rng()));
+    const cacheWrite = Math.round((heavy ? 5000 : 1800) * (0.4 + rng()) * intensity);
+    return {
+      id: id(rng, "ev"),
+      agent,
+      model,
+      ts,
+      sessionId,
+      task,
+      tokensIn,
+      tokensOut,
+      cacheRead,
+      cacheWrite,
+      reasoningMin: 0,
+    };
+  }
+  const reasoningMin =
+    (model === "gpt-5.4" ? 3.1 : model === "gpt-5.3-codex" ? 1.8 : 0.7) * (0.7 + rng()) * intensity;
+  return {
+    id: id(rng, "ev"),
+    agent,
+    model,
+    ts,
+    sessionId,
+    task,
+    tokensIn: Math.round(6200 * (0.6 + rng()) * intensity),
+    tokensOut: Math.round(2100 * (0.5 + rng()) * intensity),
+    cacheRead: Math.round(900 * rng()),
+    cacheWrite: Math.round(500 * rng()),
+    reasoningMin,
+  };
+}
+
+function fillAgent(
+  rng: () => number,
+  agent: AgentId,
+  now: number,
+  windowTarget: number,
+  weekTarget: number,
+  boostPct: number,
+) {
+  const plan = planById(agent === "claude" ? "claude-max-5x" : "chatgpt-plus");
+  const tasks = agent === "claude" ? CLAUDE_TASKS : CODEX_TASKS;
+  const events: UsageEvent[] = [];
+  let guard = 0;
+
+  const windowPct = () =>
+    inWindow(events, now, WINDOW_MS, agent).reduce((s, e) => s + eventWindowShare(e, plan), 0);
+  const weekPct = () =>
+    inWindow(events, now, WEEK_MS, agent).reduce((s, e) => s + eventWeekShare(e, plan, boostPct), 0);
+
+  const pushSession = (maxAgeH: number, minAgeH: number, intensity: number) => {
+    const ageH = minAgeH + rng() * Math.max(0.05, maxAgeH - minAgeH);
+    const started = now - ageH * 3600_000;
+    const sessionId = id(rng, agent === "claude" ? "cc" : "cx");
+    const task = pick(rng, tasks);
+    const model = agent === "claude" ? claudeModel(rng) : codexModel(rng);
+    const n = 3 + Math.floor(rng() * 5);
+    for (let i = 0; i < n; i++) {
+      const ts = Math.min(now - 30_000, started + i * (3 + rng() * 8) * 60_000);
+      events.push(makeEvent(rng, agent, ts, sessionId, task, model, intensity));
+    }
+  };
+
+  while (weekPct() < weekTarget && guard < 80) {
+    pushSession(96, 8, 0.85);
+    guard += 1;
+  }
+  guard = 0;
+  while (windowPct() < windowTarget && guard < 40) {
+    pushSession(4.6, 0.08, 1.15);
+    guard += 1;
+  }
+  return events;
+}
+
+export function seedHistory(now = Date.now()): UsageEvent[] {
+  const day = new Date(now);
+  const seed = day.getFullYear() * 10000 + (day.getMonth() + 1) * 100 + day.getDate();
+  const rng = mulberry32(seed + 41);
+  const events = [
+    ...fillAgent(rng, "claude", now, 61, 34, 50),
+    ...fillAgent(rng, "codex", now, 47, 28, 50),
+  ];
+  return events.sort((a, b) => a.ts - b.ts);
+}
+
+export function nextLiveEvent(
+  rng: () => number,
+  agent: AgentId,
+  session: SessionState,
+  now: number,
+): UsageEvent {
+  return makeEvent(rng, agent, now, session.id, session.task, session.model, 0.72);
+}
+
+export function newSession(rng: () => number, agent: AgentId, now: number): SessionState {
+  const tasks = agent === "claude" ? CLAUDE_TASKS : CODEX_TASKS;
+  const model = agent === "claude" ? claudeModel(rng) : codexModel(rng);
+  return {
+    id: id(rng, agent === "claude" ? "cc" : "cx"),
+    task: pick(rng, tasks),
+    model,
+    startedAt: now,
+    events: 0,
+    tokens: 0,
+  };
+}
+
+export function liveRng() {
+  return mulberry32((Date.now() ^ 0x9e3779b9) >>> 0);
+}
+
+export { CLAUDE_TASKS, CODEX_TASKS };
