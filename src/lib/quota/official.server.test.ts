@@ -3,7 +3,15 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { clearOfficialCache, CODEX_USAGE_URL, GROK_BILLING_URL, readOfficialQuota } from "./official.server.ts";
+import {
+  CLAUDE_USAGE_STALE_MS,
+  CLAUDE_USAGE_URL,
+  claudeOauthAuthFromCredentials,
+  clearOfficialCache,
+  CODEX_USAGE_URL,
+  GROK_BILLING_URL,
+  readOfficialQuota,
+} from "./official.server.ts";
 
 function fixtureHome() {
   const home = mkdtempSync(join(tmpdir(), "synq-official-"));
@@ -192,4 +200,135 @@ test("readOfficialQuota falls back to Codex session rate_limits when the API fai
   const q = await readOfficialQuota({ home, grokHome, codexHome, fetchImpl, skipCache: true });
   assert.equal(q.codex?.weekPct, 57);
   assert.equal(q.codex?.source, "session-rate-limits");
+});
+
+test("readOfficialQuota reads the official Fable percent from Claude OAuth usage", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const fetchImpl: typeof fetch = async (input, init) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer claude-token");
+      assert.equal(headers.get("anthropic-beta"), "oauth-2025-04-20");
+      return new Response(
+        JSON.stringify({
+          five_hour: { utilization: 34, resets_at: "2026-08-20T15:00:00Z" },
+          seven_day: { utilization: 27, resets_at: "2026-08-25T20:59:00Z" },
+          limits: [
+            {
+              kind: "weekly_scoped",
+              scope: { model: { display_name: "Fable" } },
+              percent: 24,
+              resets_at: "2026-08-25T20:59:00Z",
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  assert.equal(q.claude?.windowPct, 34);
+  assert.equal(q.claude?.weekPct, 27);
+  assert.equal(q.claude?.modelWeekLimits?.fable?.usedPct, 24);
+  assert.equal(q.claude?.source, "oauth-usage");
+});
+
+test("readOfficialQuota keeps desktop 5h and 7d without inventing Fable after a 429", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) return new Response("rate limited", { status: 429 });
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  assert.equal(q.claude?.windowPct, 7);
+  assert.equal(q.claude?.weekPct, 19);
+  assert.equal(q.claude?.modelWeekLimits?.fable, undefined);
+  assert.equal(q.claude?.source, "plan-usage-history");
+});
+
+test("Claude usage cache keeps a successful Fable snapshot for at most 60 minutes", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      if (claudeCalls > 1) return new Response("rate limited", { status: 429 });
+      return new Response(
+        JSON.stringify({
+          seven_day: { utilization: 27, resets_at: "2026-08-25T20:59:00Z" },
+          limits: [
+            {
+              kind: "weekly_scoped",
+              scope: { model: { display_name: "Fable" } },
+              percent: 24,
+              resets_at: "2026-08-25T20:59:00Z",
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = (at: number) =>
+    readOfficialQuota({
+      home,
+      grokHome,
+      fetchImpl,
+      cacheMs: 30_000,
+      readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+      now: at,
+    });
+
+  const first = await readAt(now);
+  const fresh = await readAt(now + 5_000);
+  const stale = await readAt(now + 30_001);
+  const expired = await readAt(now + CLAUDE_USAGE_STALE_MS + 30_002);
+
+  assert.equal(first.claude?.modelWeekLimits?.fable?.usedPct, 24);
+  assert.equal(fresh.claude?.modelWeekLimits?.fable?.usedPct, 24);
+  assert.equal(stale.claude?.modelWeekLimits?.fable?.usedPct, 24);
+  assert.equal(expired.claude?.modelWeekLimits?.fable, undefined);
+  assert.equal(claudeCalls, 3);
+});
+
+test("Claude OAuth auth parser rejects expired and empty credentials", () => {
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  assert.equal(
+    claudeOauthAuthFromCredentials({ claudeAiOauth: { accessToken: "", expiresAt: now + 60_000 } }, now),
+    null,
+  );
+  assert.equal(
+    claudeOauthAuthFromCredentials(
+      { claudeAiOauth: { accessToken: "expired", expiresAt: now - 60_000 } },
+      now,
+    ),
+    null,
+  );
+  assert.deepEqual(
+    claudeOauthAuthFromCredentials(
+      { claudeAiOauth: { accessToken: "valid", expiresAt: now + 60_000 } },
+      now,
+    ),
+    { accessToken: "valid" },
+  );
 });
