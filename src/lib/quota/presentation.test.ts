@@ -126,12 +126,21 @@ test("five-hour primary keeps a separate weekly alert", () => {
 });
 
 test("routing advice respects a weekly-only Codex limit", () => {
-  const tips = routingAdvice(
+  const tips = routingAdvice([
     meter({ agent: "claude", windowPct: 20, weekPct: 20 }),
     meter({ agent: "grok", windowPct: 20, weekPct: 20 }),
     meter({ agent: "codex", windowPct: 12, weekPct: 80 }),
-  );
+  ]);
   assert.ok(tips.some((tip) => tip.title.includes("Codex")));
+});
+
+test("routing advice never names unavailable agents", () => {
+  const tips = routingAdvice([
+    meter({ agent: "claude", windowPct: 20, weekPct: 20 }),
+  ]);
+  assert.ok(tips.length > 0);
+  assert.ok(tips.every((tip) => !tip.title.includes("Grok") && !tip.title.includes("Codex")));
+  assert.ok(tips.every((tip) => !tip.body.includes("Grok") && !tip.body.includes("Codex")));
 });
 
 test("credit formatting is compact and range-first", () => {

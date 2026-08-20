@@ -482,7 +482,7 @@ export function Dashboard() {
               />
             </section>
 
-            <AdviceCard claude={claudeMeter} grok={grokMeter} codex={codexMeter} />
+            <AdviceCard meters={[claudeMeter, grokMeter, codexMeter]} />
 
             <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
               <Card>

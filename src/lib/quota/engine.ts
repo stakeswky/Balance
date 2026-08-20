@@ -290,50 +290,55 @@ export function comparePlans(
   });
 }
 
-export function routingAdvice(claude: MeterSnapshot, grok: MeterSnapshot, codex: MeterSnapshot) {
+export function routingAdvice(meters: readonly MeterSnapshot[]) {
   const tips: { title: string; body: string }[] = [];
-  const grokLoad = Math.max(grok.windowPct, grok.weekPct);
-  const codexLoad = Math.max(codex.windowPct, codex.weekPct);
-  if (claude.windowPct >= 68) {
+  const byAgent = new Map(meters.map((meter) => [meter.agent, meter]));
+  const load = (agent: AgentId) => {
+    const meter = byAgent.get(agent);
+    return meter ? Math.max(meter.windowPct, meter.weekPct) : null;
+  };
+  const claude = byAgent.get("claude");
+  const grokLoad = load("grok");
+  const codexLoad = load("codex");
+
+  if (claude && claude.windowPct >= 68) {
     tips.push({
       title: "Claude 切到 Sonnet / Haiku",
-      body: "窗口已过警戒。简单改文件用 Haiku 4.5，重重构再开 Opus 5，把 Fable 留给最长的 Agent。",
+      body: "窗口已过警戒。简单改文件用 Haiku 4.5，重重构再开 Opus 5。",
     });
   }
-  if (grokLoad >= 68) {
+  if (grokLoad != null && grokLoad >= 68) {
     tips.push({
       title: "Grok 先歇一轮或换档",
-      body: "Grok 窗已经紧。短修补继续用 4.6，长推理先让 Claude / Codex 顶上，等周额度回补。",
+      body: "Grok 窗已经紧。短修补继续用 4.6，长推理等周额度回补。",
     });
   }
-  if (codexLoad >= 68) {
+  if (codexLoad != null && codexLoad >= 68) {
     tips.push({
       title: "Codex 降到 Terra / Luna",
       body: "周额度已经紧。短任务用 GPT-5.6 Luna，把 Sol 留给难的实现。",
     });
   }
-  if (claude.windowPct < 40 && (codexLoad >= 70 || grokLoad >= 70)) {
+
+  const strained = meters.some((meter) => Math.max(meter.windowPct, meter.weekPct) >= 70);
+  const receiver = meters
+    .filter((meter) => Math.max(meter.windowPct, meter.weekPct) < 40)
+    .sort(
+      (a, b) =>
+        Math.max(a.windowPct, a.weekPct) - Math.max(b.windowPct, b.weekPct),
+    )[0];
+  if (strained && receiver) {
+    const name =
+      receiver.agent === "claude" ? "Claude" : receiver.agent === "grok" ? "Grok" : "Codex";
     tips.push({
-      title: "把重活交给 Claude",
-      body: "Claude 窗口还松。长重构先走 Claude Code，其余 Agent 留审查和补测试。",
+      title: `把重活交给 ${name}`,
+      body: `${name} 当前窗口更宽裕，下一趟长任务优先走这一路。`,
     });
   }
-  if (grokLoad < 40 && claude.windowPct >= 70) {
+  if (!tips.length && meters.length) {
     tips.push({
-      title: "把重活交给 Grok",
-      body: "Claude 先碰到上限。实现和多步工具循环交给 Grok，把 Opus 留给难的设计。",
-    });
-  }
-  if (codexLoad < 40 && claude.windowPct >= 70) {
-    tips.push({
-      title: "把重活交给 Codex",
-      body: "Claude 先碰到上限。生成样板、补测试交给 Codex，把 Opus 留给难的设计。",
-    });
-  }
-  if (!tips.length) {
-    tips.push({
-      title: "三路节奏正常",
-      body: "窗口都还宽裕。保持现在的模型组合即可，不必为了省额度降智。",
+      title: meters.length === 1 ? "当前 Agent 节奏正常" : `${meters.length} 路节奏正常`,
+      body: "可见 Agent 的窗口都还宽裕，保持当前模型组合即可。",
     });
   }
   return tips.slice(0, 3);
