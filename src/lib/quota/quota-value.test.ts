@@ -324,6 +324,176 @@ test("windowId changes after reset", () => {
   assert.notEqual(a, b);
 });
 
+test("provider reset jitter keeps one quota window identity", () => {
+  const claudeA = officialWindowId(
+    "claude",
+    "weekly",
+    null,
+    Date.parse("2026-08-17T20:59:59.901Z"),
+    Date.parse("2026-08-24T20:59:59.901Z"),
+  );
+  const claudeB = officialWindowId(
+    "claude",
+    "weekly",
+    null,
+    Date.parse("2026-08-17T21:00:00.416Z"),
+    Date.parse("2026-08-24T21:00:00.416Z"),
+  );
+  assert.equal(claudeA, claudeB);
+
+  const codexResetA = 1_787_815_628_000;
+  const codexResetB = 1_787_815_629_000;
+  const week = 7 * 24 * 60 * 60 * 1000;
+  assert.equal(
+    officialWindowId("codex", "weekly", null, codexResetA - week, codexResetA),
+    officialWindowId("codex", "weekly", null, codexResetB - week, codexResetB),
+  );
+
+  assert.equal(
+    officialWindowId(
+      "grok",
+      "weekly",
+      null,
+      Date.parse("2026-08-18T13:28:17.000Z"),
+      Date.parse("2026-08-25T13:28:17.000Z"),
+    ),
+    officialWindowId(
+      "grok",
+      "weekly",
+      null,
+      Date.parse("2026-08-18T13:28:17.911Z"),
+      Date.parse("2026-08-25T13:28:17.911Z"),
+    ),
+  );
+});
+
+test("real quota resets still create a new window identity", () => {
+  const start = Date.parse("2026-08-20T00:00:00Z");
+  const span = 5 * 60 * 60 * 1000;
+  assert.notEqual(
+    officialWindowId("claude", "five_hour", null, start, start + span),
+    officialWindowId("claude", "five_hour", null, start + span, start + 2 * span),
+  );
+});
+
+test("legacy jittered sample ids coalesce without losing observations", () => {
+  const firstId = "claude:weekly:_:1787000399901:1787605199901";
+  const secondId = "claude:weekly:_:1787000400416:1787605200416";
+  const rows = normalizeWindowSamples([
+    sample({
+      agent: "claude",
+      windowId: firstId,
+      timestampMs: 1,
+      usedPercent: 10,
+      cumulativeObservedUsd: 1,
+      modelMix: { opus: 1 },
+    }),
+    sample({
+      agent: "claude",
+      windowId: secondId,
+      timestampMs: 2,
+      usedPercent: 12,
+      cumulativeObservedUsd: 2,
+      modelMix: { opus: 1 },
+    }),
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(new Set(rows.map((row) => row.windowId)).size, 1);
+  assert.equal(
+    rows[0]?.windowId,
+    officialWindowId("claude", "weekly", null, 1_787_000_400_416, 1_787_605_200_416),
+  );
+
+  const codexRows = normalizeWindowSamples([
+    sample({
+      agent: "codex",
+      windowId: "codex:weekly:_:1787210828000:1787815628000",
+      timestampMs: 1,
+      usedPercent: 5,
+      cumulativeObservedUsd: 1,
+    }),
+    sample({
+      agent: "codex",
+      windowId: "codex:weekly:_:1787210829000:1787815629000",
+      timestampMs: 2,
+      usedPercent: 7,
+      cumulativeObservedUsd: 2,
+    }),
+  ]);
+  assert.equal(new Set(codexRows.map((row) => row.windowId)).size, 1);
+
+  const grokStartA = Date.parse("2026-08-18T13:28:17.000Z");
+  const grokStartB = Date.parse("2026-08-18T13:28:17.911Z");
+  const grokEndA = Date.parse("2026-08-25T13:28:17.000Z");
+  const grokEndB = Date.parse("2026-08-25T13:28:17.911Z");
+  const grokRows = normalizeWindowSamples([
+    sample({
+      agent: "grok",
+      windowId: `grok:weekly:_:${grokStartA}:${grokEndA}`,
+      timestampMs: 1,
+      usedPercent: 8,
+      cumulativeObservedUsd: 1,
+      modelMix: { "grok-4.6": 1 },
+    }),
+    sample({
+      agent: "grok",
+      windowId: `grok:weekly:_:${grokStartB}:${grokEndB}`,
+      timestampMs: 2,
+      usedPercent: 10,
+      cumulativeObservedUsd: 2,
+      modelMix: { "grok-4.6": 1 },
+    }),
+  ]);
+  assert.equal(new Set(grokRows.map((row) => row.windowId)).size, 1);
+});
+
+test("quotaValueFor reuses legacy jittered samples immediately", () => {
+  const value = quotaValueFor(
+    [],
+    "claude",
+    slice({
+      agent: "claude",
+      weekPct: 24,
+      weekStartedAt: 1_787_000_400_416,
+      weekResetsAt: 1_787_605_200_416,
+    }),
+    "weekly",
+    1_787_300_000_000,
+    [
+      sample({
+        agent: "claude",
+        windowId: "claude:weekly:_:1787000399901:1787605199901",
+        timestampMs: 1,
+        usedPercent: 10,
+        cumulativeObservedUsd: 1,
+        modelMix: { opus: 1 },
+      }),
+      sample({
+        agent: "claude",
+        windowId: "claude:weekly:_:1787000399901:1787605199901",
+        timestampMs: 2,
+        usedPercent: 12,
+        cumulativeObservedUsd: 2,
+        modelMix: { opus: 1 },
+      }),
+    ],
+  );
+  assert.equal(value.confidence, "low");
+  assert.equal(value.totalPointUsd, 50);
+});
+
+test("window identity normalization does not move event boundaries", () => {
+  const start = Date.parse("2026-08-17T21:00:00.416Z");
+  const reset = Date.parse("2026-08-24T21:00:00.416Z");
+  const bounds = windowBounds(
+    slice({ agent: "claude", weekStartedAt: start, weekResetsAt: reset }),
+    "weekly",
+    Date.parse("2026-08-20T00:00:00Z"),
+  );
+  assert.equal(bounds.start, start);
+  assert.equal(bounds.resetsAt, reset);
+});
+
 test("quotaValueFor keeps L1 when L2 is none", () => {
   const now = 1_600_000;
   const events = [ev({ ts: 1_200_000, tokensIn: 331, cacheRead: 27008, tokensOut: 807 })];

@@ -46,6 +46,8 @@ export interface QuotaValue {
 
 const FIVE_H = WINDOW_MS;
 const WEEK = WEEK_MS;
+const WINDOW_ID_GRANULARITY_MS = 60_000;
+const MIN_REAL_WINDOW_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 
 function advanceWindow(start: number, span: number, now: number): { start: number; resetsAt: number } {
   if (!(span > 0)) return { start, resetsAt: start + span };
@@ -62,7 +64,42 @@ export function officialWindowId(
   startsAt: number | null,
   resetsAt: number | null,
 ): string {
-  return `${agent}:${kind}:${product ?? "_"}:${startsAt ?? "na"}:${resetsAt ?? "na"}`;
+  return `${agent}:${kind}:${product ?? "_"}:${canonicalWindowAnchor(startsAt)}:${canonicalWindowAnchor(resetsAt)}`;
+}
+
+function canonicalWindowAnchor(value: number | null): string {
+  if (value == null) return "na";
+  if (!Number.isFinite(value) || value < MIN_REAL_WINDOW_TIMESTAMP_MS) return String(value);
+  return String(Math.round(value / WINDOW_ID_GRANULARITY_MS) * WINDOW_ID_GRANULARITY_MS);
+}
+
+function canonicalWindowAnchorToken(value: string): string | null {
+  if (value === "na") return value;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return canonicalWindowAnchor(parsed);
+}
+
+function normalizeOfficialWindowId(windowId: string): string {
+  const parts = windowId.split(":");
+  if (parts.length < 5) return windowId;
+  const agent = parts[0];
+  const kind = parts[1];
+  if ((agent !== "claude" && agent !== "codex" && agent !== "grok")
+    || (kind !== "five_hour" && kind !== "weekly" && kind !== "product")) {
+    return windowId;
+  }
+  const startsAt = canonicalWindowAnchorToken(parts[parts.length - 2]!);
+  const resetsAt = canonicalWindowAnchorToken(parts[parts.length - 1]!);
+  if (startsAt == null || resetsAt == null) return windowId;
+  const product = parts.slice(2, -2).join(":");
+  return `${agent}:${kind}:${product}:${startsAt}:${resetsAt}`;
+}
+
+function normalizeSampleWindowId(sample: QuotaSample): QuotaSample {
+  const windowId = normalizeOfficialWindowId(sample.windowId);
+  if (windowId === sample.windowId) return sample;
+  return { ...sample, windowId };
 }
 
 export function windowBounds(
@@ -251,7 +288,8 @@ export function validSlopes(samples: QuotaSample[]): QuotaSlope[] {
 
 export function normalizeWindowSamples(samples: QuotaSample[]): QuotaSample[] {
   const groups = new Map<string, QuotaSample[]>();
-  for (const row of samples) {
+  for (const original of samples) {
+    const row = normalizeSampleWindowId(original);
     const key = `${row.windowId}\u0000${row.pricingVersion}`;
     const group = groups.get(key) ?? [];
     group.push(row);
@@ -402,13 +440,15 @@ function retentionGroup(sample: QuotaSample): string {
 }
 
 export function mergeSamples(existing: QuotaSample[], incoming: QuotaSample): QuotaSample[] {
-  const same = existing.filter((s) => s.windowId === incoming.windowId);
-  const others = existing.filter((s) => s.windowId !== incoming.windowId);
-  const nextSame = normalizeWindowSamples([...same, incoming]).slice(-128);
+  const canonicalExisting = existing.map(normalizeSampleWindowId);
+  const canonicalIncoming = normalizeSampleWindowId(incoming);
+  const same = canonicalExisting.filter((s) => s.windowId === canonicalIncoming.windowId);
+  const others = canonicalExisting.filter((s) => s.windowId !== canonicalIncoming.windowId);
+  const nextSame = normalizeWindowSamples([...same, canonicalIncoming]).slice(-128);
   const combined = others.concat(nextSame);
   const latestByWindow = new Map<string, { group: string; at: number }>();
   for (const sample of combined) {
-    if (sample.agent !== incoming.agent) continue;
+    if (sample.agent !== canonicalIncoming.agent) continue;
     const current = latestByWindow.get(sample.windowId);
     if (!current || sample.timestampMs > current.at) {
       latestByWindow.set(sample.windowId, {
@@ -428,7 +468,7 @@ export function mergeSamples(existing: QuotaSample[], incoming: QuotaSample): Qu
     rows.sort((left, right) => left.at - right.at);
     for (const row of rows.slice(-8)) keep.add(row.windowId);
   }
-  return combined.filter((sample) => sample.agent !== incoming.agent || keep.has(sample.windowId));
+  return combined.filter((sample) => sample.agent !== canonicalIncoming.agent || keep.has(sample.windowId));
 }
 
 export function samplesFromOfficialHistory(
@@ -507,9 +547,12 @@ export function quotaValueFor(
     confidence: "none" as const,
     externalUsageDetected: false,
   };
+  const compatibleSamples = (samples ?? []).filter(
+    (sample) => normalizeOfficialWindowId(sample.windowId) === windowId,
+  );
   const cal = official
     ? calibrateFromSamples(
-        (samples ?? []).filter((s) => s.windowId === windowId),
+        compatibleSamples,
         usedPct,
         bounds.rolling,
       )
