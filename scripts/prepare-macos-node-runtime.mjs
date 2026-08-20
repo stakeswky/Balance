@@ -8,8 +8,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -104,6 +106,9 @@ export async function prepareRuntime({
   await mkdir(dirname(outputPath), { recursive: true });
   await mkdir(dirname(licensePath), { recursive: true });
   extract({ archivePath, licensePath, outputPath, spec });
+  const license = readFileSync(licensePath, "utf8");
+  const normalizedLicense = license.replace(/^ +\t/gm, "\t");
+  if (normalizedLicense !== license) writeFileSync(licensePath, normalizedLicense);
 
   return { archivePath, licensePath, outputPath };
 }

@@ -44,6 +44,14 @@ npm run desktop:test
 npm run desktop:build
 ```
 
+Before running the native verification suite, grant the terminal application that launches it permission under macOS **System Settings → Privacy & Security → Accessibility**. Then verify the already-built app and DMG with one command:
+
+```bash
+npm run desktop:verify
+```
+
+This exercises environment and auth isolation, the real app UI and normal close path, sidecar cleanup after a parent `SIGKILL`, the occupied-port `startup-error` path, and the packaged DMG with `hdiutil verify`.
+
 ## 快速开始
 
 要求 Node.js 22 或更高版本。

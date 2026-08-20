@@ -81,7 +81,7 @@ test("prepareRuntime re-downloads a bad cached archive and refreshes outputs", a
       assert.equal(sourceArchivePath, archivePath);
       writeFileSync(outputPath, "new binary");
       chmodSync(outputPath, 0o755);
-      writeFileSync(licensePath, "Node license");
+      writeFileSync(licensePath, "Node license\n      \thttps://example.test/license\n");
     },
     sha256: async (path) => {
       if (path === archivePath) {
@@ -96,7 +96,10 @@ test("prepareRuntime re-downloads a bad cached archive and refreshes outputs", a
   assert.deepEqual(result, { archivePath, licensePath, outputPath });
   assert.equal(readFileSync(archivePath, "utf8"), "fresh archive");
   assert.equal(readFileSync(outputPath, "utf8"), "new binary");
-  assert.equal(readFileSync(licensePath, "utf8"), "Node license");
+  assert.equal(
+    readFileSync(licensePath, "utf8"),
+    "Node license\n\thttps://example.test/license\n",
+  );
 });
 
 test("prepareRuntime fails closed when the downloaded archive checksum mismatches", async () => {
