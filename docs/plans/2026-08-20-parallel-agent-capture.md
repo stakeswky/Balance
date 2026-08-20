@@ -1,7 +1,7 @@
 # Claude / Grok / Codex 并行任务采集计划
 
-日期：2026-08-20  
-状态：计划已通过对抗复核，执行中  
+日期：2026-08-20
+状态：已执行
 范围：三家本机日志的乱序增量采集、Claude 子代理身份、并行活跃任务状态和工作台展示
 
 ## 1. 目标与非目标
@@ -1114,3 +1114,14 @@ node scripts/parallel-agent-card-smoke.mjs production
 - Placeholder scan：所有测试和实现片段均为可执行代码，无待填内容。
 - Type consistency：`UsageEvent`、`AgentLiveInfo`、三个 scan result、三个 ingestor 和现有组件 props 均按当前源码签名核对。
 - Step size：四个 step 分别只负责采集、状态、activity 消费、UI；每步可独立红绿验证并提交。
+
+## 9. 执行结果
+
+- `10b2cb3 fix(quota): capture concurrent agent streams`
+- `6ce272e feat(quota): track active parallel tasks`
+- `5fd7e13 feat(quota): group sessions by activity`
+- `c479c24 feat(ui): show parallel agent tasks`
+- 全量测试：228 passed，0 failed。
+- `typecheck`、`lint`、`build`、development/production `AgentCard` smoke 均为 exit 0。
+- 真实日志回放：Claude 2 个 actor / 1 个父计费 session，workflow label 命中；Grok 2 个并行 session；Codex 当前 2 个活跃 session。
+- 开发服务与 Nitro 构建服务均返回 HTTP 200，标题为 `Synq — Claude × Grok × Codex 额度监控`。
