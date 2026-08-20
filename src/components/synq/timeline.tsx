@@ -24,15 +24,7 @@ function sessionsInWindow(events: UsageEvent[], agent: AgentId, now: number) {
   }));
 }
 
-function Lane({
-  agent,
-  events,
-  now,
-}: {
-  agent: AgentId;
-  events: UsageEvent[];
-  now: number;
-}) {
+function Lane({ agent, events, now }: { agent: AgentId; events: UsageEvent[]; now: number }) {
   const blocks = sessionsInWindow(events, agent, now);
   const from = now - WINDOW_MS;
   return (
@@ -57,9 +49,16 @@ function Lane({
   );
 }
 
-export function DualTimeline({ events, now }: { events: UsageEvent[]; now: number }) {
+export function DualTimeline({
+  agents,
+  events,
+  now,
+}: {
+  agents: readonly AgentId[];
+  events: UsageEvent[];
+  now: number;
+}) {
   const ticks = [5, 4, 3, 2, 1, 0];
-  const lanes: AgentId[] = ["claude", "grok", "codex"];
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between text-xs text-mute">
@@ -67,7 +66,7 @@ export function DualTimeline({ events, now }: { events: UsageEvent[]; now: numbe
         <span className="font-mono tabular">现在</span>
       </div>
       <div className="space-y-2">
-        {lanes.map((agent) => (
+        {agents.map((agent) => (
           <div key={agent} className="grid grid-cols-[4.5rem_1fr] items-center gap-3">
             <span className={cn("text-xs font-medium", agentTextClass(agent))}>
               {agent === "claude" ? "Claude" : agent === "grok" ? "Grok" : "Codex"}

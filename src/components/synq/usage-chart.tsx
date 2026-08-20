@@ -1,9 +1,17 @@
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { hourlySeries } from "@/lib/quota/engine";
-import type { UsageEvent } from "@/lib/quota/types";
+import type { AgentId, UsageEvent } from "@/lib/quota/types";
 import { formatTokens } from "./format";
 
-export function UsageChart({ events, now }: { events: UsageEvent[]; now: number }) {
+export function UsageChart({
+  agents,
+  events,
+  now,
+}: {
+  agents: readonly AgentId[];
+  events: UsageEvent[];
+  now: number;
+}) {
   const data = hourlySeries(events, now, 24);
   return (
     <div className="h-48 w-full">
@@ -50,27 +58,33 @@ export function UsageChart({ events, now }: { events: UsageEvent[]; now: number 
               name === "claude" ? "Claude" : name === "grok" ? "Grok" : "Codex",
             ]}
           />
-          <Area
-            type="monotone"
-            dataKey="claude"
-            stroke="var(--color-claude)"
-            fill="url(#gClaude)"
-            strokeWidth={1.5}
-          />
-          <Area
-            type="monotone"
-            dataKey="grok"
-            stroke="var(--color-grok)"
-            fill="url(#gGrok)"
-            strokeWidth={1.5}
-          />
-          <Area
-            type="monotone"
-            dataKey="codex"
-            stroke="var(--color-codex)"
-            fill="url(#gCodex)"
-            strokeWidth={1.5}
-          />
+          {agents.includes("claude") ? (
+            <Area
+              type="monotone"
+              dataKey="claude"
+              stroke="var(--color-claude)"
+              fill="url(#gClaude)"
+              strokeWidth={1.5}
+            />
+          ) : null}
+          {agents.includes("grok") ? (
+            <Area
+              type="monotone"
+              dataKey="grok"
+              stroke="var(--color-grok)"
+              fill="url(#gGrok)"
+              strokeWidth={1.5}
+            />
+          ) : null}
+          {agents.includes("codex") ? (
+            <Area
+              type="monotone"
+              dataKey="codex"
+              stroke="var(--color-codex)"
+              fill="url(#gCodex)"
+              strokeWidth={1.5}
+            />
+          ) : null}
         </AreaChart>
       </ResponsiveContainer>
     </div>

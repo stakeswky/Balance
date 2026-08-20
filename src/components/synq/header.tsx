@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import type { AgentId } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
 export type ViewId = "monitor" | "report" | "plugin" | "settings";
@@ -15,11 +16,13 @@ export function Header({
   onView,
   live,
   watchText,
+  agents,
 }: {
   view: ViewId;
   onView: (id: ViewId) => void;
   live: boolean;
   watchText?: string;
+  agents: readonly AgentId[];
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 backdrop-blur-md">
@@ -55,7 +58,9 @@ export function Header({
           </span>
           <span className="leading-tight">
             <span className="block text-sm font-medium tracking-tight">Synq</span>
-            <span className="hidden text-xs text-mute sm:block">三路 Agent 额度</span>
+            <span className="hidden text-xs text-mute sm:block">
+              {agents.length ? `${agents.length} 路 Agent 额度` : "本机 Agent 额度"}
+            </span>
           </span>
         </Link>
 
@@ -77,7 +82,9 @@ export function Header({
 
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden items-center gap-1.5 text-xs text-mute md:flex">
-            <span className={cn("size-1.5 rounded-full", live || watchText ? "bg-ok" : "bg-faint")} />
+            <span
+              className={cn("size-1.5 rounded-full", live || watchText ? "bg-ok" : "bg-faint")}
+            />
             {watchText ?? (live ? "协同采集中" : "采集已暂停")}
           </span>
         </div>
