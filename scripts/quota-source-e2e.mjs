@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { toCrossJSON } from "seroval";
@@ -25,6 +25,24 @@ mkdirSync(SHOT_DIR, { recursive: true });
 
 const AVAILABILITY_ID = "cHVsbEFnZW50QXZhaWxhYmlsaXR5";
 const OFFICIAL_ID = "cHVsbE9mZmljaWFsUXVvdGE";
+
+function productionServerFnId(name) {
+  const ssrDir = resolve(".vercel/output/functions/__server.func/_ssr");
+  if (!existsSync(ssrDir)) return null;
+  for (const file of readdirSync(ssrDir).filter(
+    (entry) => entry.startsWith("routes-") && entry.endsWith(".mjs"),
+  )) {
+    const source = readFileSync(resolve(ssrDir, file), "utf8");
+    const match = source.match(new RegExp(`var ${name} = [^;]+createSsrRpc\\("([a-f0-9]{64})"\\)`));
+    if (match) return match[1];
+  }
+  return null;
+}
+
+const AVAILABILITY_IDS = [AVAILABILITY_ID, productionServerFnId("pullAgentAvailability")].filter(
+  Boolean,
+);
+const OFFICIAL_IDS = [OFFICIAL_ID, productionServerFnId("pullOfficialQuota")].filter(Boolean);
 const VIEWPORTS = {
   desktop: { width: 1280, height: 900 },
   mobile: { width: 390, height: 844 },
@@ -154,10 +172,10 @@ const SCENARIOS = {
   },
 };
 
-function isRequest(request, id, name) {
+function isRequest(request, ids, name) {
   const url = request.url();
   if (request.method() !== "GET" || !url.includes("/_serverFn/")) return false;
-  if (url.includes(id) || url.includes(name)) return true;
+  if (ids.some((id) => url.includes(id)) || url.includes(name)) return true;
   try {
     const encoded = new URL(url).pathname.split("/_serverFn/")[1]?.split("/")[0];
     const decoded = encoded
@@ -186,6 +204,8 @@ async function runScenario(browser, scenarioName, viewportName) {
     locale: "zh-CN",
   });
   const held = [];
+  let officialSeen = 0;
+  const serverFnRequests = [];
   await context.addInitScript(() => {
     localStorage.setItem(
       "synq-quota-v8",
@@ -222,7 +242,8 @@ async function runScenario(browser, scenarioName, viewportName) {
   });
   await context.route("**/_serverFn/**", async (route) => {
     const request = route.request();
-    if (isRequest(request, AVAILABILITY_ID, "pullAgentAvailability")) {
+    serverFnRequests.push(`${request.method()} ${request.url()}`);
+    if (isRequest(request, AVAILABILITY_IDS, "pullAgentAvailability")) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -231,7 +252,8 @@ async function runScenario(browser, scenarioName, viewportName) {
       });
       return;
     }
-    if (isRequest(request, OFFICIAL_ID, "pullOfficialQuota")) {
+    if (isRequest(request, OFFICIAL_IDS, "pullOfficialQuota")) {
+      officialSeen += 1;
       if (scenario.mode === "error") {
         await route.abort("internetdisconnected");
         return;
@@ -261,7 +283,7 @@ async function runScenario(browser, scenarioName, viewportName) {
   });
   page.on("pageerror", (error) => diagnostics.pageErrors.push(String(error?.message || error)));
   page.on("requestfailed", (request) => {
-    if (scenario.mode === "error" && isRequest(request, OFFICIAL_ID, "pullOfficialQuota")) return;
+    if (scenario.mode === "error" && isRequest(request, OFFICIAL_IDS, "pullOfficialQuota")) return;
     diagnostics.requestFailures.push(
       `${request.method()} ${request.url()} ${request.failure()?.errorText || "failed"}`,
     );
@@ -279,6 +301,9 @@ async function runScenario(browser, scenarioName, viewportName) {
     if (response?.status() !== 200) throw new Error(`homepage status ${response?.status()}`);
     const card = cardAround(page, "Claude Code");
     await card.waitFor();
+    if (officialSeen < 1) {
+      throw new Error(`official fixture was not intercepted: ${JSON.stringify(serverFnRequests)}`);
+    }
     for (const text of scenario.present) {
       await card.getByText(text, { exact: true }).first().waitFor();
     }
