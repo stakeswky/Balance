@@ -13,7 +13,7 @@ Synq 是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 
 ## 功能
 
 - 同时监听 Claude Code、Grok 和 Codex 的本地 JSONL 用量。
-- 获取 Claude 5h/7d 官方利用率，并按本机日志估算 Claude Max 的 Fable 5 周子额度（总周额度的 50%）；同时读取 Grok 共享周池和 Codex 官方订阅百分比。
+- 获取 Claude 5h/7d 官方利用率，并通过 Claude OAuth usage 读取 Claude Max 的 Fable 5 官方周子额度；OAuth 不可用时只保留桌面 5h/7d 后备。同时读取 Grok 共享周池和 Codex 官方订阅百分比。
 - 按版本化公开价格计算 L1 已观测 API 等价金额。
 - 使用同窗口连续样本估计 L2 整窗价值和 L3 剩余价值区间。
 - 显示价格覆盖率、模型组合、置信度、reset 时间、实时会话与路由建议。
@@ -23,7 +23,7 @@ Synq 是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 
 
 | Agent | 本地用量 | 官方订阅信息 |
 | --- | --- | --- |
-| Claude | `~/.claude/projects/**/*.jsonl`、`~/.config/claude/projects/**/*.jsonl` | macOS Claude Desktop `~/Library/Application Support/Claude/plan-usage-history.json` |
+| Claude | `~/.claude/projects/**/*.jsonl`、`~/.config/claude/projects/**/*.jsonl` | Claude OAuth `/api/oauth/usage`（含 Fable）；macOS Claude Desktop `plan-usage-history.json` 后备 5h/7d |
 | Grok | `$GROK_HOME/sessions/**/updates.jsonl` 或 `~/.grok/sessions/**/updates.jsonl` | Grok billing API；`~/.grok/logs/unified.jsonl` 后备 |
 | Codex | `$CODEX_HOME/sessions/**/rollout-*.jsonl` 或 `~/.codex/sessions/**/rollout-*.jsonl` | ChatGPT `/wham/usage`；session `rate_limits` 后备 |
 

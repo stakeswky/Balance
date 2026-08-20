@@ -134,12 +134,9 @@ export function Dashboard() {
         state.official.claude,
       );
       const claudeFableLimit = modelWeekLimitFor(
-        activeEvents,
         planById(state.claudePlanId),
         state.official.claude,
         "fable",
-        t,
-        state.weekBoostPct,
       );
       const grokMeter = applyOfficial(
         meterFor(activeEvents, "grok", planById(state.grokPlanId), t, state.weekBoostPct),
@@ -284,8 +281,8 @@ export function Dashboard() {
     [visibleEvents, claudePlan, now, weekBoostPct, official.claude],
   );
   const claudeFableLimit = useMemo(
-    () => modelWeekLimitFor(visibleEvents, claudePlan, official.claude, "fable", now, weekBoostPct),
-    [visibleEvents, claudePlan, official.claude, now, weekBoostPct],
+    () => modelWeekLimitFor(claudePlan, official.claude, "fable"),
+    [claudePlan, official.claude],
   );
   const grokMeter = useMemo(
     () =>
@@ -352,7 +349,7 @@ export function Dashboard() {
     primaryLimits.push({
       label: "Claude Fable 5",
       pct: claudeFableLimit.usedPct,
-      resetsAt: claudeMeter.weekResetsAt,
+      resetsAt: claudeFableLimit.resetsAt ?? claudeMeter.weekResetsAt,
     });
   }
   const tighter = tightestQuota(primaryLimits);
@@ -513,7 +510,13 @@ export function Dashboard() {
                   meter={claudeMeter}
                   session={claudeSession}
                   live={liveClaude}
-                  quotaNote={official.claude ? "官方 5h / 7d 利用率" : undefined}
+                  quotaNote={
+                    official.claude
+                      ? claudeFableLimit
+                        ? "官方 5h / 7d / Fable 利用率"
+                        : "官方 5h / 7d 利用率"
+                      : undefined
+                  }
                   liveNote={
                     demoMode
                       ? undefined

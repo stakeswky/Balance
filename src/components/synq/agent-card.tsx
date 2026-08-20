@@ -176,12 +176,12 @@ export function AgentCard({
                       ? "crit"
                       : modelWeekLimit.usedPct >= 72
                         ? "warn"
-                        : tone
+                      : tone
                   }
-                  label="Fable 5 周额度（本机估算）"
+                  label="Fable 5 周额度（官方）"
                 />
                 <p className="text-xs leading-relaxed text-faint">
-                  {`Claude Max 的 Fable 5 上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；未包含其他设备用量。`}
+                  {`Claude Max 的 Fable 5 套餐上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；当前利用率来自 Claude Code。`}
                 </p>
               </>
             ) : null}

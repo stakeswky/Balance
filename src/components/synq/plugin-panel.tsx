@@ -26,7 +26,7 @@ const ADAPTER: Record<
   claude: {
     name: "Claude Code",
     path: "~/.claude/projects/**/*.jsonl",
-    detail: "会话 token 读 jsonl；订阅百分比读桌面 plan-usage-history（5h / 7d）。",
+    detail: "会话 token 读 jsonl；5h / 7d 读桌面历史，Fable 周额度优先读 Claude OAuth usage。",
     textClass: "text-claude",
   },
   grok: {

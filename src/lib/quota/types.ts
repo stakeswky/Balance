@@ -67,9 +67,8 @@ export interface PlanDef {
 export interface ModelWeekLimitSnapshot {
   model: ModelId;
   limitPctOfWeek: number;
-  weightedTokens: number;
-  budget: number;
   usedPct: number;
+  resetsAt: number | null;
 }
 
 export interface MeterSnapshot {
