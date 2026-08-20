@@ -223,3 +223,63 @@ test("same-tick Claude total and Fable alerts receive distinct ids", () => {
   assert.equal(useQuota.getState().alerts.length, 2);
   assert.equal(new Set(useQuota.getState().alerts.map((alert) => alert.id)).size, 2);
 });
+
+test("real ingestors keep all active parallel tasks and focus the latest actor", () => {
+  const parent = "parent-session";
+  const childA = { ...event("claude", "child-a", 10), sessionId: parent, actorId: "agent-a", task: "任务 A" };
+  const childB = { ...event("claude", "child-b", 20), sessionId: parent, actorId: "agent-b", task: "任务 B" };
+  const active = [
+    {
+      sessionId: parent,
+      actorId: "agent-b",
+      actorKind: "subagent" as const,
+      cwd: "/tmp",
+      task: "任务 B",
+      writing: true,
+      lastTs: 20,
+      startedAt: 20,
+      turns: 1,
+    },
+    {
+      sessionId: parent,
+      actorId: "agent-a",
+      actorKind: "subagent" as const,
+      cwd: "/tmp",
+      task: "任务 A",
+      writing: true,
+      lastTs: 10,
+      startedAt: 10,
+      turns: 1,
+    },
+  ];
+  useQuota.getState().ingestClaudeLogs([childA, childB], { replace: true, live: active[0], active });
+  const state = useQuota.getState();
+  assert.equal(state.activeClaude.length, 2);
+  assert.equal(state.claudeWriting, true);
+  assert.equal(state.claudeSession?.id, "agent-b");
+  assert.equal(state.claudeSession?.task, "任务 B");
+
+  useQuota.getState().ingestGrokLogs([event("grok", "grok-a", 30)], { active: [] });
+  useQuota.getState().ingestCodexLogs([event("codex", "codex-a", 40)], { active: [] });
+  assert.deepEqual(useQuota.getState().activeGrok, []);
+  assert.deepEqual(useQuota.getState().activeCodex, []);
+});
+
+test("Claude exposes a live child even before that child's first usage event", () => {
+  useQuota.setState({ events: [], realEvents: [], activeClaude: [], claudeSession: null });
+  const live = {
+    sessionId: "parent-session",
+    actorId: "agent-new",
+    actorKind: "subagent" as const,
+    cwd: "/tmp",
+    task: "刚启动的子任务",
+    writing: true,
+    lastTs: 50,
+    startedAt: 50,
+    turns: 0,
+  };
+  useQuota.getState().ingestClaudeLogs([], { replace: true, live, active: [live] });
+  assert.equal(useQuota.getState().claudeSession?.id, "agent-new");
+  assert.equal(useQuota.getState().claudeSession?.task, "刚启动的子任务");
+  assert.equal(useQuota.getState().claudeWriting, true);
+});

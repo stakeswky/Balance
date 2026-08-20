@@ -16,7 +16,8 @@ import {
   type OfficialQuota,
   type OfficialSlice,
 } from "./official.ts";
-import type { AgentId, ClaudeLiveInfo, SessionState, UsageEvent } from "./types.ts";
+import { activityIdOf } from "./types.ts";
+import type { AgentId, AgentLiveInfo, ModelId, SessionState, UsageEvent } from "./types.ts";
 
 const MAX_EVENTS = 20000;
 const MAX_ALERTS = 40;
@@ -52,6 +53,9 @@ export interface QuotaState {
   claudeWriting: boolean;
   grokWriting: boolean;
   codexWriting: boolean;
+  activeClaude: AgentLiveInfo[];
+  activeGrok: AgentLiveInfo[];
+  activeCodex: AgentLiveInfo[];
   claudeSession: SessionState | null;
   grokSession: SessionState | null;
   codexSession: SessionState | null;
@@ -77,15 +81,15 @@ export interface QuotaState {
   importText: (text: string, agent: AgentId) => number;
   ingestClaudeLogs: (
     incoming: UsageEvent[],
-    opts?: { replace?: boolean; live?: ClaudeLiveInfo | null },
+    opts?: { replace?: boolean; live?: AgentLiveInfo | null; active?: AgentLiveInfo[] },
   ) => number;
   ingestGrokLogs: (
     incoming: UsageEvent[],
-    opts?: { replace?: boolean; live?: ClaudeLiveInfo | null },
+    opts?: { replace?: boolean; live?: AgentLiveInfo | null; active?: AgentLiveInfo[] },
   ) => number;
   ingestCodexLogs: (
     incoming: UsageEvent[],
-    opts?: { replace?: boolean; live?: ClaudeLiveInfo | null },
+    opts?: { replace?: boolean; live?: AgentLiveInfo | null; active?: AgentLiveInfo[] },
   ) => number;
   setOfficial: (official: OfficialQuota) => void;
   recordOfficialSamples: (now?: number) => void;
@@ -118,6 +122,24 @@ function bumpSession(session: SessionState, ev: UsageEvent): SessionState {
   };
 }
 
+function eventsForLive(events: UsageEvent[], live: AgentLiveInfo | null | undefined): UsageEvent[] {
+  if (!live) return events;
+  const key = activityIdOf(live);
+  return events.filter((event) => activityIdOf(event) === key);
+}
+
+function sessionFromLive(live: AgentLiveInfo | null | undefined, model: ModelId): SessionState | null {
+  if (!live) return null;
+  return {
+    id: activityIdOf(live),
+    task: live.task,
+    model,
+    startedAt: live.startedAt,
+    events: live.turns,
+    tokens: 0,
+  };
+}
+
 export const useQuota = create<QuotaState>()(
   persist(
     (set, get) => ({
@@ -143,6 +165,9 @@ export const useQuota = create<QuotaState>()(
       claudeWriting: false,
       grokWriting: false,
       codexWriting: false,
+      activeClaude: [],
+      activeGrok: [],
+      activeCodex: [],
       claudeSession: null,
       grokSession: null,
       codexSession: null,
@@ -209,6 +234,9 @@ export const useQuota = create<QuotaState>()(
           claudeWriting: false,
           grokWriting: false,
           codexWriting: false,
+          activeClaude: [],
+          activeGrok: [],
+          activeCodex: [],
           claudeSession: null,
           grokSession: null,
           codexSession: null,
@@ -339,14 +367,20 @@ export const useQuota = create<QuotaState>()(
         const realEvents = trimEvents([...others, ...claude].sort((a, b) => a.ts - b.ts));
         const cursor = claude.reduce((m, e) => Math.max(m, e.ts), state.claudeCursor);
         const live = opts?.live;
-        const focus = live ? claude.filter((e) => e.sessionId === live.sessionId) : claude;
+        const active = opts?.active;
+        const focus = eventsForLive(claude, live);
         set({
           realEvents,
           events: state.demoMode ? state.events : realEvents,
           claudeCursor: cursor,
           claudeHydrated: state.claudeHydrated || incoming.length > 0,
-          claudeWriting: live?.writing ?? state.claudeWriting,
-          claudeSession: sessionFromEvents(focus) ?? sessionFromEvents(claude) ?? state.claudeSession,
+          activeClaude: active ?? state.activeClaude,
+          claudeWriting: active ? active.length > 0 : live?.writing ?? state.claudeWriting,
+          claudeSession:
+            sessionFromEvents(focus) ??
+            sessionFromEvents(claude) ??
+            sessionFromLive(live, "sonnet") ??
+            state.claudeSession,
           lastBeat: Date.now(),
         });
         return incoming.length;
@@ -367,26 +401,20 @@ export const useQuota = create<QuotaState>()(
         const realEvents = trimEvents([...others, ...grok].sort((a, b) => a.ts - b.ts));
         const cursor = grok.reduce((m, e) => Math.max(m, e.ts), state.grokCursor);
         const live = opts?.live;
-        const focus = live ? grok.filter((e) => e.sessionId === live.sessionId) : grok;
+        const active = opts?.active;
+        const focus = eventsForLive(grok, live);
         set({
           realEvents,
           events: state.demoMode ? state.events : realEvents,
           grokCursor: cursor,
           grokHydrated: state.grokHydrated || incoming.length > 0,
-          grokWriting: live?.writing ?? state.grokWriting,
+          activeGrok: active ?? state.activeGrok,
+          grokWriting: active ? active.length > 0 : live?.writing ?? state.grokWriting,
           grokSession:
             sessionFromEvents(focus) ??
             sessionFromEvents(grok) ??
-            (live
-              ? {
-                  id: live.sessionId,
-                  task: live.task,
-                  model: "grok-4.6",
-                  startedAt: live.startedAt,
-                  events: live.turns,
-                  tokens: 0,
-                }
-              : state.grokSession),
+            sessionFromLive(live, "grok-4.6") ??
+            state.grokSession,
           lastBeat: Date.now(),
         });
         return incoming.length;
@@ -407,26 +435,20 @@ export const useQuota = create<QuotaState>()(
         const realEvents = trimEvents([...others, ...codex].sort((a, b) => a.ts - b.ts));
         const cursor = codex.reduce((m, e) => Math.max(m, e.ts), state.codexCursor);
         const live = opts?.live;
-        const focus = live ? codex.filter((e) => e.sessionId === live.sessionId) : codex;
+        const active = opts?.active;
+        const focus = eventsForLive(codex, live);
         set({
           realEvents,
           events: state.demoMode ? state.events : realEvents,
           codexCursor: cursor,
           codexHydrated: state.codexHydrated || incoming.length > 0,
-          codexWriting: live?.writing ?? state.codexWriting,
+          activeCodex: active ?? state.activeCodex,
+          codexWriting: active ? active.length > 0 : live?.writing ?? state.codexWriting,
           codexSession:
             sessionFromEvents(focus) ??
             sessionFromEvents(codex) ??
-            (live
-              ? {
-                  id: live.sessionId,
-                  task: live.task,
-                  model: "gpt-5.6-sol",
-                  startedAt: live.startedAt,
-                  events: live.turns,
-                  tokens: 0,
-                }
-              : state.codexSession),
+            sessionFromLive(live, "gpt-5.6-sol") ??
+            state.codexSession,
           lastBeat: Date.now(),
         });
         return incoming.length;
@@ -501,6 +523,9 @@ export const useQuota = create<QuotaState>()(
           claudeWriting: false,
           grokWriting: false,
           codexWriting: false,
+          activeClaude: [],
+          activeGrok: [],
+          activeCodex: [],
         });
       },
       setHint: (on) => set({ adapterHint: on }),

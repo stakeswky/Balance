@@ -214,6 +214,7 @@ export function Dashboard() {
           added += useQuota.getState().ingestClaudeLogs(res.events, {
             replace: !state.claudeHydrated && res.events.length > 0,
             live: res.live,
+            active: res.active,
           });
         }
         if (state.liveGrok) {
@@ -222,6 +223,7 @@ export function Dashboard() {
           added += useQuota.getState().ingestGrokLogs(res.events, {
             replace: !state.grokHydrated && res.events.length > 0,
             live: res.live,
+            active: res.active,
           });
         }
         if (state.liveCodex) {
@@ -230,6 +232,7 @@ export function Dashboard() {
           added += useQuota.getState().ingestCodexLogs(res.events, {
             replace: !state.codexHydrated && res.events.length > 0,
             live: res.live,
+            active: res.active,
           });
           useQuota.getState().recordCodexHistory(res.officialHistory);
         }
