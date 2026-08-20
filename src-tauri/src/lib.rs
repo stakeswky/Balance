@@ -1,0 +1,292 @@
+use std::{
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
+};
+
+use tauri::{
+    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
+
+const SIDECAR_BIN: &str = "synq-node";
+const SIDECAR_HOST: &str = "127.0.0.1";
+const SIDECAR_PORT: u16 = 4780;
+const HEALTH_BODY: &str = "{\"app\":\"synq\",\"mode\":\"desktop\"}";
+
+#[derive(Clone, Default)]
+struct SidecarState(Arc<Mutex<Option<CommandChild>>>);
+
+fn sidecar_url() -> String {
+    format!("http://{SIDECAR_HOST}:{SIDECAR_PORT}")
+}
+
+fn kill_sidecar(state: &SidecarState) {
+    if let Some(child) = state.0.lock().expect("sidecar mutex poisoned").take() {
+        let _ = child.kill();
+    }
+}
+
+fn clear_sidecar(state: &SidecarState) {
+    let _ = state.0.lock().expect("sidecar mutex poisoned").take();
+}
+
+fn ensure_port_available() -> Result<(), String> {
+    TcpListener::bind((SIDECAR_HOST, SIDECAR_PORT))
+        .map(|listener| drop(listener))
+        .map_err(|error| format!("{SIDECAR_HOST}:{SIDECAR_PORT} is unavailable: {error}"))
+}
+
+fn decode_chunked_body(mut body: &str) -> Option<String> {
+    let mut decoded = String::new();
+    loop {
+        let (size_line, rest) = body.split_once("\r\n")?;
+        let size_text = size_line.split(';').next()?.trim();
+        let size = usize::from_str_radix(size_text, 16).ok()?;
+        body = rest;
+        if size == 0 {
+            return Some(decoded);
+        }
+        if body.len() < size + 2 || !body.is_char_boundary(size) {
+            return None;
+        }
+        let (chunk, rest) = body.split_at(size);
+        if !rest.starts_with("\r\n") {
+            return None;
+        }
+        decoded.push_str(chunk);
+        body = &rest[2..];
+    }
+}
+
+fn is_synq_health_response(response: &str) -> bool {
+    let Some((head, body)) = response.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let ok = head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200");
+    if !ok {
+        return false;
+    }
+    let chunked = head.lines().any(|line| line.eq_ignore_ascii_case("transfer-encoding: chunked"));
+    let decoded = if chunked {
+        decode_chunked_body(body)
+    } else {
+        Some(body.trim().to_owned())
+    };
+    decoded.as_deref() == Some(HEALTH_BODY)
+}
+
+fn request_health() -> Result<bool, String> {
+    let addr: SocketAddr = format!("{SIDECAR_HOST}:{SIDECAR_PORT}")
+        .parse()
+        .map_err(|error: std::net::AddrParseError| error.to_string())?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(250))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .map_err(|error| error.to_string())?;
+    stream
+        .write_all(
+            b"GET /api/desktop-health HTTP/1.1\r\nHost: 127.0.0.1:4780\r\nConnection: close\r\n\r\n",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
+    Ok(is_synq_health_response(&response))
+}
+
+fn wait_for_health(timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if request_health().unwrap_or(false) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Err("timed out waiting for the Synq desktop server".to_owned())
+}
+
+fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    let root = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?
+        .join("synq-server");
+    let entry = root.join("server").join("index.mjs");
+    if !entry.is_file() {
+        return Err(format!("desktop server entry is missing: {}", entry.display()));
+    }
+    Ok((root, entry))
+}
+
+fn drain_sidecar_events(
+    mut receiver: tauri::async_runtime::Receiver<CommandEvent>,
+    state: SidecarState,
+) {
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    eprintln!("[synq-node][stdout] {}", String::from_utf8_lossy(&bytes));
+                }
+                CommandEvent::Stderr(bytes) => {
+                    eprintln!("[synq-node][stderr] {}", String::from_utf8_lossy(&bytes));
+                }
+                CommandEvent::Error(error) => {
+                    eprintln!("[synq-node][error] {error}");
+                }
+                CommandEvent::Terminated(payload) => {
+                    eprintln!(
+                        "[synq-node] terminated: code={:?}, signal={:?}",
+                        payload.code, payload.signal
+                    );
+                    clear_sidecar(&state);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
+fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<(), String> {
+    ensure_port_available()?;
+    let (server_root, server_entry) = server_paths(app)?;
+    let (receiver, child) = app
+        .shell()
+        .sidecar(SIDECAR_BIN)
+        .map_err(|error| error.to_string())?
+        .arg(server_entry)
+        .current_dir(server_root)
+        .env("HOST", SIDECAR_HOST)
+        .env("NITRO_HOST", SIDECAR_HOST)
+        .env("PORT", SIDECAR_PORT.to_string())
+        .env("NITRO_PORT", SIDECAR_PORT.to_string())
+        .env("SYNQ_DESKTOP", "1")
+        .env("VITE_AUTH_ENABLED", "false")
+        .env("NODE_ENV", "production")
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    *state.0.lock().expect("sidecar mutex poisoned") = Some(child);
+    drain_sidecar_events(receiver, state.clone());
+    Ok(())
+}
+
+fn open_window(app: &AppHandle, label: &'static str, url: WebviewUrl) {
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Err(error) = WebviewWindowBuilder::new(&handle, label, url)
+            .title("Synq")
+            .inner_size(1440.0, 960.0)
+            .min_inner_size(960.0, 680.0)
+            .center()
+            .resizable(true)
+            .build()
+        {
+            eprintln!("failed to create Synq window: {error}");
+            handle.exit(1);
+        }
+    }) {
+        eprintln!("failed to schedule Synq window creation: {error}");
+        app.exit(1);
+    }
+}
+
+fn bootstrap(app: AppHandle, state: SidecarState) {
+    if let Err(error) = start_sidecar(&app, &state) {
+        eprintln!("desktop bootstrap failed: {error}");
+        kill_sidecar(&state);
+        open_window(
+            &app,
+            "startup-error",
+            WebviewUrl::App("startup-error.html".into()),
+        );
+        return;
+    }
+    match wait_for_health(Duration::from_secs(15)) {
+        Ok(()) => {
+            let url = sidecar_url()
+                .parse()
+                .expect("the fixed Synq loopback URL must parse");
+            open_window(&app, "main", WebviewUrl::External(url));
+        }
+        Err(error) => {
+            eprintln!("desktop health check failed: {error}");
+            kill_sidecar(&state);
+            open_window(
+                &app,
+                "startup-error",
+                WebviewUrl::App("startup-error.html".into()),
+            );
+        }
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let sidecar_state = SidecarState::default();
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .manage(sidecar_state.clone())
+        .setup({
+            let state = sidecar_state.clone();
+            move |app| {
+                let handle = app.handle().clone();
+                let state_for_thread = state.clone();
+                thread::spawn(move || bootstrap(handle, state_for_thread));
+                Ok(())
+            }
+        })
+        .on_window_event({
+            let state = sidecar_state.clone();
+            move |window, event| {
+                if let WindowEvent::CloseRequested { .. } = event {
+                    kill_sidecar(&state);
+                    window.app_handle().exit(0);
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building Synq")
+        .run({
+            let state = sidecar_state.clone();
+            move |_app, event| match event {
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_sidecar(&state),
+                _ => {}
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_origin_is_stable() {
+        assert_eq!(sidecar_url(), "http://127.0.0.1:4780");
+    }
+
+    #[test]
+    fn health_check_accepts_only_synq_desktop() {
+        assert!(is_synq_health_response(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}"
+        ));
+        assert!(!is_synq_health_response(
+            "HTTP/1.1 200 OK\r\n\r\n{\"app\":\"other\",\"mode\":\"desktop\"}"
+        ));
+        assert!(!is_synq_health_response(
+            "HTTP/1.1 503 Service Unavailable\r\n\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}"
+        ));
+        assert!(is_synq_health_response(
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n1f\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}\r\n0\r\n\r\n"
+        ));
+    }
+}
