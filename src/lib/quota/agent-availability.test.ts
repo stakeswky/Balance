@@ -62,3 +62,45 @@ test("eventsForAgents removes unavailable agent data from summaries", () => {
     false,
   );
 });
+
+test("real mode covers every single-agent and two-agent combination", () => {
+  const none = { claude: false, grok: false, codex: false };
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: false }, false, []), [
+    "claude",
+  ]);
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: true, codex: false }, false, []), [
+    "grok",
+  ]);
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: false, codex: true }, false, []), [
+    "codex",
+  ]);
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: true, codex: false }, false, []), [
+    "claude",
+    "grok",
+  ]);
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: true }, false, []), [
+    "claude",
+    "codex",
+  ]);
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: true, codex: true }, false, []), [
+    "grok",
+    "codex",
+  ]);
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: true, codex: true }, false, []), [
+    "claude",
+    "grok",
+    "codex",
+  ]);
+  assert.deepEqual(visibleAgentIds(none, false, [event("codex")]), ["codex"]);
+});
+
+test("hidden agent events are excluded from visible token totals", () => {
+  const claude = { ...event("claude"), tokensIn: 100, tokensOut: 10 };
+  const grok = { ...event("grok"), tokensIn: 9_000, tokensOut: 900 };
+  const codex = { ...event("codex"), tokensIn: 8_000, tokensOut: 800 };
+  const visible = eventsForAgents([claude, grok, codex], ["claude"]);
+  assert.equal(
+    visible.reduce((sum, item) => sum + item.tokensIn + item.tokensOut, 0),
+    110,
+  );
+});

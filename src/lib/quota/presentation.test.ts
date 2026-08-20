@@ -143,6 +143,22 @@ test("routing advice never names unavailable agents", () => {
   assert.ok(tips.every((tip) => !tip.body.includes("Grok") && !tip.body.includes("Codex")));
 });
 
+test("routing advice for Grok-only never names Claude or Codex", () => {
+  const tips = routingAdvice([meter({ agent: "grok", windowPct: 20, weekPct: 20 })]);
+  assert.ok(tips.length > 0);
+  assert.ok(tips.every((tip) => !tip.title.includes("Claude") && !tip.title.includes("Codex")));
+  assert.ok(tips.every((tip) => !tip.body.includes("Claude") && !tip.body.includes("Codex")));
+});
+
+test("routing advice for a Claude and Grok pair never names Codex", () => {
+  const tips = routingAdvice([
+    meter({ agent: "claude", windowPct: 80, weekPct: 20 }),
+    meter({ agent: "grok", windowPct: 20, weekPct: 20 }),
+  ]);
+  assert.ok(tips.some((tip) => tip.title.includes("Claude") || tip.body.includes("Grok")));
+  assert.ok(tips.every((tip) => !tip.title.includes("Codex") && !tip.body.includes("Codex")));
+});
+
 test("credit formatting is compact and range-first", () => {
   assert.equal(formatCredits(652.7024375), "653");
   assert.equal(formatCreditRange(18_002.592, 24_356.448), "18,003–24,356");
