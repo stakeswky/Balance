@@ -21,6 +21,7 @@
     "desktop:verify:dmg": "hdiutil verify src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Synq_0.1.0_aarch64.dmg",
     "desktop:verify:ci": "npm run desktop:verify:security && npm run desktop:verify:crash && npm run desktop:verify:dmg",
     "desktop:verify": "npm run desktop:verify:security && npm run desktop:verify:app && npm run desktop:verify:crash && npm run desktop:verify:startup-error && npm run desktop:verify:dmg",
+    "screenshots:public": "node scripts/capture-public-screenshots.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "vite build --mode development",
     "preview": "vite preview --host 0.0.0.0 --port 8080",
