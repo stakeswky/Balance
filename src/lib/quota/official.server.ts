@@ -32,8 +32,24 @@ export interface ClaudeOauthAuth {
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 type ReadClaudeAuth = (home: string, now: number) => Promise<ClaudeOauthAuth | null>;
+type ExecFileText = (
+  file: string,
+  args: string[],
+  options: { encoding: "utf8"; timeout: number; maxBuffer: number },
+) => Promise<{ stdout: string }>;
+
+export interface ClaudeAuthDiscoveryOptions {
+  platform?: NodeJS.Platform;
+  currentHome?: string;
+  env?: NodeJS.ProcessEnv;
+  execFileImpl?: ExecFileText;
+}
 
 const execFileAsync = promisify(execFile);
+const execFileText: ExecFileText = async (file, args, options) => {
+  const result = await execFileAsync(file, args, options);
+  return { stdout: String(result.stdout) };
+};
 const claudeCache = new Map<string, { checkedAt: number; loadedAt: number; slice: OfficialSlice | null }>();
 const grokCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 const codexCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
@@ -157,7 +173,86 @@ export function claudeOauthAuthFromCredentials(
   return { accessToken };
 }
 
-async function readClaudeOauthAuth(home: string, now: number): Promise<ClaudeOauthAuth | null> {
+export function claudeDesktopManagedPids(raw: string, home: string): number[] {
+  const root = join(
+    home,
+    "Library",
+    "Application Support",
+    "Claude",
+    "claude-code",
+  );
+  const pids: number[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const parsed = line.match(/^\s*(\d+)\s+(.+)$/);
+    if (!parsed) continue;
+    const pid = Number(parsed[1]);
+    const command = parsed[2];
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !command.startsWith(`${root}/`)) continue;
+    const afterRoot = command.slice(root.length + 1);
+    const versionEnd = afterRoot.indexOf("/");
+    if (versionEnd <= 0) continue;
+    const version = afterRoot.slice(0, versionEnd);
+    const executable = join(root, version, "claude.app", "Contents", "MacOS", "claude");
+    if (command === executable || command.startsWith(`${executable} `)) pids.push(pid);
+  }
+  return pids.sort((a, b) => b - a).slice(0, 8);
+}
+
+export function claudeOauthAuthFromProcessEnvironment(
+  raw: string,
+): ClaudeOauthAuth | null {
+  const accessToken = raw.match(
+    /(?:^|\s)CLAUDE_CODE_OAUTH_TOKEN=([^\s]+)/,
+  )?.[1];
+  return accessToken ? { accessToken } : null;
+}
+
+async function readClaudeDesktopManagedAuth(
+  home: string,
+  execFileImpl: ExecFileText,
+): Promise<ClaudeOauthAuth | null> {
+  try {
+    const processes = await execFileImpl(
+      "/bin/ps",
+      ["-ww", "-axo", "pid=,command="],
+      { encoding: "utf8", timeout: 1500, maxBuffer: 8 * 1024 * 1024 },
+    );
+    for (const pid of claudeDesktopManagedPids(processes.stdout, home)) {
+      try {
+        const processEnvironment = await execFileImpl(
+          "/bin/ps",
+          ["eww", "-p", String(pid)],
+          { encoding: "utf8", timeout: 1500, maxBuffer: 16 * 1024 * 1024 },
+        );
+        const auth = claudeOauthAuthFromProcessEnvironment(processEnvironment.stdout);
+        if (auth) return auth;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function readClaudeOauthAuth(
+  home: string,
+  now: number,
+  opts?: ClaudeAuthDiscoveryOptions,
+): Promise<ClaudeOauthAuth | null> {
+  const env = opts?.env ?? process.env;
+  const directToken = env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (directToken) return { accessToken: directToken };
+
+  const platform = opts?.platform ?? process.platform;
+  const currentHome = opts?.currentHome ?? homedir();
+  const execFileImpl = opts?.execFileImpl ?? execFileText;
+  if (platform === "darwin" && home === currentHome) {
+    const managed = await readClaudeDesktopManagedAuth(home, execFileImpl);
+    if (managed) return managed;
+  }
+
   const fileRaw = readText(join(home, ".claude", ".credentials.json"));
   if (fileRaw) {
     try {
@@ -167,9 +262,9 @@ async function readClaudeOauthAuth(home: string, now: number): Promise<ClaudeOau
       // Malformed local credentials fall through to the read-only Keychain lookup.
     }
   }
-  if (process.platform !== "darwin" || home !== homedir()) return null;
+  if (platform !== "darwin" || home !== currentHome) return null;
   try {
-    const result = await execFileAsync(
+    const result = await execFileImpl(
       "/usr/bin/security",
       ["find-generic-password", "-w", "-s", "Claude Code-credentials"],
       { encoding: "utf8", timeout: 1500, maxBuffer: 1024 * 1024 },

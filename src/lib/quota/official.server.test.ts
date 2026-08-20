@@ -6,10 +6,13 @@ import { test } from "node:test";
 import {
   CLAUDE_USAGE_STALE_MS,
   CLAUDE_USAGE_URL,
+  claudeDesktopManagedPids,
   claudeOauthAuthFromCredentials,
+  claudeOauthAuthFromProcessEnvironment,
   clearOfficialCache,
   CODEX_USAGE_URL,
   GROK_BILLING_URL,
+  readClaudeOauthAuth,
   readOfficialQuota,
 } from "./official.server.ts";
 
@@ -331,4 +334,148 @@ test("Claude OAuth auth parser rejects expired and empty credentials", () => {
     ),
     { accessToken: "valid" },
   );
+});
+
+test("Claude Desktop process discovery excludes wrappers and unrelated commands", () => {
+  const home = "/Users/example";
+  const executable =
+    `${home}/Library/Application Support/Claude/claude-code/2.1.234/claude.app/Contents/MacOS/claude`;
+  const processList = [
+    `100 /Applications/Claude.app/Contents/Helpers/disclaimer ${executable} --model claude-fable-5`,
+    `101 ${executable} --model claude-fable-5`,
+    `102 ${executable}.old --model claude-fable-5`,
+    "103 /usr/local/bin/claude --model claude-fable-5",
+  ].join("\n");
+
+  assert.deepEqual(claudeDesktopManagedPids(processList, home), [101]);
+});
+
+test("Claude process environment parser returns only the exact OAuth variable", () => {
+  assert.deepEqual(
+    claudeOauthAuthFromProcessEnvironment(
+      "101 managed OTHER_CLAUDE_CODE_OAUTH_TOKEN=wrong CLAUDE_CODE_OAUTH_TOKEN=managed-token MODE=max",
+    ),
+    { accessToken: "managed-token" },
+  );
+  assert.equal(
+    claudeOauthAuthFromProcessEnvironment(
+      "101 managed OTHER_CLAUDE_CODE_OAUTH_TOKEN=wrong MODE=max",
+    ),
+    null,
+  );
+});
+
+test("Claude auth discovery prefers the active Desktop-managed child", async () => {
+  const { home } = fixtureHome();
+  const executable =
+    `${home}/Library/Application Support/Claude/claude-code/2.1.234/claude.app/Contents/MacOS/claude`;
+  const calls: string[] = [];
+  const auth = await readClaudeOauthAuth(home, Date.parse("2026-08-20T12:00:00Z"), {
+    platform: "darwin",
+    currentHome: home,
+    env: {},
+    execFileImpl: async (file, args) => {
+      calls.push([file, args.join(" ")].join(" "));
+      if (file === "/bin/ps" && args.join(" ") === "-ww -axo pid=,command=") {
+        return {
+          stdout: [
+            `200 /Applications/Claude.app/Contents/Helpers/disclaimer ${executable}`,
+            `201 ${executable} --model claude-fable-5`,
+          ].join("\n"),
+        };
+      }
+      if (file === "/bin/ps" && args.join(" ") === "eww -p 201") {
+        return {
+          stdout:
+            "201 managed CLAUDE_CODE_OAUTH_TOKEN=desktop-token CLAUDE_CODE_SUBSCRIPTION_TYPE=max",
+        };
+      }
+      throw new Error(`unexpected command: ${file} ${args.join(" ")}`);
+    },
+  });
+
+  assert.deepEqual(auth, { accessToken: "desktop-token" });
+  assert.deepEqual(calls, [
+    "/bin/ps -ww -axo pid=,command=",
+    "/bin/ps eww -p 201",
+  ]);
+});
+
+test("Claude auth discovery prefers its own injected environment token", async () => {
+  let calls = 0;
+  const auth = await readClaudeOauthAuth(
+    "/Users/example",
+    Date.parse("2026-08-20T12:00:00Z"),
+    {
+      platform: "darwin",
+      currentHome: "/Users/example",
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "direct-token" },
+      execFileImpl: async () => {
+        calls += 1;
+        throw new Error("process discovery must not run");
+      },
+    },
+  );
+
+  assert.deepEqual(auth, { accessToken: "direct-token" });
+  assert.equal(calls, 0);
+});
+
+test("Claude auth discovery keeps the credentials file fallback off macOS", async () => {
+  const { home } = fixtureHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude", ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "file-token",
+        expiresAt: Date.parse("2026-08-20T13:00:00Z"),
+      },
+    }),
+  );
+  let calls = 0;
+  const auth = await readClaudeOauthAuth(home, Date.parse("2026-08-20T12:00:00Z"), {
+    platform: "linux",
+    currentHome: home,
+    env: {},
+    execFileImpl: async () => {
+      calls += 1;
+      throw new Error("macOS process discovery must not run");
+    },
+  });
+
+  assert.deepEqual(auth, { accessToken: "file-token" });
+  assert.equal(calls, 0);
+});
+
+test("Claude auth discovery falls through when a managed child has no token", async () => {
+  const { home } = fixtureHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude", ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "file-token",
+        expiresAt: Date.parse("2026-08-20T13:00:00Z"),
+      },
+    }),
+  );
+  const executable =
+    `${home}/Library/Application Support/Claude/claude-code/2.1.234/claude.app/Contents/MacOS/claude`;
+  const auth = await readClaudeOauthAuth(home, Date.parse("2026-08-20T12:00:00Z"), {
+    platform: "darwin",
+    currentHome: home,
+    env: {},
+    execFileImpl: async (file, args) => {
+      if (file === "/bin/ps" && args.join(" ") === "-ww -axo pid=,command=") {
+        return { stdout: `301 ${executable} --model claude-fable-5` };
+      }
+      if (file === "/bin/ps" && args.join(" ") === "eww -p 301") {
+        return { stdout: "301 managed CLAUDE_CODE_SUBSCRIPTION_TYPE=max" };
+      }
+      throw new Error(`unexpected command: ${file} ${args.join(" ")}`);
+    },
+  });
+
+  assert.deepEqual(auth, { accessToken: "file-token" });
 });
