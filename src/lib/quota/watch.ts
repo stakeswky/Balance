@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { detectAgentAvailability } from "./agent-availability.server";
 import { scanClaudeUsage } from "./claude-log.server";
 import { scanCodexUsage } from "./codex-log.server";
 import { scanGrokUsage } from "./grok-log.server";
@@ -7,6 +8,10 @@ import { readOfficialHistory, readOfficialQuota } from "./official.server";
 
 const inputSchema = z.object({
   since: z.number().nonnegative(),
+});
+
+export const pullAgentAvailability = createServerFn({ method: "GET" }).handler(() => {
+  return detectAgentAvailability();
 });
 
 export const pullClaudeUsage = createServerFn({ method: "POST" })
