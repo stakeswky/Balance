@@ -110,6 +110,41 @@ private func button(named target: String) -> AXUIElement? {
   }
 }
 
+private enum InitialAppState {
+  case onboarding
+  case dashboard
+}
+
+private func initialAppState() -> InitialAppState? {
+  guard let window = firstWindow() else { return nil }
+  var visited = 0
+
+  func walk(_ element: AXUIElement, depth: Int) -> InitialAppState? {
+    guard depth <= maximumDepth, visited < maximumElements else { return nil }
+    visited += 1
+    if elementHasExactText(element, "Synq 初始设置") { return .onboarding }
+    if stringAttribute(element, kAXRoleAttribute) == kAXButtonRole &&
+       stringAttribute(element, kAXTitleAttribute) == "设置" {
+      return .dashboard
+    }
+    for child in children(element) {
+      if let state = walk(child, depth: depth + 1) { return state }
+    }
+    return nil
+  }
+
+  return walk(window, depth: 0)
+}
+
+private func waitForInitialAppState(timeout: TimeInterval) -> InitialAppState {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if let state = initialAppState() { return state }
+    Thread.sleep(forTimeInterval: 1)
+  }
+  fail("Synq native UI did not leave its loading shell")
+}
+
 private func waitForButton(_ target: String, timeout: TimeInterval) -> AXUIElement {
   let deadline = Date().addingTimeInterval(timeout)
   while Date() < deadline {
@@ -206,7 +241,8 @@ if startupErrorMode {
   exit(0)
 }
 
-if hasExactText("Synq 初始设置") {
+switch waitForInitialAppState(timeout: 15) {
+case .onboarding:
   let detectionDeadline = Date().addingTimeInterval(15)
   while Date() < detectionDeadline {
     if hasExactText("已找到") || hasExactText("未检测到") { break }
@@ -216,6 +252,8 @@ if hasExactText("Synq 初始设置") {
     fail("Synq native Agent detection did not resolve")
   }
   press("查看演示", timeout: 10)
+case .dashboard:
+  break
 }
 
 press("设置", timeout: 15)

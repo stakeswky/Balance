@@ -1,4 +1,5 @@
 use std::{
+    ffi::{OsStr, OsString},
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
@@ -20,6 +21,27 @@ const SIDECAR_BIN: &str = "synq-node";
 const SIDECAR_HOST: &str = "127.0.0.1";
 const SIDECAR_PORT: u16 = 4780;
 const HEALTH_BODY: &str = "{\"app\":\"synq\",\"mode\":\"desktop\"}";
+const SIDECAR_ENV_ALLOWLIST: [&str; 6] = [
+    "HOME",
+    "GROK_HOME",
+    "CODEX_HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+];
+
+fn filtered_sidecar_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    environment
+        .into_iter()
+        .filter(|(key, _)| {
+            SIDECAR_ENV_ALLOWLIST
+                .iter()
+                .any(|allowed| key == OsStr::new(allowed))
+        })
+        .collect()
+}
 
 struct LifecycleState<T> {
     child: Option<T>,
@@ -224,6 +246,7 @@ fn drain_sidecar_events(
 fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<bool, String> {
     ensure_port_available()?;
     let (server_root, server_entry, watchdog) = server_paths(app)?;
+    let inherited_environment = filtered_sidecar_environment(std::env::vars_os());
     let (receiver, child) = app
         .shell()
         .sidecar(SIDECAR_BIN)
@@ -232,6 +255,8 @@ fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<bool, String> 
         .arg(watchdog)
         .arg(server_entry)
         .current_dir(server_root)
+        .env_clear()
+        .envs(inherited_environment)
         .env("HOST", SIDECAR_HOST)
         .env("NITRO_HOST", SIDECAR_HOST)
         .env("PORT", SIDECAR_PORT.to_string())
@@ -407,5 +432,55 @@ mod tests {
         let state = lifecycle.lock().expect("lifecycle mutex poisoned");
         assert!(state.stopping);
         assert!(state.child.is_none());
+    }
+
+    #[test]
+    fn desktop_sidecar_environment_is_allowlisted() {
+        use std::ffi::OsString;
+
+        let filtered = filtered_sidecar_environment([
+            (OsString::from("HOME"), OsString::from("/Users/test")),
+            (OsString::from("GROK_HOME"), OsString::from("/tmp/grok")),
+            (OsString::from("CODEX_HOME"), OsString::from("/tmp/codex")),
+            (OsString::from("TMPDIR"), OsString::from("/tmp")),
+            (OsString::from("LANG"), OsString::from("en_US.UTF-8")),
+            (OsString::from("LC_ALL"), OsString::from("C")),
+            (
+                OsString::from("DATABASE_URL"),
+                OsString::from("postgres://secret"),
+            ),
+            (
+                OsString::from("BETTER_AUTH_SECRET"),
+                OsString::from("secret"),
+            ),
+            (
+                OsString::from("GROK_AUTH_CLIENT_SECRET"),
+                OsString::from("secret"),
+            ),
+            (
+                OsString::from("NODE_OPTIONS"),
+                OsString::from("--require=sentinel"),
+            ),
+            (
+                OsString::from("HTTPS_PROXY"),
+                OsString::from("http://proxy"),
+            ),
+        ]);
+
+        let keys = filtered.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                "HOME",
+                "GROK_HOME",
+                "CODEX_HOME",
+                "TMPDIR",
+                "LANG",
+                "LC_ALL"
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
     }
 }

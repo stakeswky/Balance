@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Synq",
   "version": "0.1.0",
-  "identifier": "com.synq.app",
+  "identifier": "com.synq.desktop",
   "build": {
     "beforeBuildCommand": "npm run desktop:prepare",
     "frontendDist": "dist"

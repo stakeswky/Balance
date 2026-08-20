@@ -22,8 +22,8 @@ test("desktop runtime imports db without booting PGLite", () => {
     'process.env.SYNQ_DESKTOP = "1";',
     `const db = await import(${JSON.stringify(dbUrl)});`,
     'if (db.dbSource !== "disabled") process.exit(21);',
-    'await db.ensureDbReady();',
-    'if (globalThis.__pgliteInstance__) process.exit(22);',
+    "await db.ensureDbReady();",
+    "if (globalThis.__pgliteInstance__) process.exit(22);",
   ].join("\n");
   const result = spawnSync(
     process.execPath,
@@ -34,12 +34,19 @@ test("desktop runtime imports db without booting PGLite", () => {
 });
 
 test("desktop health route has a mode-specific response", async () => {
-  const source = await readFile(
-    resolve(root, "src/routes/api/desktop-health.ts"),
-    "utf8",
-  );
+  const source = await readFile(resolve(root, "src/routes/api/desktop-health.ts"), "utf8");
   assert.match(source, /SYNQ_DESKTOP/);
   assert.ok(source.includes('{"app":"synq","mode":"desktop"}'));
+});
+
+test("desktop auth route rejects before dynamically importing the auth server", async () => {
+  const source = await readFile(resolve(root, "src/routes/api/auth/$.ts"), "utf8");
+  assert.doesNotMatch(source, /import\s+\{\s*auth\s*\}\s+from/);
+  assert.match(source, /isDesktopRuntime\(process\.env\)/);
+  assert.match(source, /return new Response\("Not Found", \{ status: 404 \}\)/);
+  const guardIndex = source.indexOf("isDesktopRuntime(process.env)");
+  const importIndex = source.indexOf('await import("@/lib/auth/server")');
+  assert.ok(guardIndex >= 0 && importIndex > guardIndex);
 });
 
 test("the document shell lets Vite own the production stylesheet asset", async () => {

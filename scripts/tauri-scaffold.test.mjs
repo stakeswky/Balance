@@ -7,39 +7,22 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
     await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
   );
   const capability = JSON.parse(
-    await readFile(
-      new URL("../src-tauri/capabilities/default.json", import.meta.url),
-      "utf8",
-    ),
+    await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"),
   );
-  const rust = await readFile(
-    new URL("../src-tauri/src/lib.rs", import.meta.url),
-    "utf8",
-  );
-  const infoPlist = await readFile(
-    new URL("../src-tauri/Info.plist", import.meta.url),
-    "utf8",
-  );
+  const rust = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+  const infoPlist = await readFile(new URL("../src-tauri/Info.plist", import.meta.url), "utf8");
   const watchdog = await readFile(
     new URL("../src-tauri/resources/sidecar-watchdog.cjs", import.meta.url),
     "utf8",
   );
-  const verifier = await readFile(
-    new URL("./verify-macos-app.sh", import.meta.url),
-    "utf8",
-  );
-  const nativeSmoke = await readFile(
-    new URL("./macos-ui-smoke.swift", import.meta.url),
-    "utf8",
-  );
+  const verifier = await readFile(new URL("./verify-macos-app.sh", import.meta.url), "utf8");
+  const nativeSmoke = await readFile(new URL("./macos-ui-smoke.swift", import.meta.url), "utf8");
   assert.deepEqual(config.app.windows, []);
+  assert.equal(config.identifier, "com.synq.desktop");
   assert.deepEqual(config.bundle.externalBin, ["binaries/synq-node"]);
   assert.equal(config.bundle.macOS.signingIdentity, "-");
   assert.equal(config.bundle.macOS.infoPlist, "Info.plist");
-  assert.equal(
-    config.bundle.resources["resources/sidecar-watchdog.cjs"],
-    "sidecar-watchdog.cjs",
-  );
+  assert.equal(config.bundle.resources["resources/sidecar-watchdog.cjs"], "sidecar-watchdog.cjs");
   assert.deepEqual(capability.permissions, ["core:default"]);
   assert.doesNotMatch(JSON.stringify(capability), /shell:allow|fs:allow/);
   assert.match(infoPlist, /<key>NSAppTransportSecurity<\/key>/);
@@ -55,8 +38,17 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.match(rust, /SYNQ_PARENT_PID/);
   assert.match(rust, /sidecar-watchdog\.cjs/);
   assert.match(rust, /stopping/);
+  assert.match(rust, /\.env_clear\(\)/);
+  assert.match(rust, /SIDECARE_ENV_ALLOWLIST|SIDECAR_ENV_ALLOWLIST/);
+  for (const key of ["HOME", "GROK_HOME", "CODEX_HOME", "TMPDIR", "LANG", "LC_ALL"]) {
+    assert.match(rust, new RegExp(`"${key}"`));
+  }
   assert.match(watchdog, /process\.stdin/);
   assert.match(watchdog, /process\.ppid/);
   assert.match(verifier, /Mach-O 64-bit executable arm64/);
   assert.doesNotMatch(nativeSmoke, /title\.isEmpty \? "Synq"/);
+  assert.match(nativeSmoke, /waitForInitialAppState/);
+  assert.match(nativeSmoke, /Thread\.sleep\(forTimeInterval: 1\)/);
+  assert.match(nativeSmoke, /case \.onboarding/);
+  assert.match(nativeSmoke, /case \.dashboard/);
 });
