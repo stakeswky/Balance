@@ -73,15 +73,32 @@ function claudeWindow(
   percentKey: "utilization" | "percent",
 ): { usedPct: number; resetsAt: number | null } | null {
   const value = record(raw);
-  if (!value) return null;
-  const candidate = value[percentKey];
-  if (candidate == null || candidate === "") return null;
+  const candidate = value ? value[percentKey] : raw;
+  if (
+    candidate == null
+    || candidate === ""
+    || (typeof candidate !== "number" && typeof candidate !== "string")
+  ) return null;
   const usedPct = typeof candidate === "number" ? candidate : Number(candidate);
   if (!Number.isFinite(usedPct)) return null;
   return {
     usedPct: clampPct(usedPct),
-    resetsAt: timestampMs(value.resets_at),
+    resetsAt: value ? timestampMs(value.resets_at) : null,
   };
+}
+
+function claudeLimit(
+  root: Record<string, unknown>,
+  kind: "session" | "weekly_all",
+): { usedPct: number; resetsAt: number | null } | null {
+  const limits = Array.isArray(root.limits) ? root.limits : [];
+  for (const item of limits) {
+    const limit = record(item);
+    if (!limit || limit.kind !== kind) continue;
+    const parsed = claudeWindow(limit, "percent");
+    if (parsed) return parsed;
+  }
+  return null;
 }
 
 function fableLimit(root: Record<string, unknown>): OfficialModelWeekLimit | null {
@@ -105,8 +122,8 @@ export function parseClaudeUsagePayload(
 ): OfficialSlice | null {
   const root = record(raw);
   if (!root) return null;
-  const fiveHour = claudeWindow(root.five_hour, "utilization");
-  const sevenDay = claudeWindow(root.seven_day, "utilization");
+  const fiveHour = claudeLimit(root, "session") ?? claudeWindow(root.five_hour, "utilization");
+  const sevenDay = claudeLimit(root, "weekly_all") ?? claudeWindow(root.seven_day, "utilization");
   const fable = fableLimit(root);
   if (!fiveHour && !sevenDay && !fable) return null;
   const fetchedAt = opts?.fetchedAt ?? Date.now();

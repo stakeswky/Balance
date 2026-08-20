@@ -168,6 +168,64 @@ test("Claude OAuth usage exposes the official Fable weekly limit", () => {
   assert.equal(usage.source, "oauth-usage");
 });
 
+test("Claude OAuth usage parses the observed scalar 24/34/26 contract", () => {
+  const usage = parseClaudeUsagePayload({
+    five_hour: 24,
+    seven_day: 34,
+    limits: [
+      { kind: "session", percent: 24 },
+      { kind: "weekly_all", percent: 34 },
+      {
+        kind: "weekly_scoped",
+        scope: { model: { display_name: "Fable" } },
+        percent: 26,
+      },
+    ],
+  });
+
+  assert.ok(usage);
+  assert.equal(usage.windowPct, 24);
+  assert.equal(usage.weekPct, 34);
+  assert.equal(usage.windowResetsAt, null);
+  assert.equal(usage.weekResetsAt, null);
+  assert.deepEqual(usage.modelWeekLimits, {
+    fable: { usedPct: 26, resetsAt: null },
+  });
+});
+
+test("Claude OAuth limits win over legacy top-level windows", () => {
+  const usage = parseClaudeUsagePayload({
+    five_hour: { utilization: 9, resets_at: "2026-08-20T15:00:00Z" },
+    seven_day: { utilization: 11, resets_at: "2026-08-25T20:59:00Z" },
+    limits: [
+      { kind: "session", percent: 24, resets_at: "2026-08-20T16:00:00Z" },
+      { kind: "weekly_all", percent: 34, resets_at: "2026-08-26T20:59:00Z" },
+    ],
+  });
+
+  assert.ok(usage);
+  assert.equal(usage.windowPct, 24);
+  assert.equal(usage.weekPct, 34);
+  assert.equal(usage.windowResetsAt, Date.parse("2026-08-20T16:00:00Z"));
+  assert.equal(usage.weekResetsAt, Date.parse("2026-08-26T20:59:00Z"));
+});
+
+test("Claude OAuth skips invalid limits and falls back to valid top-level scalars", () => {
+  const usage = parseClaudeUsagePayload({
+    five_hour: "24",
+    seven_day: 34,
+    limits: [
+      { kind: "session", percent: false },
+      { kind: "weekly_all", percent: { value: 99 } },
+    ],
+  });
+
+  assert.ok(usage);
+  assert.equal(usage.windowPct, 24);
+  assert.equal(usage.weekPct, 34);
+  assert.equal(parseClaudeUsagePayload({ five_hour: false }), null);
+});
+
 test("Claude OAuth usage accepts Fable and ignores malformed scoped limits", () => {
   const usage = parseClaudeUsagePayload({
     seven_day_overage_included: { utilization: 31, resets_at: 1_787_691_540 },
