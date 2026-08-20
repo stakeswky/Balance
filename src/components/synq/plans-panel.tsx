@@ -30,7 +30,9 @@ function PlanList({
               onClick={() => onSelect(p.id)}
               className={cn(
                 "rounded-xl p-4 text-left shadow-[var(--shadow-border)] transition-[box-shadow,background-color] duration-150",
-                active ? "bg-raised shadow-[var(--shadow-border-hover)]" : "bg-surface hover:bg-raised",
+                active
+                  ? "bg-raised shadow-[var(--shadow-border-hover)]"
+                  : "bg-surface hover:bg-raised",
               )}
             >
               <div className="flex items-baseline justify-between gap-3">
@@ -156,9 +158,7 @@ export function PlansPanel({
 
         <Card>
           <CardTitle>告警阈值</CardTitle>
-          <CardHint className="mt-1">
-            窗口或周额度越过这条线时，底部弹出提醒并记入报告。
-          </CardHint>
+          <CardHint className="mt-1">窗口或周额度越过这条线时，底部弹出提醒并记入报告。</CardHint>
           <label className="mt-5 block text-xs text-mute">
             五小时窗 {alertWindowPct}%
             <input
@@ -169,6 +169,7 @@ export function PlansPanel({
               value={alertWindowPct}
               onChange={(e) => onAlertWindow(Number(e.target.value))}
               className="mt-2 w-full accent-accent"
+              aria-label="五小时窗告警阈值"
             />
           </label>
           <label className="mt-4 block text-xs text-mute">
@@ -181,6 +182,7 @@ export function PlansPanel({
               value={alertWeekPct}
               onChange={(e) => onAlertWeek(Number(e.target.value))}
               className="mt-2 w-full accent-accent"
+              aria-label="本周额度告警阈值"
             />
           </label>
         </Card>

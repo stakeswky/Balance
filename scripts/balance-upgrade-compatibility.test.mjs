@@ -37,11 +37,15 @@ test("installed screenshot capture follows Balance without changing storage", ()
 test("native verification reads the persisted settings through the Balance UI", () => {
   const plans = read("src/components/synq/plans-panel.tsx");
   assert.match(plans, /aria-label=\{active \? `\$\{p\.name\}，当前套餐` : p\.name\}/);
+  assert.match(plans, /aria-label="周额度加成百分比"/);
+  assert.match(plans, /aria-label="五小时窗告警阈值"/);
+  assert.match(plans, /aria-label="本周额度告警阈值"/);
 
   const nativeSmoke = read("scripts/macos-ui-smoke.swift");
   assert.match(nativeSmoke, /BALANCE_EXPECTED_SETTINGS/);
   assert.match(nativeSmoke, /native-persistence-ok/);
   assert.match(nativeSmoke, /，当前套餐/);
+  assert.match(nativeSmoke, /waitForSliderValue/);
 
   const appVerifier = read("scripts/verify-macos-app.sh");
   assert.match(appVerifier, /BALANCE_EXPECTED_SETTINGS/);

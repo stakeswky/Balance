@@ -147,6 +147,41 @@ private func waitForExactText(_ target: String, timeout: TimeInterval) {
   fail("Balance native UI text did not appear: \(target)")
 }
 
+private func numericAttribute(_ element: AXUIElement, _ name: String) -> Double? {
+  guard let value = attribute(element, name) else { return nil }
+  if let number = value as? NSNumber { return number.doubleValue }
+  if let string = value as? String { return Double(string) }
+  return nil
+}
+
+private func slider(named target: String) -> AXUIElement? {
+  guard let window = firstWindow() else { return nil }
+  return firstElement(in: window) {
+    stringAttribute($0, kAXRoleAttribute) == kAXSliderRole &&
+      elementHasExactText($0, target)
+  }
+}
+
+private func waitForSliderValue(
+  _ target: String,
+  expected: Int,
+  timeout: TimeInterval
+) {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if let match = slider(named: target),
+       let value = numericAttribute(match, kAXValueAttribute),
+       abs(value - Double(expected)) < 0.001 {
+      return
+    }
+    Thread.sleep(forTimeInterval: pollInterval)
+  }
+  let observed = slider(named: target)
+    .flatMap { numericAttribute($0, kAXValueAttribute) }
+    .map { String($0) } ?? "<missing>"
+  fail("Balance native UI slider \(target) expected \(expected), observed \(observed)")
+}
+
 private func button(named target: String) -> AXUIElement? {
   guard let window = firstWindow() else { return nil }
   return firstElement(in: window) {
@@ -322,9 +357,21 @@ if let expected = expectedSettings {
     _ = waitForButton("\(planName)，当前套餐", timeout: 10)
   }
 
-  waitForExactText("五小时窗 \(expected.state.alertWindowPct)%", timeout: 10)
-  waitForExactText("本周额度 \(expected.state.alertWeekPct)%", timeout: 10)
-  waitForExactText("\(expected.state.weekBoostPct)%", timeout: 10)
+  waitForSliderValue(
+    "五小时窗告警阈值",
+    expected: expected.state.alertWindowPct,
+    timeout: 10
+  )
+  waitForSliderValue(
+    "本周额度告警阈值",
+    expected: expected.state.alertWeekPct,
+    timeout: 10
+  )
+  waitForSliderValue(
+    "周额度加成百分比",
+    expected: expected.state.weekBoostPct,
+    timeout: 10
+  )
   FileHandle.standardError.write(Data("native-persistence-ok\n".utf8))
 }
 
