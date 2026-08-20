@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -120,4 +120,109 @@ test("incremental scan only returns new requestIds after the first pass", () => 
   const second = scanClaudeUsage(since, { home, now: Date.parse("2026-08-19T16:00:01Z"), state });
   assert.equal(second.events.length, 1);
   assert.equal(second.events[0]?.id, "req_2");
+});
+
+test("Claude per-file cursor keeps a late parallel event older than global since", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-claude-late-"));
+  const dir = join(home, ".claude", "projects", "-demo");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "root-session.jsonl");
+  writeFileSync(file, `${assistant({ requestId: "req-new", timestamp: "2026-08-19T15:12:29.612Z" })}\n`);
+  const state = createScanState();
+  const first = scanClaudeUsage(0, { home, now: Date.parse("2026-08-19T16:00:00Z"), state });
+  appendFileSync(file, `${assistant({ requestId: "req-late", timestamp: "2026-08-19T15:12:00.000Z" })}\n`);
+  const second = scanClaudeUsage(first.events[0]!.ts + 1, {
+    home,
+    now: Date.parse("2026-08-19T16:00:01Z"),
+    state,
+  });
+  assert.deepEqual(second.events.map((event) => event.id), ["req-late"]);
+});
+
+test("Claude keeps billing session and subagent actor identities separate", () => {
+  const meta = {
+    sessionId: "agent-a1",
+    cwd: "",
+    title: "",
+    lastUser: "",
+    actorId: "agent-a1",
+    actorKind: "subagent" as const,
+  };
+  parseJsonlLine(
+    JSON.stringify({
+      type: "user",
+      sessionId: "parent-session",
+      agentId: "a1",
+      isSidechain: true,
+      message: { role: "user", content: "检查并修复支付回归" },
+    }),
+    meta,
+  );
+  parseJsonlLine(
+    JSON.stringify({
+      type: "user",
+      sessionId: "parent-session",
+      agentId: "a1",
+      message: { role: "user", content: "<system-reminder>Other agents active</system-reminder>" },
+    }),
+    meta,
+  );
+  const event = parseJsonlLine(
+    assistant({ sessionId: "parent-session", agentId: "a1", requestId: "req-child" }),
+    meta,
+  );
+  assert.ok(event);
+  assert.equal(event.sessionId, "parent-session");
+  assert.equal(event.actorId, "agent-a1");
+  assert.equal(event.actorKind, "subagent");
+  assert.equal(event.task, "检查并修复支付回归");
+});
+
+test("Claude reports concurrently writing subagents as active", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-claude-active-"));
+  const root = join(home, ".claude", "projects", "-demo", "parent-session");
+  const subagents = join(root, "subagents");
+  mkdirSync(subagents, { recursive: true });
+  const now = Date.parse("2026-08-20T11:00:00Z");
+  for (const actor of ["a1", "a2"]) {
+    const file = join(subagents, `agent-${actor}.jsonl`);
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "user", sessionId: "parent-session", agentId: actor, message: { content: `任务 ${actor}` } })}\n${assistant({ sessionId: "parent-session", agentId: actor, requestId: `req-${actor}`, timestamp: "2026-08-20T10:59:59Z" })}\n`,
+    );
+    utimesSync(file, new Date(now - 1_000), new Date(now - 1_000));
+  }
+  const result = scanClaudeUsage(0, { home, now, state: createScanState() });
+  assert.equal(result.active.length, 2);
+  assert.deepEqual(result.active.map((task) => task.actorId).sort(), ["agent-a1", "agent-a2"]);
+  assert.equal(result.live?.writing, true);
+  assert.equal(new Set(result.events.map((event) => event.actorId)).size, 2);
+});
+
+test("Claude workflow subagent prefers the workflow label over its long prompt", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-claude-workflow-"));
+  const session = join(home, ".claude", "projects", "-demo", "parent-session");
+  const workflowDir = join(session, "workflows");
+  const logDir = join(session, "subagents", "workflows", "wf_demo");
+  mkdirSync(workflowDir, { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(
+    join(workflowDir, "wf_demo.json"),
+    JSON.stringify({
+      workflowProgress: [
+        { type: "workflow_agent", agentId: "ab45c5", label: "M0-3-ws-origin" },
+      ],
+    }),
+  );
+  const now = Date.parse("2026-08-20T11:00:00Z");
+  const log = join(logDir, "agent-ab45c5.jsonl");
+  writeFileSync(
+    log,
+    `${JSON.stringify({ type: "user", sessionId: "parent-session", agentId: "ab45c5", isSidechain: true, message: { content: "这是不应成为标题的完整长任务 prompt" } })}\n${assistant({ sessionId: "parent-session", agentId: "ab45c5", attributionAgent: "workflow-subagent", requestId: "req-workflow", timestamp: "2026-08-20T10:59:59Z" })}\n`,
+  );
+  utimesSync(log, new Date(now - 1_000), new Date(now - 1_000));
+  const result = scanClaudeUsage(0, { home, now, state: createScanState() });
+  assert.equal(result.events[0]?.task, "M0-3-ws-origin");
+  assert.equal(result.events[0]?.actorKind, "workflow-subagent");
+  assert.equal(result.active[0]?.task, "M0-3-ws-origin");
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -138,4 +138,58 @@ test("incremental scan only emits new prompt_ids", () => {
   const second = scanGrokUsage(first.events[0]!.ts + 1, { grokHome, now: 1787153700001 + 1000, state });
   assert.equal(second.events.length, 1);
   assert.equal(second.events[0]?.id, "prompt-2");
+});
+
+test("Grok per-file cursor keeps a late parallel turn older than global since", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-grok-late-"));
+  const grokHome = join(home, ".grok");
+  const dir = join(grokHome, "sessions", encodeURIComponent("/tmp/demo"), "sess-g");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "summary.json"), JSON.stringify({ generated_title: "并行 Grok", info: { cwd: "/tmp/demo" } }));
+  const file = join(dir, "updates.jsonl");
+  writeFileSync(file, `${turn({})}\n`);
+  const state = createGrokScanState();
+  const first = scanGrokUsage(0, { grokHome, now: 1_787_153_667_911, state });
+  const late = turn({
+    params: {
+      sessionId: "sess-g",
+      update: {
+        sessionUpdate: "turn_completed",
+        prompt_id: "prompt-late",
+        usage: { inputTokens: 20, outputTokens: 5, cachedReadTokens: 0, cacheCreationTokens: 0 },
+      },
+      _meta: { agentTimestampMs: 1_787_153_600_000 },
+    },
+  });
+  appendFileSync(file, `${late}\n`);
+  const second = scanGrokUsage(first.events[0]!.ts + 1, { grokHome, now: 1_787_153_668_000, state });
+  assert.deepEqual(second.events.map((event) => event.id), ["prompt-late"]);
+});
+
+test("Grok reports two concurrently writing sessions", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-grok-active-"));
+  const grokHome = join(home, ".grok");
+  const now = 1_787_153_700_000;
+  for (const [sessionId, offset] of [["sess-a", 1_000], ["sess-b", 2_000]] as const) {
+    const dir = join(grokHome, "sessions", encodeURIComponent("/tmp/demo"), sessionId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.json"), JSON.stringify({ generated_title: `任务 ${sessionId}`, info: { cwd: "/tmp/demo" } }));
+    const file = join(dir, "updates.jsonl");
+    writeFileSync(file, `${turn({
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: `prompt-${sessionId}`,
+          usage: { inputTokens: 20, outputTokens: 5, cachedReadTokens: 0, cacheCreationTokens: 0 },
+        },
+        _meta: { agentTimestampMs: now - offset },
+      },
+    })}\n`);
+    utimesSync(file, new Date(now - offset), new Date(now - offset));
+  }
+  const result = scanGrokUsage(0, { grokHome, now, state: createGrokScanState() });
+  assert.deepEqual(result.active.map((task) => task.sessionId).sort(), ["sess-a", "sess-b"]);
+  assert.equal(result.live?.sessionId, "sess-a");
+  assert.equal(result.live?.lastTs, now - 1_000);
 });

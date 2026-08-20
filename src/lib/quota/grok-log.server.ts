@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { WEEK_MS, type AgentLiveInfo, type UsageEvent } from "./types.ts";
+import { WEEK_MS, latestActivities, type AgentLiveInfo, type UsageEvent } from "./types.ts";
 import { foldGrokTurns, parseGrokUpdateLine, type GrokSessionMeta } from "./grok-jsonl.ts";
 
 const GROW_MS = 30 * 60 * 1000;
@@ -21,6 +21,7 @@ export interface GrokScanState {
 export interface GrokScanResult {
   events: UsageEvent[];
   live: AgentLiveInfo | null;
+  active: AgentLiveInfo[];
   roots: string[];
   filesRead: number;
 }
@@ -180,29 +181,25 @@ export function scanGrokUsage(
     state.meta.set(sid, meta);
   }
 
-  const folded = foldGrokTurns(fresh).filter((e) => (since <= 0 || e.ts >= since) && e.ts <= now + 60_000);
-
-  let live: AgentLiveInfo | null = null;
-  let bestMtime = 0;
+  const folded = foldGrokTurns(fresh).filter((e) => e.ts <= now + 60_000);
+  const candidates: AgentLiveInfo[] = [];
   for (const [path, cursor] of state.files) {
     const age = now - cursor.mtimeMs;
     if (age > GROW_MS) continue;
-    if (cursor.mtimeMs >= bestMtime) {
-      bestMtime = cursor.mtimeMs;
-      const sid = sessionIdFromPath(path);
-      const meta = state.meta.get(sid);
-      const mine = folded.filter((e) => e.sessionId === sid);
-      live = {
-        sessionId: sid,
-        cwd: meta?.cwd ?? "",
-        task: meta?.title || meta?.cwd || sid,
-        writing: age <= WRITING_MS,
-        lastTs: cursor.mtimeMs,
-        startedAt: mine[0]?.ts ?? cursor.mtimeMs,
-        turns: mine.length,
-      };
-    }
+    const sessionId = sessionIdFromPath(path);
+    const meta = state.meta.get(sessionId);
+    const mine = folded.filter((event) => event.sessionId === sessionId);
+    candidates.push({
+      sessionId,
+      cwd: meta?.cwd ?? "",
+      task: meta?.title || meta?.cwd || sessionId,
+      writing: age <= WRITING_MS,
+      lastTs: cursor.mtimeMs,
+      startedAt: mine[0]?.ts ?? cursor.mtimeMs,
+      turns: mine.length,
+    });
   }
+  const { live, active } = latestActivities(candidates);
 
-  return { events: folded, live, roots, filesRead };
+  return { events: folded, live, active, roots, filesRead };
 }
