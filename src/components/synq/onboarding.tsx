@@ -37,12 +37,12 @@ export function Onboarding({
   return (
     <main className="grid min-h-dvh place-items-center bg-canvas px-4 py-10 text-ink sm:px-6">
       <div className="w-full max-w-xl">
-        <p className="text-sm font-medium text-mute">Synq 初始设置</p>
+        <p className="text-sm font-medium text-mute">余量初始设置</p>
         <h1 className="mt-3 text-balance text-3xl font-medium tracking-tight sm:text-4xl">
           先连接这台机器上的 Agent
         </h1>
         <p className="mt-3 max-w-lg text-sm leading-relaxed text-mute">
-          Synq 只检查本机数据目录。未检测到的 Agent 不会出现在正式工作台，之后可在设置里重新检测。
+          余量只检查本机数据目录。未检测到的 Agent 不会出现在正式工作台，之后可在设置里重新检测。
         </p>
 
         <Card className="mt-8 p-2 sm:p-2">
@@ -86,10 +86,14 @@ export function Onboarding({
         <div className="mt-6 min-h-6" aria-live="polite">
           {state === "checking" ? <p className="text-sm text-mute">正在检查本机数据目录…</p> : null}
           {state === "ready" ? (
-            <p className="text-sm text-mute">已找到 {detected.length} 个 Agent，可以开始只读监控。</p>
+            <p className="text-sm text-mute">
+              已找到 {detected.length} 个 Agent，可以开始只读监控。
+            </p>
           ) : null}
           {state === "empty" ? (
-            <p className="text-sm text-mute">暂未找到可监控目录。先运行一次 Agent，或直接查看演示。</p>
+            <p className="text-sm text-mute">
+              暂未找到可监控目录。先运行一次 Agent，或直接查看演示。
+            </p>
           ) : null}
           {state === "error" ? <p className="text-sm text-crit">{error}</p> : null}
         </div>
