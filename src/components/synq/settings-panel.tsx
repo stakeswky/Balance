@@ -1,9 +1,13 @@
-import { Pause, Play, RotateCcw } from "lucide-react";
+import { Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { PlansPanel } from "@/components/synq/plans-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { detectedAgentIds } from "@/lib/quota/agent-availability";
 import { useQuota } from "@/lib/quota/store";
+import { pullAgentAvailability } from "@/lib/quota/watch";
 import { cn } from "@/lib/utils";
 
 function CaptureToggle({
@@ -32,9 +36,12 @@ function CaptureToggle({
 }
 
 export function SettingsPanel() {
+  const [detecting, setDetecting] = useState(false);
   const liveClaude = useQuota((s) => s.liveClaude);
   const liveGrok = useQuota((s) => s.liveGrok);
   const liveCodex = useQuota((s) => s.liveCodex);
+  const demoMode = useQuota((s) => s.demoMode);
+  const agentAvailability = useQuota((s) => s.agentAvailability);
   const claudePlanId = useQuota((s) => s.claudePlanId);
   const grokPlanId = useQuota((s) => s.grokPlanId);
   const codexPlanId = useQuota((s) => s.codexPlanId);
@@ -42,17 +49,40 @@ export function SettingsPanel() {
   const alertWindowPct = useQuota((s) => s.alertWindowPct);
   const alertWeekPct = useQuota((s) => s.alertWeekPct);
   const sampleCount = useQuota((s) => s.quotaSamples.length);
+  const detectedCount = detectedAgentIds(agentAvailability).length;
+
+  const detect = async () => {
+    setDetecting(true);
+    try {
+      const result = await pullAgentAvailability();
+      useQuota.getState().setAgentAvailability(result);
+      const count = detectedAgentIds(result).length;
+      toast.success(`检测完成，找到 ${count} 个 Agent`);
+    } catch {
+      toast.error("无法检测本机 Agent，请稍后重试");
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
       <Card>
-        <CardTitle>本机监控</CardTitle>
-        <CardHint className="mt-1">
-          Synq 只读本机 Agent 日志和官方百分比，不需要账号。套餐、阈值和采样都保存在这台浏览器里。
-        </CardHint>
-        <p className={cn("mt-3 font-mono text-xs", sampleCount ? "text-mute" : "text-faint")}>
-          已存校准样本 {sampleCount} 条
-        </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>本机监控</CardTitle>
+            <CardHint className="mt-1">
+              Synq 只读本机 Agent 日志和官方百分比，不需要账号。套餐、阈值和采样都保存在这台浏览器里。
+            </CardHint>
+            <p className={cn("mt-3 font-mono text-xs", sampleCount ? "text-mute" : "text-faint")}>
+              已检测 {detectedCount} 个 Agent · 已存校准样本 {sampleCount} 条
+            </p>
+          </div>
+          <Button variant="secondary" onClick={() => void detect()} disabled={detecting}>
+            <RefreshCw className={detecting ? "animate-spin" : undefined} />
+            {detecting ? "检测中" : "重新检测"}
+          </Button>
+        </div>
       </Card>
 
       <Card>
@@ -96,19 +126,35 @@ export function SettingsPanel() {
       />
 
       <Card>
-        <CardTitle>演示数据</CardTitle>
-        <CardHint className="mt-1">用假会话填满时间线。打开任一路采集会回到只读监听本机日志。</CardHint>
-        <Button
-          variant="secondary"
-          className="mt-4"
-          onClick={() => {
-            useQuota.getState().resetDemo();
-            toast.message("已重置为今日演示数据");
-          }}
-        >
-          <RotateCcw />
-          重置演示
-        </Button>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <CardTitle>演示数据</CardTitle>
+            <CardHint className="mt-1">
+              用合成会话展示完整工作台。关闭后会恢复本机数据和采集设置。
+            </CardHint>
+          </div>
+          <Switch
+            checked={demoMode}
+            aria-label="演示数据"
+            onCheckedChange={(on) => {
+              useQuota.getState().setDemoMode(on);
+              toast.message(on ? "已开启演示数据" : "已恢复本机数据");
+            }}
+          />
+        </div>
+        {demoMode ? (
+          <Button
+            variant="secondary"
+            className="mt-4"
+            onClick={() => {
+              useQuota.getState().resetDemo();
+              toast.message("已重置为今日演示数据");
+            }}
+          >
+            <RotateCcw />
+            重置今日演示
+          </Button>
+        ) : null}
       </Card>
     </div>
   );
