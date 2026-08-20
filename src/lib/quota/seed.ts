@@ -1,7 +1,7 @@
-import { eventWeekShare, eventWindowShare, inWindow } from "./engine";
-import { planById } from "./plans";
-import type { AgentId, ModelId, SessionState, UsageEvent } from "./types";
-import { WEEK_MS, WINDOW_MS } from "./types";
+import { eventWeekShare, eventWindowShare, inWindow } from "./engine.ts";
+import { planById } from "./plans.ts";
+import type { AgentId, ModelId, SessionState, UsageEvent } from "./types.ts";
+import { WEEK_MS, WINDOW_MS } from "./types.ts";
 
 function mulberry32(seed: number) {
   let a = seed >>> 0;

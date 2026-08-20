@@ -1,17 +1,22 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { rawTokens } from "./engine";
-import { parseUsagePayload } from "./parse";
-import { importedClaudeEvents, sessionFromEvents } from "./imported";
-import { liveRng, newSession, nextLiveEvent, seedHistory } from "./seed";
-import { samplesFromOfficial, samplesFromOfficialHistory, type QuotaSample } from "./quota-value";
+import {
+  ALL_AGENT_AVAILABILITY,
+  EMPTY_AGENT_AVAILABILITY,
+  type AgentAvailability,
+} from "./agent-availability.ts";
+import { rawTokens } from "./engine.ts";
+import { importedClaudeEvents, sessionFromEvents } from "./imported.ts";
+import { parseUsagePayload } from "./parse.ts";
+import { samplesFromOfficial, samplesFromOfficialHistory, type QuotaSample } from "./quota-value.ts";
+import { liveRng, newSession, nextLiveEvent, seedHistory } from "./seed.ts";
 import {
   grokPlanIdFromLabel,
   nextCodexPlanId,
   type OfficialQuota,
   type OfficialSlice,
-} from "./official";
-import type { AgentId, ClaudeLiveInfo, SessionState, UsageEvent } from "./types";
+} from "./official.ts";
+import type { AgentId, ClaudeLiveInfo, SessionState, UsageEvent } from "./types.ts";
 
 const MAX_EVENTS = 20000;
 const MAX_ALERTS = 40;
@@ -30,10 +35,14 @@ export interface QuotaState {
   codexPlanId: string;
   weekBoostPct: number;
   events: UsageEvent[];
+  realEvents: UsageEvent[];
   liveClaude: boolean;
   liveGrok: boolean;
   liveCodex: boolean;
   demoMode: boolean;
+  agentAvailability: AgentAvailability;
+  captureEnabled: AgentAvailability;
+  onboardingComplete: boolean;
   claudeCursor: number;
   grokCursor: number;
   codexCursor: number;
@@ -59,6 +68,9 @@ export interface QuotaState {
   setAlertWeek: (n: number) => void;
   pushAlert: (alert: Omit<QuotaAlert, "id">) => void;
   clearAlerts: () => void;
+  setAgentAvailability: (availability: AgentAvailability) => void;
+  setOnboardingComplete: (complete: boolean) => void;
+  setDemoMode: (on: boolean) => void;
   toggleLive: (agent: AgentId) => void;
   setBothLive: (on: boolean) => void;
   tick: (now?: number) => UsageEvent[];
@@ -106,8 +118,6 @@ function bumpSession(session: SessionState, ev: UsageEvent): SessionState {
   };
 }
 
-const INITIAL_CLAUDE = importedClaudeEvents();
-
 export const useQuota = create<QuotaState>()(
   persist(
     (set, get) => ({
@@ -115,11 +125,15 @@ export const useQuota = create<QuotaState>()(
       grokPlanId: "grok-super",
       codexPlanId: "chatgpt-plus",
       weekBoostPct: 50,
-      events: INITIAL_CLAUDE,
-      liveClaude: true,
-      liveGrok: true,
-      liveCodex: true,
+      events: [],
+      realEvents: [],
+      liveClaude: false,
+      liveGrok: false,
+      liveCodex: false,
       demoMode: false,
+      agentAvailability: { ...EMPTY_AGENT_AVAILABILITY },
+      captureEnabled: { ...ALL_AGENT_AVAILABILITY },
+      onboardingComplete: false,
       claudeCursor: 0,
       grokCursor: 0,
       codexCursor: 0,
@@ -129,7 +143,7 @@ export const useQuota = create<QuotaState>()(
       claudeWriting: false,
       grokWriting: false,
       codexWriting: false,
-      claudeSession: sessionFromEvents(INITIAL_CLAUDE),
+      claudeSession: null,
       grokSession: null,
       codexSession: null,
       official: { claude: null, grok: null, codex: null },
@@ -152,51 +166,92 @@ export const useQuota = create<QuotaState>()(
           alerts: [{ ...alert, id: `al_${alert.ts}_${alert.agent}` }, ...get().alerts].slice(0, MAX_ALERTS),
         }),
       clearAlerts: () => set({ alerts: [] }),
+      setAgentAvailability: (agentAvailability) => {
+        const state = get();
+        set({
+          agentAvailability,
+          liveClaude: state.demoMode
+            ? state.liveClaude
+            : agentAvailability.claude && state.captureEnabled.claude,
+          liveGrok: state.demoMode
+            ? state.liveGrok
+            : agentAvailability.grok && state.captureEnabled.grok,
+          liveCodex: state.demoMode
+            ? state.liveCodex
+            : agentAvailability.codex && state.captureEnabled.codex,
+        });
+      },
+      setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
+      setDemoMode: (on) => {
+        if (on) {
+          get().resetDemo();
+          return;
+        }
+        const state = get();
+        set({
+          events: state.realEvents,
+          demoMode: false,
+          liveClaude: state.agentAvailability.claude && state.captureEnabled.claude,
+          liveGrok: state.agentAvailability.grok && state.captureEnabled.grok,
+          liveCodex: state.agentAvailability.codex && state.captureEnabled.codex,
+          claudeCursor: 0,
+          grokCursor: 0,
+          codexCursor: 0,
+          claudeHydrated: false,
+          grokHydrated: false,
+          codexHydrated: false,
+          claudeWriting: false,
+          grokWriting: false,
+          codexWriting: false,
+          claudeSession: null,
+          grokSession: null,
+          codexSession: null,
+          lastBeat: Date.now(),
+        });
+      },
       toggleLive: (agent) => {
-        const now = Date.now();
-        const rng = liveRng();
+        const state = get();
+        if (state.demoMode) {
+          if (agent === "claude") set({ liveClaude: !state.liveClaude });
+          else if (agent === "grok") set({ liveGrok: !state.liveGrok });
+          else set({ liveCodex: !state.liveCodex });
+          return;
+        }
+        const captureEnabled = { ...state.captureEnabled };
+        captureEnabled[agent] = !captureEnabled[agent];
         if (agent === "claude") {
-          const on = !get().liveClaude;
-          const leavingDemo = on && get().demoMode;
           set({
-            liveClaude: on,
-            demoMode: on ? false : get().demoMode,
-            claudeHydrated: leavingDemo ? false : get().claudeHydrated,
-            claudeCursor: leavingDemo ? 0 : get().claudeCursor,
-            claudeSession: on ? (get().claudeSession ?? newSession(rng, "claude", now)) : get().claudeSession,
+            captureEnabled,
+            liveClaude: state.agentAvailability.claude && captureEnabled.claude,
           });
         } else if (agent === "grok") {
-          const on = !get().liveGrok;
-          const leavingDemo = on && get().demoMode;
           set({
-            liveGrok: on,
-            demoMode: on ? false : get().demoMode,
-            grokHydrated: leavingDemo ? false : get().grokHydrated,
-            grokCursor: leavingDemo ? 0 : get().grokCursor,
-            grokSession: on ? (get().grokSession ?? newSession(rng, "grok", now)) : get().grokSession,
+            captureEnabled,
+            liveGrok: state.agentAvailability.grok && captureEnabled.grok,
           });
         } else {
-          const on = !get().liveCodex;
-          const leavingDemo = on && get().demoMode;
           set({
-            liveCodex: on,
-            demoMode: on ? false : get().demoMode,
-            codexHydrated: leavingDemo ? false : get().codexHydrated,
-            codexCursor: leavingDemo ? 0 : get().codexCursor,
-            codexSession: on ? (get().codexSession ?? newSession(rng, "codex", now)) : get().codexSession,
+            captureEnabled,
+            liveCodex: state.agentAvailability.codex && captureEnabled.codex,
           });
         }
       },
       setBothLive: (on) => {
-        const now = Date.now();
-        const rng = liveRng();
+        const state = get();
+        if (state.demoMode) {
+          set({ liveClaude: on, liveGrok: on, liveCodex: on });
+          return;
+        }
+        const captureEnabled = {
+          claude: on,
+          grok: on,
+          codex: on,
+        };
         set({
-          liveClaude: on,
-          liveGrok: on,
-          liveCodex: on,
-          claudeSession: on ? (get().claudeSession ?? newSession(rng, "claude", now)) : get().claudeSession,
-          grokSession: on ? (get().grokSession ?? newSession(rng, "grok", now)) : get().grokSession,
-          codexSession: on ? (get().codexSession ?? newSession(rng, "codex", now)) : get().codexSession,
+          captureEnabled,
+          liveClaude: on && state.agentAvailability.claude,
+          liveGrok: on && state.agentAvailability.grok,
+          liveCodex: on && state.agentAvailability.codex,
         });
       },
       tick: (now = Date.now()) => {
@@ -254,28 +309,34 @@ export const useQuota = create<QuotaState>()(
       importText: (text, agent) => {
         const parsed = parseUsagePayload(text, agent);
         if (!parsed.length) return 0;
-        set({ events: trimEvents([...get().events, ...parsed].sort((a, b) => a.ts - b.ts)) });
+        const state = get();
+        const realEvents = trimEvents([...state.realEvents, ...parsed].sort((a, b) => a.ts - b.ts));
+        set({
+          realEvents,
+          events: state.demoMode ? state.events : realEvents,
+        });
         return parsed.length;
       },
       ingestClaudeLogs: (incoming, opts) => {
         const state = get();
-        const others = state.events.filter((e) => e.agent !== "claude");
+        const others = state.realEvents.filter((e) => e.agent !== "claude");
         let claude: UsageEvent[];
         if (opts?.replace) {
           claude = incoming;
         } else {
           const map = new Map(
-            state.events.filter((e) => e.agent === "claude").map((e) => [e.id, e] as const),
+            state.realEvents.filter((e) => e.agent === "claude").map((e) => [e.id, e] as const),
           );
           for (const ev of incoming) map.set(ev.id, ev);
           claude = [...map.values()];
         }
-        const events = trimEvents([...others, ...claude].sort((a, b) => a.ts - b.ts));
+        const realEvents = trimEvents([...others, ...claude].sort((a, b) => a.ts - b.ts));
         const cursor = claude.reduce((m, e) => Math.max(m, e.ts), state.claudeCursor);
         const live = opts?.live;
         const focus = live ? claude.filter((e) => e.sessionId === live.sessionId) : claude;
         set({
-          events,
+          realEvents,
+          events: state.demoMode ? state.events : realEvents,
           claudeCursor: cursor,
           claudeHydrated: state.claudeHydrated || incoming.length > 0,
           claudeWriting: live?.writing ?? state.claudeWriting,
@@ -286,23 +347,24 @@ export const useQuota = create<QuotaState>()(
       },
       ingestGrokLogs: (incoming, opts) => {
         const state = get();
-        const others = state.events.filter((e) => e.agent !== "grok");
+        const others = state.realEvents.filter((e) => e.agent !== "grok");
         let grok: UsageEvent[];
         if (opts?.replace) {
           grok = incoming;
         } else {
           const map = new Map(
-            state.events.filter((e) => e.agent === "grok").map((e) => [e.id, e] as const),
+            state.realEvents.filter((e) => e.agent === "grok").map((e) => [e.id, e] as const),
           );
           for (const ev of incoming) map.set(ev.id, ev);
           grok = [...map.values()];
         }
-        const events = trimEvents([...others, ...grok].sort((a, b) => a.ts - b.ts));
+        const realEvents = trimEvents([...others, ...grok].sort((a, b) => a.ts - b.ts));
         const cursor = grok.reduce((m, e) => Math.max(m, e.ts), state.grokCursor);
         const live = opts?.live;
         const focus = live ? grok.filter((e) => e.sessionId === live.sessionId) : grok;
         set({
-          events,
+          realEvents,
+          events: state.demoMode ? state.events : realEvents,
           grokCursor: cursor,
           grokHydrated: state.grokHydrated || incoming.length > 0,
           grokWriting: live?.writing ?? state.grokWriting,
@@ -325,23 +387,24 @@ export const useQuota = create<QuotaState>()(
       },
       ingestCodexLogs: (incoming, opts) => {
         const state = get();
-        const others = state.events.filter((e) => e.agent !== "codex");
+        const others = state.realEvents.filter((e) => e.agent !== "codex");
         let codex: UsageEvent[];
         if (opts?.replace) {
           codex = incoming;
         } else {
           const map = new Map(
-            state.events.filter((e) => e.agent === "codex").map((e) => [e.id, e] as const),
+            state.realEvents.filter((e) => e.agent === "codex").map((e) => [e.id, e] as const),
           );
           for (const ev of incoming) map.set(ev.id, ev);
           codex = [...map.values()];
         }
-        const events = trimEvents([...others, ...codex].sort((a, b) => a.ts - b.ts));
+        const realEvents = trimEvents([...others, ...codex].sort((a, b) => a.ts - b.ts));
         const cursor = codex.reduce((m, e) => Math.max(m, e.ts), state.codexCursor);
         const live = opts?.live;
         const focus = live ? codex.filter((e) => e.sessionId === live.sessionId) : codex;
         set({
-          events,
+          realEvents,
+          events: state.demoMode ? state.events : realEvents,
           codexCursor: cursor,
           codexHydrated: state.codexHydrated || incoming.length > 0,
           codexWriting: live?.writing ?? state.codexWriting,
@@ -378,7 +441,7 @@ export const useQuota = create<QuotaState>()(
       recordOfficialSamples: (now = Date.now()) => {
         const state = get();
         set({
-          quotaSamples: samplesFromOfficial(state.events, state.official, now, state.quotaSamples ?? []),
+          quotaSamples: samplesFromOfficial(state.realEvents, state.official, now, state.quotaSamples ?? []),
         });
       },
       recordOfficialHistory: (history) => {
@@ -386,7 +449,7 @@ export const useQuota = create<QuotaState>()(
         const state = get();
         set({
           quotaSamples: samplesFromOfficialHistory(
-            state.events,
+            state.realEvents,
             history,
             state.quotaSamples ?? [],
           ),
@@ -398,21 +461,17 @@ export const useQuota = create<QuotaState>()(
       loadImported: () => {
         const parsed = importedClaudeEvents();
         if (!parsed.length) return 0;
+        const state = get();
+        const realEvents = trimEvents([
+          ...parsed,
+          ...state.realEvents.filter((event) => event.agent !== "claude"),
+        ].sort((a, b) => a.ts - b.ts));
         set({
-          events: trimEvents([...parsed, ...get().events.filter((e) => e.agent !== "claude")].sort((a, b) => a.ts - b.ts)),
-          liveClaude: true,
-          liveGrok: true,
-          liveCodex: true,
-          demoMode: false,
+          realEvents,
+          events: state.demoMode ? state.events : realEvents,
           claudeCursor: 0,
           claudeHydrated: false,
-          grokHydrated: false,
-          grokCursor: 0,
-          codexCursor: 0,
-          codexHydrated: false,
-          claudePlanId: "claude-max-20x",
-          grokPlanId: "grok-super",
-          claudeSession: sessionFromEvents(parsed),
+          claudeSession: state.demoMode ? state.claudeSession : sessionFromEvents(parsed),
           lastBeat: Date.now(),
         });
         return parsed.length;
@@ -436,7 +495,6 @@ export const useQuota = create<QuotaState>()(
           claudeWriting: false,
           grokWriting: false,
           codexWriting: false,
-          quotaSamples: [],
         });
       },
       setHint: (on) => set({ adapterHint: on }),
@@ -488,6 +546,9 @@ export const useQuota = create<QuotaState>()(
         liveGrok: s.liveGrok,
         liveCodex: s.liveCodex,
         demoMode: s.demoMode,
+        agentAvailability: s.agentAvailability,
+        captureEnabled: s.captureEnabled,
+        onboardingComplete: s.onboardingComplete,
         adapterHint: s.adapterHint,
         alertWindowPct: s.alertWindowPct,
         alertWeekPct: s.alertWeekPct,

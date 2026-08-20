@@ -1,4 +1,4 @@
-import type { AgentId, ModelId, PlanDef } from "./types";
+import type { AgentId, ModelId, PlanDef } from "./types.ts";
 
 export const CLAUDE_PLANS: PlanDef[] = [
   {

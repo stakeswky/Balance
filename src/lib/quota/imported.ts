@@ -1,7 +1,7 @@
-import claudeImport from "@/data/claude-import.json";
-import { parseUsagePayload } from "./parse";
-import { rawTokens } from "./engine";
-import type { SessionState, UsageEvent } from "./types";
+import claudeImport from "../../data/claude-import.json" with { type: "json" };
+import { rawTokens } from "./engine.ts";
+import { parseUsagePayload } from "./parse.ts";
+import type { SessionState, UsageEvent } from "./types.ts";
 
 export function importedClaudeEvents(): UsageEvent[] {
   return parseUsagePayload(JSON.stringify(claudeImport), "claude");

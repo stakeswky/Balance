@@ -1,5 +1,5 @@
-import type { AgentId, ModelId, UsageEvent } from "./types";
-import { exclusiveCachedInput } from "./tokens";
+import { exclusiveCachedInput } from "./tokens.ts";
+import type { AgentId, ModelId, UsageEvent } from "./types.ts";
 
 function asModel(raw: string, agent: AgentId): ModelId {
   const s = raw.toLowerCase();
