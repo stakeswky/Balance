@@ -1,7 +1,16 @@
+import type { ModelId } from "./types.ts";
+
 export interface OfficialProductShare {
   product: string;
   usagePercent: number | null;
 }
+
+export interface OfficialModelWeekLimit {
+  usedPct: number;
+  resetsAt: number | null;
+}
+
+export type OfficialModelWeekLimits = Partial<Record<ModelId, OfficialModelWeekLimit>>;
 
 export interface OfficialSlice {
   agent: "claude" | "grok" | "codex";
@@ -18,6 +27,7 @@ export interface OfficialSlice {
   prepaidBalance: number | null;
   onDemandUsed: number | null;
   onDemandCap: number | null;
+  modelWeekLimits?: OfficialModelWeekLimits;
   source: string;
   fetchedAt: number;
   windowKind: "five_hour" | "weekly";
@@ -43,6 +53,84 @@ export interface ClaudeHistoryPoint {
   t: number;
   fh: number;
   sd: number;
+}
+
+function record(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function timestampMs(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return v >= 1_000_000_000_000 ? v : v * 1000;
+  }
+  if (typeof v !== "string" || !v) return null;
+  const parsed = Date.parse(v);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function claudeWindow(
+  raw: unknown,
+  percentKey: "utilization" | "percent",
+): { usedPct: number; resetsAt: number | null } | null {
+  const value = record(raw);
+  if (!value) return null;
+  const candidate = value[percentKey];
+  if (candidate == null || candidate === "") return null;
+  const usedPct = typeof candidate === "number" ? candidate : Number(candidate);
+  if (!Number.isFinite(usedPct)) return null;
+  return {
+    usedPct: clampPct(usedPct),
+    resetsAt: timestampMs(value.resets_at),
+  };
+}
+
+function fableLimit(root: Record<string, unknown>): OfficialModelWeekLimit | null {
+  const limits = Array.isArray(root.limits) ? root.limits : [];
+  for (const item of limits) {
+    const limit = record(item);
+    if (!limit || limit.kind !== "weekly_scoped") continue;
+    const scope = record(limit.scope);
+    const model = record(scope?.model);
+    const displayName = typeof model?.display_name === "string" ? model.display_name.toLowerCase() : "";
+    if (displayName !== "fable" && displayName !== "fable 5") continue;
+    const parsed = claudeWindow(limit, "percent");
+    if (parsed) return parsed;
+  }
+  return claudeWindow(root.seven_day_overage_included, "utilization");
+}
+
+export function parseClaudeUsagePayload(
+  raw: unknown,
+  opts?: { fetchedAt?: number; source?: string },
+): OfficialSlice | null {
+  const root = record(raw);
+  if (!root) return null;
+  const fiveHour = claudeWindow(root.five_hour, "utilization");
+  const sevenDay = claudeWindow(root.seven_day, "utilization");
+  const fable = fableLimit(root);
+  if (!fiveHour && !sevenDay && !fable) return null;
+  const fetchedAt = opts?.fetchedAt ?? Date.now();
+  const weekResetsAt = sevenDay?.resetsAt ?? fable?.resetsAt ?? null;
+  return {
+    agent: "claude",
+    windowPct: fiveHour?.usedPct ?? null,
+    weekPct: sevenDay?.usedPct ?? null,
+    windowResetsAt: fiveHour?.resetsAt ?? null,
+    weekResetsAt,
+    weekStartedAt: weekResetsAt == null ? null : weekResetsAt - WEEK_MS,
+    windowDurationMs: FIVE_HOUR_MS,
+    weekDurationMs: WEEK_MS,
+    burnPctPerHour: 0,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    modelWeekLimits: fable ? { fable } : undefined,
+    source: opts?.source ?? "oauth-usage",
+    fetchedAt,
+    windowKind: "five_hour",
+  };
 }
 
 export function parseClaudeHistoryPoints(raw: unknown): ClaudeHistoryPoint[] {

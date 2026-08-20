@@ -8,6 +8,7 @@ import {
   nextCodexPlanId,
   parseClaudeHistoryPoints,
   parseClaudePlanHistory,
+  parseClaudeUsagePayload,
   slicesFromClaudeHistory,
   parseCodexRateLimitLog,
   parseCodexUsagePayload,
@@ -131,6 +132,59 @@ test("Claude history anchors and advances the seven-day window", () => {
   assert.equal(slices[0]?.weekStartedAt, t0);
   assert.equal(slices[0]?.weekResetsAt, t0 + 7 * 24 * 60 * 60 * 1000);
   assert.ok((slices.at(-1)?.weekStartedAt ?? 0) >= t0 + 7 * 24 * 60 * 60 * 1000);
+});
+
+test("Claude OAuth usage exposes the official Fable weekly limit", () => {
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const fableReset = "2026-08-25T20:59:00Z";
+  const usage = parseClaudeUsagePayload(
+    {
+      five_hour: { utilization: 34, resets_at: "2026-08-20T15:00:00Z" },
+      seven_day: { utilization: 27, resets_at: "2026-08-25T20:59:00Z" },
+      limits: [
+        {
+          kind: "weekly_scoped",
+          scope: { model: { display_name: "Fable 5" } },
+          percent: 24,
+          resets_at: fableReset,
+        },
+        {
+          kind: "weekly_scoped",
+          scope: { model: { display_name: "Other" } },
+          percent: 91,
+          resets_at: fableReset,
+        },
+      ],
+    },
+    { fetchedAt: now },
+  );
+
+  assert.ok(usage);
+  assert.equal(usage.windowPct, 34);
+  assert.equal(usage.weekPct, 27);
+  assert.deepEqual(usage.modelWeekLimits, {
+    fable: { usedPct: 24, resetsAt: Date.parse(fableReset) },
+  });
+  assert.equal(usage.source, "oauth-usage");
+});
+
+test("Claude OAuth usage accepts Fable and ignores malformed scoped limits", () => {
+  const usage = parseClaudeUsagePayload({
+    seven_day_overage_included: { utilization: 31, resets_at: 1_787_691_540 },
+    limits: [
+      { kind: "daily_scoped", scope: { model: { display_name: "Fable" } }, percent: 90 },
+      { kind: "weekly_scoped", scope: { model: { display_name: "Fable" } }, percent: "bad" },
+    ],
+  });
+
+  assert.ok(usage);
+  assert.deepEqual(usage.modelWeekLimits, {
+    fable: { usedPct: 31, resetsAt: 1_787_691_540_000 },
+  });
+});
+
+test("Claude OAuth usage rejects payloads without any usage windows", () => {
+  assert.equal(parseClaudeUsagePayload({ limits: [] }), null);
 });
 
 test("Grok same-percent plateau keeps the latest observation", () => {
