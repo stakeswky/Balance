@@ -2,7 +2,10 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -23,8 +26,15 @@ const HEALTH_BODY: &str = "{\"app\":\"synq\",\"mode\":\"desktop\"}";
 #[derive(Clone, Default)]
 struct SidecarState(Arc<Mutex<Option<CommandChild>>>);
 
+#[derive(Clone, Default)]
+struct BootstrapState(Arc<AtomicBool>);
+
 fn sidecar_url() -> String {
     format!("http://{SIDECAR_HOST}:{SIDECAR_PORT}")
+}
+
+fn claim_bootstrap(state: &BootstrapState) -> bool {
+    !state.0.swap(true, Ordering::SeqCst)
 }
 
 fn kill_sidecar(state: &SidecarState) {
@@ -233,18 +243,10 @@ fn bootstrap(app: AppHandle, state: SidecarState) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let sidecar_state = SidecarState::default();
+    let bootstrap_state = BootstrapState::default();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar_state.clone())
-        .setup({
-            let state = sidecar_state.clone();
-            move |app| {
-                let handle = app.handle().clone();
-                let state_for_thread = state.clone();
-                thread::spawn(move || bootstrap(handle, state_for_thread));
-                Ok(())
-            }
-        })
         .on_window_event({
             let state = sidecar_state.clone();
             move |window, event| {
@@ -258,7 +260,16 @@ pub fn run() {
         .expect("error while building Synq")
         .run({
             let state = sidecar_state.clone();
-            move |_app, event| match event {
+            let bootstrap_state = bootstrap_state.clone();
+            move |app, event| match event {
+                RunEvent::Ready => {
+                    if claim_bootstrap(&bootstrap_state) {
+                        eprintln!("Synq desktop app is ready; starting bootstrap");
+                        let handle = app.clone();
+                        let state_for_thread = state.clone();
+                        thread::spawn(move || bootstrap(handle, state_for_thread));
+                    }
+                }
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_sidecar(&state),
                 _ => {}
             }
@@ -272,6 +283,13 @@ mod tests {
     #[test]
     fn desktop_origin_is_stable() {
         assert_eq!(sidecar_url(), "http://127.0.0.1:4780");
+    }
+
+    #[test]
+    fn bootstrap_claim_is_one_shot() {
+        let state = BootstrapState::default();
+        assert!(claim_bootstrap(&state));
+        assert!(!claim_bootstrap(&state));
     }
 
     #[test]

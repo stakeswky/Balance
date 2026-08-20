@@ -39,5 +39,12 @@ test("desktop health route has a mode-specific response", async () => {
     "utf8",
   );
   assert.match(source, /SYNQ_DESKTOP/);
-  assert.match(source, /\{\"app\":\"synq\",\"mode\":\"desktop\"\}/);
+  assert.ok(source.includes('{"app":"synq","mode":"desktop"}'));
+});
+
+test("the document shell lets Vite own the production stylesheet asset", async () => {
+  const source = await readFile(resolve(root, "src/routes/__root.tsx"), "utf8");
+  assert.match(source, /import "\.\.\/styles\.css";/);
+  assert.doesNotMatch(source, /styles\.css\?url/);
+  assert.doesNotMatch(source, /rel: "stylesheet"/);
 });
