@@ -12,10 +12,15 @@ private func fail(_ message: String) -> Never {
   exit(1)
 }
 
-guard CommandLine.arguments.count == 2,
-      let rawPid = Int32(CommandLine.arguments[1]),
+private let startupErrorMode = CommandLine.arguments.count == 3 &&
+  CommandLine.arguments[1] == "--startup-error"
+private let pidArgument = startupErrorMode ? CommandLine.arguments[2] :
+  (CommandLine.arguments.count == 2 ? CommandLine.arguments[1] : "")
+
+guard (CommandLine.arguments.count == 2 || startupErrorMode),
+      let rawPid = Int32(pidArgument),
       rawPid > 0 else {
-  fail("usage: macos-ui-smoke.swift <synq-pid>")
+  fail("usage: macos-ui-smoke.swift [--startup-error] <synq-pid>")
 }
 
 guard AXIsProcessTrusted() else {
@@ -160,6 +165,30 @@ private func nativeWindowID(ownerPid: pid_t) -> Int? {
   return nil
 }
 
+private func printWindowEvidence(_ window: AXUIElement, prefix: String) {
+  guard let point = cgPoint(window), let size = cgSize(window) else {
+    fail("could not read Synq native window bounds")
+  }
+  guard let windowID = nativeWindowID(ownerPid: pid_t(rawPid)) else {
+    fail("could not resolve the Synq CoreGraphics window id")
+  }
+  let title = stringAttribute(window, kAXTitleAttribute)
+  guard title == "Synq" else {
+    fail("unexpected Synq native window title: \(title.isEmpty ? "<empty>" : title)")
+  }
+  let fields = [
+    prefix,
+    "ax",
+    title,
+    String(Int(point.x.rounded())),
+    String(Int(point.y.rounded())),
+    String(Int(size.width.rounded())),
+    String(Int(size.height.rounded())),
+    String(windowID),
+  ]
+  print(fields.joined(separator: "\t"))
+}
+
 let frontmostResult = AXUIElementSetAttributeValue(
   app,
   kAXFrontmostAttribute as CFString,
@@ -170,6 +199,12 @@ guard frontmostResult == .success else {
 }
 
 let initialWindow = waitForWindow(timeout: 15)
+
+if startupErrorMode {
+  waitForExactText("Synq 无法启动本地服务", timeout: 15)
+  printWindowEvidence(firstWindow() ?? initialWindow, prefix: "native-startup-error-ok")
+  exit(0)
+}
 
 if hasExactText("Synq 初始设置") {
   let detectionDeadline = Date().addingTimeInterval(15)
@@ -187,22 +222,4 @@ press("设置", timeout: 15)
 waitForExactText("本机监控", timeout: 10)
 
 let finalWindow = firstWindow() ?? initialWindow
-guard let point = cgPoint(finalWindow), let size = cgSize(finalWindow) else {
-  fail("could not read Synq native window bounds")
-}
-guard let windowID = nativeWindowID(ownerPid: pid_t(rawPid)) else {
-  fail("could not resolve the Synq CoreGraphics window id")
-}
-
-let title = stringAttribute(finalWindow, kAXTitleAttribute)
-let fields = [
-  "native-ui-ok",
-  "ax",
-  title.isEmpty ? "Synq" : title,
-  String(Int(point.x.rounded())),
-  String(Int(point.y.rounded())),
-  String(Int(size.width.rounded())),
-  String(Int(size.height.rounded())),
-  String(windowID),
-]
-print(fields.joined(separator: "\t"))
+printWindowEvidence(finalWindow, prefix: "native-ui-ok")

@@ -10,9 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{
-    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -23,8 +21,52 @@ const SIDECAR_HOST: &str = "127.0.0.1";
 const SIDECAR_PORT: u16 = 4780;
 const HEALTH_BODY: &str = "{\"app\":\"synq\",\"mode\":\"desktop\"}";
 
-#[derive(Clone, Default)]
-struct SidecarState(Arc<Mutex<Option<CommandChild>>>);
+struct LifecycleState<T> {
+    child: Option<T>,
+    stopping: bool,
+}
+
+impl<T> Default for LifecycleState<T> {
+    fn default() -> Self {
+        Self {
+            child: None,
+            stopping: false,
+        }
+    }
+}
+
+fn install_spawned_child<T>(state: &Mutex<LifecycleState<T>>, child: T) -> Result<(), T> {
+    let mut lifecycle = state.lock().expect("lifecycle mutex poisoned");
+    if lifecycle.stopping {
+        Err(child)
+    } else {
+        lifecycle.child = Some(child);
+        Ok(())
+    }
+}
+
+fn stop_lifecycle<T>(state: &Mutex<LifecycleState<T>>) -> Option<T> {
+    let mut lifecycle = state.lock().expect("lifecycle mutex poisoned");
+    lifecycle.stopping = true;
+    lifecycle.child.take()
+}
+
+fn clear_lifecycle_child<T>(state: &Mutex<LifecycleState<T>>) {
+    let _ = state.lock().expect("lifecycle mutex poisoned").child.take();
+}
+
+fn lifecycle_is_stopping<T>(state: &Mutex<LifecycleState<T>>) -> bool {
+    state.lock().expect("lifecycle mutex poisoned").stopping
+}
+
+#[derive(Clone)]
+struct SidecarState(Arc<Mutex<LifecycleState<CommandChild>>>);
+
+impl Default for SidecarState {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(LifecycleState::default())))
+    }
+}
 
 #[derive(Clone, Default)]
 struct BootstrapState(Arc<AtomicBool>);
@@ -37,14 +79,14 @@ fn claim_bootstrap(state: &BootstrapState) -> bool {
     !state.0.swap(true, Ordering::SeqCst)
 }
 
-fn kill_sidecar(state: &SidecarState) {
-    if let Some(child) = state.0.lock().expect("sidecar mutex poisoned").take() {
+fn stop_sidecar(state: &SidecarState) {
+    if let Some(child) = stop_lifecycle(&state.0) {
         let _ = child.kill();
     }
 }
 
 fn clear_sidecar(state: &SidecarState) {
-    let _ = state.0.lock().expect("sidecar mutex poisoned").take();
+    clear_lifecycle_child(&state.0);
 }
 
 fn ensure_port_available() -> Result<(), String> {
@@ -83,7 +125,9 @@ fn is_synq_health_response(response: &str) -> bool {
     if !ok {
         return false;
     }
-    let chunked = head.lines().any(|line| line.eq_ignore_ascii_case("transfer-encoding: chunked"));
+    let chunked = head
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("transfer-encoding: chunked"));
     let decoded = if chunked {
         decode_chunked_body(body)
     } else {
@@ -124,17 +168,27 @@ fn wait_for_health(timeout: Duration) -> Result<(), String> {
     Err("timed out waiting for the Synq desktop server".to_owned())
 }
 
-fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
-    let root = app
+fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let resource_dir = app
         .path()
         .resource_dir()
-        .map_err(|error| error.to_string())?
-        .join("synq-server");
+        .map_err(|error| error.to_string())?;
+    let root = resource_dir.join("synq-server");
     let entry = root.join("server").join("index.mjs");
     if !entry.is_file() {
-        return Err(format!("desktop server entry is missing: {}", entry.display()));
+        return Err(format!(
+            "desktop server entry is missing: {}",
+            entry.display()
+        ));
     }
-    Ok((root, entry))
+    let watchdog = resource_dir.join("sidecar-watchdog.cjs");
+    if !watchdog.is_file() {
+        return Err(format!(
+            "desktop sidecar watchdog is missing: {}",
+            watchdog.display()
+        ));
+    }
+    Ok((root, entry, watchdog))
 }
 
 fn drain_sidecar_events(
@@ -167,13 +221,15 @@ fn drain_sidecar_events(
     });
 }
 
-fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<(), String> {
+fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<bool, String> {
     ensure_port_available()?;
-    let (server_root, server_entry) = server_paths(app)?;
+    let (server_root, server_entry, watchdog) = server_paths(app)?;
     let (receiver, child) = app
         .shell()
         .sidecar(SIDECAR_BIN)
         .map_err(|error| error.to_string())?
+        .arg("--require")
+        .arg(watchdog)
         .arg(server_entry)
         .current_dir(server_root)
         .env("HOST", SIDECAR_HOST)
@@ -181,13 +237,19 @@ fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<(), String> {
         .env("PORT", SIDECAR_PORT.to_string())
         .env("NITRO_PORT", SIDECAR_PORT.to_string())
         .env("SYNQ_DESKTOP", "1")
+        .env("SYNQ_PARENT_PID", std::process::id().to_string())
         .env("VITE_AUTH_ENABLED", "false")
         .env("NODE_ENV", "production")
         .spawn()
         .map_err(|error| error.to_string())?;
-    *state.0.lock().expect("sidecar mutex poisoned") = Some(child);
+    if let Err(child) = install_spawned_child(&state.0, child) {
+        child
+            .kill()
+            .map_err(|error| format!("failed to stop sidecar during shutdown: {error}"))?;
+        return Ok(false);
+    }
     drain_sidecar_events(receiver, state.clone());
-    Ok(())
+    Ok(true)
 }
 
 fn open_window(app: &AppHandle, label: &'static str, url: WebviewUrl) {
@@ -211,26 +273,39 @@ fn open_window(app: &AppHandle, label: &'static str, url: WebviewUrl) {
 }
 
 fn bootstrap(app: AppHandle, state: SidecarState) {
-    if let Err(error) = start_sidecar(&app, &state) {
-        eprintln!("desktop bootstrap failed: {error}");
-        kill_sidecar(&state);
-        open_window(
-            &app,
-            "startup-error",
-            WebviewUrl::App("startup-error.html".into()),
-        );
-        return;
+    match start_sidecar(&app, &state) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            if lifecycle_is_stopping(&state.0) {
+                return;
+            }
+            eprintln!("desktop bootstrap failed: {error}");
+            stop_sidecar(&state);
+            open_window(
+                &app,
+                "startup-error",
+                WebviewUrl::App("startup-error.html".into()),
+            );
+            return;
+        }
     }
     match wait_for_health(Duration::from_secs(15)) {
         Ok(()) => {
+            if lifecycle_is_stopping(&state.0) {
+                return;
+            }
             let url = sidecar_url()
                 .parse()
                 .expect("the fixed Synq loopback URL must parse");
             open_window(&app, "main", WebviewUrl::External(url));
         }
         Err(error) => {
+            if lifecycle_is_stopping(&state.0) {
+                return;
+            }
             eprintln!("desktop health check failed: {error}");
-            kill_sidecar(&state);
+            stop_sidecar(&state);
             open_window(
                 &app,
                 "startup-error",
@@ -251,7 +326,7 @@ pub fn run() {
             let state = sidecar_state.clone();
             move |window, event| {
                 if let WindowEvent::CloseRequested { .. } = event {
-                    kill_sidecar(&state);
+                    stop_sidecar(&state);
                     window.app_handle().exit(0);
                 }
             }
@@ -270,7 +345,7 @@ pub fn run() {
                         thread::spawn(move || bootstrap(handle, state_for_thread));
                     }
                 }
-                RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_sidecar(&state),
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => stop_sidecar(&state),
                 _ => {}
             }
         });
@@ -306,5 +381,31 @@ mod tests {
         assert!(is_synq_health_response(
             "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n1f\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}\r\n0\r\n\r\n"
         ));
+    }
+
+    #[test]
+    fn stopping_rejects_a_child_installed_after_spawn() {
+        use std::sync::Barrier;
+
+        let lifecycle = Arc::new(Mutex::new(LifecycleState::<u8>::default()));
+        let spawned = Arc::new(Barrier::new(2));
+        let allow_install = Arc::new(Barrier::new(2));
+        let worker_lifecycle = lifecycle.clone();
+        let worker_spawned = spawned.clone();
+        let worker_allow_install = allow_install.clone();
+        let worker = thread::spawn(move || {
+            worker_spawned.wait();
+            worker_allow_install.wait();
+            install_spawned_child(&worker_lifecycle, 42)
+        });
+
+        spawned.wait();
+        assert_eq!(stop_lifecycle(&lifecycle), None);
+        allow_install.wait();
+        assert_eq!(worker.join().expect("install worker panicked"), Err(42));
+
+        let state = lifecycle.lock().expect("lifecycle mutex poisoned");
+        assert!(state.stopping);
+        assert!(state.child.is_none());
     }
 }

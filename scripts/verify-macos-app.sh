@@ -67,6 +67,16 @@ trap 'cleanup $?' EXIT INT TERM HUP
 
 mkdir -p "$(dirname "$SCREENSHOT_PATH")" "$(dirname "$BROWSER_SCREENSHOT_PATH")"
 
+assert_arm64_binary() {
+  binary_path=$1
+  file_output=$(file "$binary_path")
+  printf '%s\n' "$file_output"
+  if [ "$file_output" != "$binary_path: Mach-O 64-bit executable arm64" ]; then
+    echo "Expected an arm64-only Mach-O executable: $binary_path" >&2
+    exit 1
+  fi
+}
+
 if listen_output=$(lsof -nP -iTCP:4780 -sTCP:LISTEN 2>&1); then
   printf '%s\n' "$listen_output" >&2
   echo "Refusing to launch Synq: TCP 4780 is already in use" >&2
@@ -84,8 +94,8 @@ done
 
 test -d "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
-file "$APP_BINARY"
-file "$SIDECAR_BINARY"
+assert_arm64_binary "$APP_BINARY"
+assert_arm64_binary "$SIDECAR_BINARY"
 test -f "$SERVER_ENTRY"
 test "$(plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$APP_PATH/Contents/Info.plist")" = "true"
 

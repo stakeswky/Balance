@@ -20,6 +20,7 @@
     "externalBin": ["binaries/synq-node"],
     "resources": {
       "../.output": "synq-server",
+      "resources/sidecar-watchdog.cjs": "sidecar-watchdog.cjs",
       "resources/node/LICENSE": "licenses/node/LICENSE"
     },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.icns"],
