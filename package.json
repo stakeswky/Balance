@@ -10,6 +10,7 @@
     "dev": "vite dev --host 0.0.0.0 --port 8080",
     "build": "vite build && npm run db:migrate",
     "build:desktop:web": "SYNQ_DISTRIBUTION=desktop VITE_AUTH_ENABLED=false vite build",
+    "desktop:runtime": "node scripts/prepare-macos-node-runtime.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "vite build --mode development",
     "preview": "vite preview --host 0.0.0.0 --port 8080",
