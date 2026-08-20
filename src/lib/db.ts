@@ -1,5 +1,7 @@
+import { isDesktopRuntime } from "./runtime-mode.ts";
+
 /** Which database backend is active. */
-export type DbSource = "neon" | "pglite";
+export type DbSource = "neon" | "pglite" | "disabled";
 
 // An empty/whitespace DATABASE_URL (an easy misconfig in deploy UIs) must mean
 // "unset" — otherwise production would silently run on the PGLite fallback.
@@ -14,7 +16,14 @@ const databaseUrl =
  * the app has a working database even with nothing configured — the live preview
  * included. Swap in Neon later by just setting `DATABASE_URL`; no code changes.
  */
-export const dbSource: DbSource = databaseUrl ? "neon" : "pglite";
+const desktopRuntime =
+  typeof process !== "undefined" && isDesktopRuntime(process.env);
+
+export const dbSource: DbSource = desktopRuntime
+  ? "disabled"
+  : databaseUrl
+    ? "neon"
+    : "pglite";
 
 /**
  * Minimal shared SQL surface, satisfied by both Neon and PGLite. Both the
@@ -175,6 +184,9 @@ async function createSql(): Promise<Sql> {
       "@/lib/db is server-only — call getSql() from a createServerFn handler " +
         "or a server route loader, never from client code.",
     );
+  }
+  if (dbSource === "disabled") {
+    throw new Error("Database access is disabled in the Synq desktop runtime");
   }
   return dbSource === "neon" ? createNeonSql() : createPgliteSql();
 }

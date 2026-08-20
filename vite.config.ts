@@ -4,6 +4,8 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
+// @ts-expect-error JS helper alongside the TS vite config
+import { resolveNitroPreset } from "./scripts/distribution-mode.mjs";
 // @ts-expect-error JS plugin alongside the TS vite config
 import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
 
@@ -128,14 +130,9 @@ function authPopupPlugin(): Plugin {
 // opens a second dev-server port, which breaks the single-port preview.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
-export default defineConfig(({ command }) => ({
-  server: {
-    host: "0.0.0.0",
-    port: 8080,
-    strictPort: true,
-  },
-  resolve: { tsconfigPaths: true },
-  plugins: [
+export default defineConfig(({ command }) => {
+  const nitroPreset = resolveNitroPreset(process.env);
+  const plugins: Plugin[] = [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
     authPopupPlugin(),
@@ -143,10 +140,12 @@ export default defineConfig(({ command }) => ({
     grokPwaPlugin(),
     tailwindcss(),
     tanstackStart(),
-    ...(command === "build"
-      ? [
-          nitro({
-            preset: "vercel",
+  ];
+  if (command === "build") {
+    const nitroOptions =
+      nitroPreset === "vercel"
+        ? {
+            preset: nitroPreset,
             // PGLite resolves its WASM/data files relative to the package at
             // runtime. Full-trace the package so the no-DATABASE_URL fallback
             // remains runnable from the Vercel function bundle.
@@ -155,9 +154,18 @@ export default defineConfig(({ command }) => ({
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
             serverDir: "./server",
-          }),
-        ]
-      : []),
-    viteReact(),
-  ],
-}));
+          }
+        : { preset: nitroPreset, serverDir: "./server" };
+    plugins.push(nitro(nitroOptions));
+  }
+  plugins.push(viteReact());
+  return {
+    server: {
+      host: "0.0.0.0",
+      port: 8080,
+      strictPort: true,
+    },
+    resolve: { tsconfigPaths: true },
+    plugins,
+  };
+});
