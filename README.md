@@ -52,6 +52,10 @@ npm run desktop:verify
 
 This exercises environment and auth isolation, the real app UI and normal close path, sidecar cleanup after a parent `SIGKILL`, the occupied-port `startup-error` path, and the packaged DMG with `hdiutil verify`.
 
+## 从 Synq 升级
+
+Balance 是 Synq 的原地品牌升级。桌面应用继续使用 bundle identifier `com.synq.desktop`、固定 origin `127.0.0.1:4780` 和持久化 key `synq-quota-v8`；官方成功快照仍位于 `~/Library/Application Support/Synq/official-quota.json`。因此覆盖安装后，既有套餐、阈值、采样设置和最后一次官方额度快照会继续可用。
+
 ## 快速开始
 
 要求 Node.js 22 或更高版本。

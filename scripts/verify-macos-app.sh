@@ -74,6 +74,11 @@ trap 'cleanup $?' EXIT INT TERM HUP
 
 mkdir -p "$(dirname "$SCREENSHOT_PATH")" "$(dirname "$BROWSER_SCREENSHOT_PATH")"
 
+if [ -n "${BALANCE_EXPECTED_SETTINGS:-}" ] && [ ! -f "$BALANCE_EXPECTED_SETTINGS" ]; then
+  echo "Balance persistence snapshot does not exist: $BALANCE_EXPECTED_SETTINGS" >&2
+  exit 1
+fi
+
 assert_arm64_binary() {
   binary_path=$1
   file_output=$(file "$binary_path")
@@ -161,6 +166,10 @@ if [ "$ui_status" -ne 0 ]; then
   exit 1
 fi
 cat "$ui_stderr" >&2
+if [ -n "${BALANCE_EXPECTED_SETTINGS:-}" ] && ! grep -Fx "native-persistence-ok" "$ui_stderr" >/dev/null; then
+  echo "Balance native UI did not confirm the persisted settings" >&2
+  exit 1
+fi
 ui_output=$(cat "$ui_stdout")
 printf '%s\n' "$ui_output"
 

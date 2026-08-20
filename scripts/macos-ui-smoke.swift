@@ -12,6 +12,51 @@ private func fail(_ message: String) -> Never {
   exit(1)
 }
 
+private struct PersistedSettings: Decodable {
+  let claudePlanId: String
+  let grokPlanId: String
+  let codexPlanId: String
+  let weekBoostPct: Int
+  let alertWindowPct: Int
+  let alertWeekPct: Int
+  let onboardingComplete: Bool
+}
+
+private struct PersistenceSnapshot: Decodable {
+  let version: Int
+  let state: PersistedSettings
+}
+
+private let expectedSettings: PersistenceSnapshot? = {
+  guard let path = ProcessInfo.processInfo.environment["BALANCE_EXPECTED_SETTINGS"] else {
+    return nil
+  }
+  do {
+    return try JSONDecoder().decode(
+      PersistenceSnapshot.self,
+      from: Data(contentsOf: URL(fileURLWithPath: path))
+    )
+  } catch {
+    fail("could not decode Balance persistence snapshot: \(error)")
+  }
+}()
+
+private let planNameById = [
+  "claude-pro": "Claude Pro",
+  "claude-max-5x": "Claude Max 5×",
+  "claude-max-20x": "Claude Max 20×",
+  "claude-api": "Anthropic API",
+  "grok-free": "Grok",
+  "grok-super": "SuperGrok",
+  "grok-heavy": "SuperGrok Heavy",
+  "grok-api": "xAI API",
+  "chatgpt-plus": "ChatGPT Plus",
+  "chatgpt-pro-5x": "ChatGPT Pro 5×",
+  "chatgpt-pro-20x": "ChatGPT Pro 20×",
+  "chatgpt-team": "ChatGPT Business",
+  "openai-api": "OpenAI API",
+]
+
 private let startupErrorMode = CommandLine.arguments.count == 3 &&
   CommandLine.arguments[1] == "--startup-error"
 private let pidArgument = startupErrorMode ? CommandLine.arguments[2] :
@@ -110,7 +155,7 @@ private func button(named target: String) -> AXUIElement? {
   }
 }
 
-private enum InitialAppState {
+private enum InitialAppState: Equatable {
   case onboarding
   case dashboard
 }
@@ -241,7 +286,8 @@ if startupErrorMode {
   exit(0)
 }
 
-switch waitForInitialAppState(timeout: 15) {
+private let observedInitialState = waitForInitialAppState(timeout: 15)
+switch observedInitialState {
 case .onboarding:
   let detectionDeadline = Date().addingTimeInterval(15)
   while Date() < detectionDeadline {
@@ -258,6 +304,29 @@ case .dashboard:
 
 press("设置", timeout: 15)
 waitForExactText("本机监控", timeout: 10)
+
+if let expected = expectedSettings {
+  if expected.state.onboardingComplete,
+     observedInitialState != .dashboard {
+    fail("Balance did not restore the completed onboarding state")
+  }
+
+  for planId in [
+    expected.state.claudePlanId,
+    expected.state.grokPlanId,
+    expected.state.codexPlanId,
+  ] {
+    guard let planName = planNameById[planId] else {
+      fail("unknown persisted plan id: \(planId)")
+    }
+    _ = waitForButton("\(planName)，当前套餐", timeout: 10)
+  }
+
+  waitForExactText("五小时窗 \(expected.state.alertWindowPct)%", timeout: 10)
+  waitForExactText("本周额度 \(expected.state.alertWeekPct)%", timeout: 10)
+  waitForExactText("\(expected.state.weekBoostPct)%", timeout: 10)
+  FileHandle.standardError.write(Data("native-persistence-ok\n".utf8))
+}
 
 let finalWindow = firstWindow() ?? initialWindow
 printWindowEvidence(finalWindow, prefix: "native-ui-ok")

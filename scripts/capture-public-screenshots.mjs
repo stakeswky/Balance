@@ -28,6 +28,7 @@ const OUTPUT_DIR = checkedOutputPath(
   resolve(process.argv[3] || resolve(ROOT, "screenshots")),
   OUTPUT_ROOTS,
 );
+const EXPECTED_TITLE_PREFIX = "余量 / Balance";
 const SPECS = [
   {
     name: "desktop",
@@ -122,7 +123,7 @@ function productionServerFnIds(name) {
   for (const directory of [
     resolve(ROOT, ".output/server/_ssr"),
     resolve(ROOT, ".vercel/output/functions/__server.func/_ssr"),
-    "/Applications/Synq.app/Contents/Resources/synq-server/server/_ssr",
+    "/Applications/Balance.app/Contents/Resources/synq-server/server/_ssr",
   ]) {
     if (!existsSync(directory)) continue;
     for (const file of readdirSync(directory).filter(
@@ -237,6 +238,8 @@ async function capture(browser, spec) {
   try {
     const response = await page.goto(BASE, { waitUntil: "domcontentloaded" });
     assert.equal(response?.status(), 200);
+    assert.ok((await page.title()).startsWith(EXPECTED_TITLE_PREFIX));
+    await page.getByText("余量", { exact: true }).waitFor();
     assert.ok(
       ["127.0.0.1", "localhost", "::1", "[::1]"].includes(new URL(response.url()).hostname),
     );

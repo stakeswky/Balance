@@ -26,6 +26,7 @@ function PlanList({
             <button
               key={p.id}
               type="button"
+              aria-label={active ? `${p.name}，当前套餐` : p.name}
               onClick={() => onSelect(p.id)}
               className={cn(
                 "rounded-xl p-4 text-left shadow-[var(--shadow-border)] transition-[box-shadow,background-color] duration-150",
