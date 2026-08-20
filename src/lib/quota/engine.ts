@@ -11,7 +11,7 @@ import type {
   PlanDef,
   UsageEvent,
 } from "./types.ts";
-import { WEEK_MS, WINDOW_MS } from "./types.ts";
+import { WEEK_MS, WINDOW_MS, activityIdOf } from "./types.ts";
 
 export function weightedTokens(event: UsageEvent): number {
   const meta = MODEL_META[event.model];
@@ -39,6 +39,12 @@ export function inWindow(events: UsageEvent[], now: number, span: number, agent?
 function clampPct(n: number) {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(140, n));
+}
+
+function meterStatus(windowPct: number, weekPct: number): MeterSnapshot["status"] {
+  if (windowPct >= 88 || weekPct >= 88) return "critical";
+  if (windowPct >= 68 || weekPct >= 72) return "watch";
+  return "ok";
 }
 
 export function eventWindowShare(event: UsageEvent, plan: PlanDef): number {
@@ -99,10 +105,6 @@ export function meterFor(
   const remain = Math.max(0, 100 - windowPct);
   const etaMs = burnPctPerHour > 0.4 ? (remain / burnPctPerHour) * 60 * 60 * 1000 : null;
 
-  let status: MeterSnapshot["status"] = "ok";
-  if (windowPct >= 88 || weekPct >= 88) status = "critical";
-  else if (windowPct >= 68 || weekPct >= 72) status = "watch";
-
   const oldest = win.reduce((min, e) => Math.min(min, e.ts), now);
   const windowResetsAt = win.length ? oldest + WINDOW_MS : now + WINDOW_MS;
 
@@ -122,7 +124,7 @@ export function meterFor(
     etaMs,
     apiUsdWindow: win.reduce((s, e) => s + apiUsd(e), 0),
     apiUsdWeek: week.reduce((s, e) => s + apiUsd(e), 0),
-    status,
+    status: meterStatus(windowPct, weekPct),
   };
 }
 
@@ -150,9 +152,6 @@ export function applyOfficial(meter: MeterSnapshot, official: OfficialSlice | nu
   }
   const remain = Math.max(0, 100 - windowPct);
   const etaMs = burnPctPerHour > 0.4 ? (remain / burnPctPerHour) * 60 * 60 * 1000 : null;
-  let status: MeterSnapshot["status"] = "ok";
-  if (windowPct >= 88 || weekPct >= 88) status = "critical";
-  else if (windowPct >= 68 || weekPct >= 72) status = "watch";
   return {
     ...meter,
     windowPct,
@@ -161,7 +160,7 @@ export function applyOfficial(meter: MeterSnapshot, official: OfficialSlice | nu
     weekResetsAt,
     burnPctPerHour,
     etaMs,
-    status,
+    status: meterStatus(windowPct, weekPct),
   };
 }
 
@@ -256,10 +255,11 @@ export function groupSessions(events: UsageEvent[], now: number, span: number): 
   const slice = inWindow(events, now, span);
   const map = new Map<string, SessionGroup>();
   for (const e of slice) {
-    const cur = map.get(e.sessionId);
+    const id = activityIdOf(e);
+    const cur = map.get(id);
     if (!cur) {
-      map.set(e.sessionId, {
-        id: e.sessionId,
+      map.set(id, {
+        id,
         agent: e.agent,
         task: e.task,
         model: e.model,
@@ -289,20 +289,55 @@ export function groupSessions(events: UsageEvent[], now: number, span: number): 
   return [...map.values()].sort((a, b) => b.end - a.end);
 }
 
+export interface PlanComparisonBaseline {
+  currentPlanId: string;
+  currentMeter: MeterSnapshot;
+}
+
+export interface PlanComparisonRow {
+  plan: PlanDef;
+  windowPct: number;
+  weekPct: number;
+  status: MeterSnapshot["status"];
+}
+
+function scaledComparedPct(rawPct: number, baselineRawPct: number, baselineOfficialPct: number): number {
+  if (!(baselineRawPct > 0) || !Number.isFinite(baselineOfficialPct)) return rawPct;
+  return clampPct(rawPct * (baselineOfficialPct / baselineRawPct));
+}
+
 export function comparePlans(
   events: UsageEvent[],
   agent: AgentId,
   plans: PlanDef[],
   now: number,
   boostPct: number,
-) {
+  baseline?: PlanComparisonBaseline | null,
+): PlanComparisonRow[] {
+  const currentPlan =
+    baseline?.currentMeter.agent === agent
+      ? plans.find((plan) => plan.id === baseline.currentPlanId) ?? null
+      : null;
+  const currentLocal = currentPlan ? meterFor(events, agent, currentPlan, now, boostPct) : null;
+
   return plans.map((plan) => {
     const meter = meterFor(events, agent, plan, now, boostPct);
+    let windowPct = meter.windowPct;
+    let weekPct = meter.weekPct;
+    if (baseline?.currentMeter.agent === agent && currentPlan && currentLocal) {
+      if (plan.id === currentPlan.id) {
+        windowPct = baseline.currentMeter.windowPct;
+        weekPct = baseline.currentMeter.weekPct;
+      } else {
+        windowPct = scaledComparedPct(meter.windowPct, currentLocal.windowPct, baseline.currentMeter.windowPct);
+        weekPct = scaledComparedPct(meter.weekPct, currentLocal.weekPct, baseline.currentMeter.weekPct);
+      }
+    }
     return {
       plan,
-      windowPct: meter.windowPct,
-      weekPct: meter.weekPct,
-      status: meter.status,
+      windowPct,
+      weekPct,
+      status: meterStatus(windowPct, weekPct),
     };
   });
 }

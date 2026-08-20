@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -131,4 +131,47 @@ test("incremental scan only emits new token_count ids", () => {
   assert.equal(next.events[0]?.tokensIn, 100);
   assert.equal(next.official?.weekPct, 58);
   assert.deepEqual(next.officialHistory.map((s) => s.weekPct), [58]);
+});
+
+test("Codex per-file cursor keeps a late parallel event older than global since", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-codex-late-"));
+  const codexHome = join(home, ".codex");
+  const dir = join(codexHome, "sessions", "2026", "08", "20");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "rollout-2026-08-20T09-00-26-01a01caf-0009-78b1-a9fe-152648fe32d4.jsonl");
+  writeFileSync(file, `${tokenCount()}\n`);
+  const state = createCodexScanState();
+  const now = Date.parse("2026-08-20T01:10:00Z");
+  const first = scanCodexUsage(0, { codexHome, now, state });
+  appendFileSync(file, `${tokenCount({ timestamp: "2026-08-20T01:00:00.000Z" })}\n`);
+  const second = scanCodexUsage(first.events[0]!.ts + 1, { codexHome, now, state });
+  assert.equal(second.events.length, 1);
+  assert.equal(second.events[0]?.ts, Date.parse("2026-08-20T01:00:00.000Z"));
+});
+
+test("Codex reports parallel sessions and deduplicates rollouts for one session", () => {
+  const home = mkdtempSync(join(tmpdir(), "synq-codex-active-"));
+  const codexHome = join(home, ".codex");
+  const dir = join(codexHome, "sessions", "2026", "08", "20");
+  mkdirSync(dir, { recursive: true });
+  const now = Date.parse("2026-08-20T11:00:00Z");
+  const rows = [
+    ["01a01caf-0009-78b1-a9fe-152648fe32d4", "sess-a", 1_000],
+    ["01a01caf-0009-78b1-a9fe-152648fe32d5", "sess-a", 2_000],
+    ["01a01caf-0009-78b1-a9fe-152648fe32d6", "sess-b", 3_000],
+  ] as const;
+  for (const [fileId, sessionId, offset] of rows) {
+    const file = join(dir, `rollout-2026-08-20T10-59-00-${fileId}.jsonl`);
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session_meta", payload: { session_id: sessionId, cwd: "/tmp/demo", agent_nickname: sessionId } })}\n${tokenCount({ timestamp: new Date(now - offset).toISOString() })}\n`,
+    );
+    utimesSync(file, new Date(now - offset), new Date(now - offset));
+  }
+  const result = scanCodexUsage(0, { codexHome, now, state: createCodexScanState() });
+  assert.deepEqual(result.active.map((task) => task.sessionId).sort(), ["sess-a", "sess-b"]);
+  assert.equal(result.live?.sessionId, "sess-a");
+  assert.equal(result.live?.startedAt, now - 2_000);
+  assert.equal(result.live?.lastTs, now - 1_000);
+  assert.equal(result.live?.turns, 2);
 });

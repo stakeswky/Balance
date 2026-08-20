@@ -89,6 +89,7 @@ function PlanCompare({
   events,
   agent,
   currentId,
+  currentMeter,
   plans,
   now,
   boost,
@@ -97,11 +98,15 @@ function PlanCompare({
   events: UsageEvent[];
   agent: AgentId;
   currentId: string;
+  currentMeter: MeterSnapshot;
   plans: PlanDef[];
   now: number;
   boost: number;
 }) {
-  const rows = comparePlans(events, agent, plans, now, boost);
+  const rows = comparePlans(events, agent, plans, now, boost, {
+    currentPlanId: currentId,
+    currentMeter,
+  });
   return (
     <div>
       <h3 className="mb-3 text-sm font-medium">{title}</h3>
@@ -256,6 +261,7 @@ export function ReportPanel({
               events={visibleEvents}
               agent={report.agent}
               currentId={report.currentPlanId}
+              currentMeter={meterByAgent[report.agent]}
               plans={report.plans}
               now={now}
               boost={weekBoostPct}

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { WEEK_MS, type AgentLiveInfo, type UsageEvent } from "./types.ts";
+import { WEEK_MS, latestActivities, type AgentLiveInfo, type UsageEvent } from "./types.ts";
 import {
   foldCodexTurns,
   parseCodexJsonlLine,
@@ -26,6 +26,7 @@ export interface CodexScanState {
 export interface CodexScanResult {
   events: UsageEvent[];
   live: AgentLiveInfo | null;
+  active: AgentLiveInfo[];
   roots: string[];
   filesRead: number;
   official: OfficialSlice | null;
@@ -162,29 +163,25 @@ export function scanCodexUsage(
     state.meta.set(path, meta);
   }
 
-  const folded = foldCodexTurns(fresh).filter((e) => (since <= 0 || e.ts >= since) && e.ts <= now + 60_000);
-
-  let live: AgentLiveInfo | null = null;
-  let bestMtime = 0;
+  const folded = foldCodexTurns(fresh).filter((e) => e.ts <= now + 60_000);
+  const candidates: AgentLiveInfo[] = [];
   for (const [path, cursor] of state.files) {
     const age = now - cursor.mtimeMs;
     if (age > GROW_MS) continue;
-    if (cursor.mtimeMs >= bestMtime) {
-      bestMtime = cursor.mtimeMs;
-      const meta = state.meta.get(path);
-      const sid = meta?.sessionId ?? sessionIdFromPath(path);
-      const mine = folded.filter((e) => e.sessionId === sid);
-      live = {
-        sessionId: sid,
-        cwd: meta?.cwd ?? "",
-        task: meta?.title || meta?.cwd || sid,
-        writing: age <= WRITING_MS,
-        lastTs: cursor.mtimeMs,
-        startedAt: mine[0]?.ts ?? cursor.mtimeMs,
-        turns: mine.length,
-      };
-    }
+    const meta = state.meta.get(path);
+    const sessionId = meta?.sessionId ?? sessionIdFromPath(path);
+    const mine = folded.filter((event) => event.sessionId === sessionId);
+    candidates.push({
+      sessionId,
+      cwd: meta?.cwd ?? "",
+      task: meta?.title || meta?.cwd || sessionId,
+      writing: age <= WRITING_MS,
+      lastTs: cursor.mtimeMs,
+      startedAt: mine[0]?.ts ?? cursor.mtimeMs,
+      turns: mine.length,
+    });
   }
+  const { live, active } = latestActivities(candidates);
 
   parsedOfficial.sort((a, b) => a.fetchedAt - b.fetchedAt);
   const seenOfficial = new Set<string>();
@@ -202,5 +199,5 @@ export function scanCodexUsage(
   });
   const official = officialHistory.at(-1) ?? null;
 
-  return { events: folded, live, roots, filesRead, official, officialHistory };
+  return { events: folded, live, active, roots, filesRead, official, officialHistory };
 }

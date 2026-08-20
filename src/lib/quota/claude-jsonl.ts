@@ -1,4 +1,4 @@
-import type { ClaudeModelId, UsageEvent } from "./types.ts";
+import type { ActorKind, ClaudeModelId, UsageEvent } from "./types.ts";
 import { claudeCacheWrites } from "./tokens.ts";
 
 export interface SessionMeta {
@@ -6,6 +6,8 @@ export interface SessionMeta {
   cwd: string;
   title: string;
   lastUser: string;
+  actorId?: string;
+  actorKind?: ActorKind;
 }
 
 export function clipTask(s: string, n = 80): string {
@@ -50,16 +52,32 @@ function textFromContent(content: unknown): string {
   return bits.join("\n").trim();
 }
 
+export function normalizedActorId(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || !raw) return undefined;
+  return raw.startsWith("agent-") ? raw : `agent-${raw}`;
+}
+
 export function applyMetaLine(obj: Record<string, unknown>, meta: SessionMeta): void {
   const typ = obj.type;
   if (typeof obj.cwd === "string" && obj.cwd) meta.cwd = obj.cwd;
   if (typeof obj.sessionId === "string" && obj.sessionId) meta.sessionId = obj.sessionId;
+  const actorId = normalizedActorId(obj.agentId);
+  if (actorId) meta.actorId = actorId;
+  if (obj.attributionAgent === "workflow-subagent") meta.actorKind = "workflow-subagent";
+  else if (meta.actorId && !meta.actorKind) meta.actorKind = "subagent";
   if (typ === "custom-title" && typeof obj.customTitle === "string") meta.title = obj.customTitle;
   if (typ === "last-prompt" && typeof obj.lastPrompt === "string") meta.lastUser = obj.lastPrompt;
   if (typ === "user") {
     const msg = obj.message && typeof obj.message === "object" ? (obj.message as Record<string, unknown>) : {};
     const txt = textFromContent(msg.content);
-    if (txt && !txt.startsWith("[{") && !txt.includes("<local-command")) meta.lastUser = txt;
+    if (
+      txt &&
+      !txt.startsWith("[{") &&
+      !txt.includes("<local-command") &&
+      !txt.trimStart().startsWith("<system-reminder>")
+    ) {
+      meta.lastUser = txt;
+    }
   }
 }
 
@@ -99,6 +117,8 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
     modelRaw,
     ts,
     sessionId,
+    actorId: meta.actorId,
+    actorKind: meta.actorKind,
     task,
     tokensIn,
     tokensOut,

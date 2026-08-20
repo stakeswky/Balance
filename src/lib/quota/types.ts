@@ -4,6 +4,7 @@ export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
 export type CodexModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-5.4";
 export type GrokModelId = "grok-4.6" | "grok-4.5";
 export type ModelId = ClaudeModelId | CodexModelId | GrokModelId;
+export type ActorKind = "subagent" | "workflow-subagent";
 
 export interface UsageEvent {
   id: string;
@@ -13,6 +14,8 @@ export interface UsageEvent {
   modelRaw?: string;
   ts: number;
   sessionId: string;
+  actorId?: string;
+  actorKind?: ActorKind;
   task: string;
   /** Uncached input tokens. Mutually exclusive with cacheRead. */
   tokensIn: number;
@@ -40,6 +43,8 @@ export interface SessionState {
 
 export interface AgentLiveInfo {
   sessionId: string;
+  actorId?: string;
+  actorKind?: ActorKind;
   cwd: string;
   task: string;
   writing: boolean;
@@ -49,6 +54,36 @@ export interface AgentLiveInfo {
 }
 
 export type ClaudeLiveInfo = AgentLiveInfo;
+
+export function activityIdOf(event: Pick<UsageEvent, "sessionId" | "actorId">): string {
+  return event.actorId ?? event.sessionId;
+}
+
+export function eventsForActivity(events: UsageEvent[], activityId: string): UsageEvent[] {
+  return events.filter((event) => activityIdOf(event) === activityId);
+}
+
+export function latestActivities(candidates: AgentLiveInfo[]): { live: AgentLiveInfo | null; active: AgentLiveInfo[] } {
+  const sorted = [...candidates].sort((left, right) => right.lastTs - left.lastTs);
+  const merged = new Map<string, AgentLiveInfo>();
+  for (const item of sorted) {
+    const key = item.actorId ?? item.sessionId;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...item });
+      continue;
+    }
+    current.writing ||= item.writing;
+    current.startedAt = Math.min(current.startedAt, item.startedAt);
+    current.lastTs = Math.max(current.lastTs, item.lastTs);
+    current.turns = Math.max(current.turns, item.turns);
+  }
+  const recent = [...merged.values()].sort((left, right) => right.lastTs - left.lastTs);
+  return {
+    live: recent[0] ?? null,
+    active: recent.filter((item) => item.writing),
+  };
+}
 
 export interface PlanDef {
   id: string;

@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { WEEK_MS, type ClaudeLiveInfo, type UsageEvent } from "./types.ts";
-import { foldByRequestId, parseJsonlLine, type SessionMeta } from "./claude-jsonl.ts";
+import { WEEK_MS, activityIdOf, latestActivities, type ClaudeLiveInfo, type UsageEvent } from "./types.ts";
+import { foldByRequestId, normalizedActorId, parseJsonlLine, type SessionMeta } from "./claude-jsonl.ts";
 
 const GROW_MS = 30 * 60 * 1000;
 const WRITING_MS = 20 * 1000;
@@ -16,17 +16,25 @@ export interface FileCursor {
 export interface ScanState {
   files: Map<string, FileCursor>;
   meta: Map<string, SessionMeta>;
+  workflowMtimes: Map<string, number>;
+  workflowLabels: Map<string, string>;
 }
 
 export interface ClaudeScanResult {
   events: UsageEvent[];
   live: ClaudeLiveInfo | null;
+  active: ClaudeLiveInfo[];
   roots: string[];
   filesRead: number;
 }
 
 export function createScanState(): ScanState {
-  return { files: new Map(), meta: new Map() };
+  return {
+    files: new Map(),
+    meta: new Map(),
+    workflowMtimes: new Map(),
+    workflowLabels: new Map(),
+  };
 }
 
 const defaultState = createScanState();
@@ -57,6 +65,60 @@ function listJsonl(root: string, out: string[]): void {
       }
       if (st.isDirectory()) stack.push(p);
       else if (st.isFile() && name.endsWith(".jsonl")) out.push(p);
+    }
+  }
+}
+
+function listWorkflowFiles(root: string, out: string[]): void {
+  if (!existsSync(root)) return;
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop()!;
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (name.startsWith(".")) continue;
+      const path = join(dir, name);
+      let stat;
+      try {
+        stat = statSync(path);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) stack.push(path);
+      else if (stat.isFile() && name.startsWith("wf_") && name.endsWith(".json")) out.push(path);
+    }
+  }
+}
+
+function refreshWorkflowLabels(roots: string[], state: ScanState): void {
+  const files: string[] = [];
+  for (const root of roots) listWorkflowFiles(root, files);
+  for (const path of files) {
+    let mtimeMs = 0;
+    try {
+      mtimeMs = statSync(path).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (state.workflowMtimes.get(path) === mtimeMs) continue;
+    try {
+      const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      const progress = Array.isArray(value.workflowProgress) ? value.workflowProgress : [];
+      for (const raw of progress) {
+        if (!raw || typeof raw !== "object") continue;
+        const row = raw as Record<string, unknown>;
+        const actorId = normalizedActorId(row.agentId);
+        const label = typeof row.label === "string" ? row.label.trim() : "";
+        if (actorId && label) state.workflowLabels.set(actorId, label);
+      }
+      state.workflowMtimes.set(path, mtimeMs);
+    } catch {
+      /* ignore truncated workflow metadata */
     }
   }
 }
@@ -113,6 +175,7 @@ export function scanClaudeUsage(
   const roots = projectRoots(home).filter((r) => existsSync(r));
   const files: string[] = [];
   for (const root of roots) listJsonl(root, files);
+  refreshWorkflowLabels(roots, state);
 
   if (since <= 0) {
     for (const [path] of state.files) {
@@ -144,38 +207,58 @@ export function scanClaudeUsage(
     filesRead += 1;
 
     const sid = sessionIdFromPath(path);
-    const meta = state.meta.get(sid) ?? { sessionId: sid, cwd: "", title: "", lastUser: "" };
+    const pathActorId = path.includes(`${sep}subagents${sep}`) && sid.startsWith("agent-") ? sid : undefined;
+    const meta = state.meta.get(path) ?? {
+      sessionId: sid,
+      cwd: "",
+      title: "",
+      lastUser: "",
+      actorId: pathActorId,
+      actorKind: pathActorId
+        ? path.includes(`${sep}subagents${sep}workflows${sep}`)
+          ? "workflow-subagent"
+          : "subagent"
+        : undefined,
+    };
     for (const line of lines) {
       const ev = parseJsonlLine(line, meta);
-      if (ev) fresh.push(ev);
+      const workflowLabel = meta.actorId ? state.workflowLabels.get(meta.actorId) : undefined;
+      if (ev) {
+        if (workflowLabel) ev.task = workflowLabel;
+        fresh.push(ev);
+      }
     }
-    state.meta.set(sid, meta);
+    state.meta.set(path, meta);
   }
 
-  const folded = foldByRequestId(fresh).filter((e) => (since <= 0 || e.ts >= since) && e.ts <= now + 60_000);
-
-  let live: ClaudeLiveInfo | null = null;
-  let bestMtime = 0;
+  const folded = foldByRequestId(fresh).filter((e) => e.ts <= now + 60_000);
+  const candidates: ClaudeLiveInfo[] = [];
   for (const [path, cursor] of state.files) {
-    if (!isParentJsonl(path)) continue;
     const age = now - cursor.mtimeMs;
     if (age > GROW_MS) continue;
-    if (cursor.mtimeMs >= bestMtime) {
-      bestMtime = cursor.mtimeMs;
-      const sid = sessionIdFromPath(path);
-      const meta = state.meta.get(sid);
-      const mine = folded.filter((e) => e.sessionId === sid);
-      live = {
-        sessionId: sid,
-        cwd: meta?.cwd ?? "",
-        task: meta?.title || meta?.lastUser || sid,
-        writing: age <= WRITING_MS,
-        lastTs: cursor.mtimeMs,
-        startedAt: mine[0]?.ts ?? cursor.mtimeMs,
-        turns: mine.length,
-      };
-    }
+    if (!isParentJsonl(path) && !path.includes(`${sep}subagents${sep}`)) continue;
+    const meta = state.meta.get(path);
+    if (path.includes(`${sep}subagents${sep}`) && !meta?.actorId) continue;
+    const sessionId = meta?.sessionId ?? sessionIdFromPath(path);
+    const activityId = meta?.actorId ?? sessionId;
+    const mine = folded.filter((event) => activityIdOf(event) === activityId);
+    candidates.push({
+      sessionId,
+      actorId: meta?.actorId,
+      actorKind: meta?.actorKind,
+      cwd: meta?.cwd ?? "",
+      task:
+        (meta?.actorId ? state.workflowLabels.get(meta.actorId) : undefined) ||
+        meta?.title ||
+        meta?.lastUser ||
+        activityId,
+      writing: age <= WRITING_MS,
+      lastTs: cursor.mtimeMs,
+      startedAt: mine[0]?.ts ?? cursor.mtimeMs,
+      turns: mine.length,
+    });
   }
+  const { live, active } = latestActivities(candidates);
 
-  return { events: folded, live, roots, filesRead };
+  return { events: folded, live, active, roots, filesRead };
 }
