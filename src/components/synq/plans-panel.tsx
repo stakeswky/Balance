@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { formatTokens } from "@/components/synq/format";
 import { CLAUDE_PLANS, CODEX_PLANS, GROK_PLANS } from "@/lib/quota/plans";
-import type { PlanDef } from "@/lib/quota/types";
+import type { AgentId, PlanDef } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
 function PlanList({
@@ -52,6 +52,7 @@ function PlanList({
 }
 
 export function PlansPanel({
+  agents,
   claudePlanId,
   grokPlanId,
   codexPlanId,
@@ -65,6 +66,7 @@ export function PlansPanel({
   onAlertWindow,
   onAlertWeek,
 }: {
+  agents: readonly AgentId[];
   claudePlanId: string;
   grokPlanId: string;
   codexPlanId: string;
@@ -78,65 +80,110 @@ export function PlansPanel({
   onAlertWindow: (n: number) => void;
   onAlertWeek: (n: number) => void;
 }) {
+  const planGrid =
+    agents.length >= 3
+      ? "lg:grid-cols-3"
+      : agents.length === 2
+        ? "lg:grid-cols-2"
+        : "lg:grid-cols-1";
+
   return (
-    <div className="grid gap-5 lg:grid-cols-3">
-      <PlanList title="Claude Code 套餐" plans={CLAUDE_PLANS} selected={claudePlanId} onSelect={onClaude} />
-      <PlanList title="Grok 套餐" plans={GROK_PLANS} selected={grokPlanId} onSelect={onGrok} />
-      <PlanList title="Codex 套餐" plans={CODEX_PLANS} selected={codexPlanId} onSelect={onCodex} />
-      <Card className="lg:col-span-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle>周额度加成</CardTitle>
-            <CardHint className="mt-1">
-              Anthropic 目前对 Pro / Max / Team 提供临时周额度上浮。默认按 50% 计算至 8 月底。
-            </CardHint>
-          </div>
-          <Badge tone="mute">{weekBoostPct}%</Badge>
+    <div className="space-y-5">
+      {agents.length ? (
+        <div className={cn("grid gap-5", planGrid)}>
+          {agents.includes("claude") ? (
+            <PlanList
+              title="Claude Code 套餐"
+              plans={CLAUDE_PLANS}
+              selected={claudePlanId}
+              onSelect={onClaude}
+            />
+          ) : null}
+          {agents.includes("grok") ? (
+            <PlanList
+              title="Grok 套餐"
+              plans={GROK_PLANS}
+              selected={grokPlanId}
+              onSelect={onGrok}
+            />
+          ) : null}
+          {agents.includes("codex") ? (
+            <PlanList
+              title="Codex 套餐"
+              plans={CODEX_PLANS}
+              selected={codexPlanId}
+              onSelect={onCodex}
+            />
+          ) : null}
         </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={10}
-          value={weekBoostPct}
-          onChange={(e) => onBoost(Number(e.target.value))}
-          className="mt-5 w-full accent-accent"
-          aria-label="周额度加成百分比"
-        />
-        <div className="mt-2 flex justify-between font-mono text-xs text-faint">
-          <span>0%</span>
-          <span>50%</span>
-          <span>100%</span>
-        </div>
-      </Card>
-      <Card>
-        <CardTitle>告警阈值</CardTitle>
-        <CardHint className="mt-1">窗口或周额度越过这条线时，底部弹出提醒并记入报告。</CardHint>
-        <label className="mt-5 block text-xs text-mute">
-          五小时窗 {alertWindowPct}%
-          <input
-            type="range"
-            min={50}
-            max={95}
-            step={5}
-            value={alertWindowPct}
-            onChange={(e) => onAlertWindow(Number(e.target.value))}
-            className="mt-2 w-full accent-accent"
-          />
-        </label>
-        <label className="mt-4 block text-xs text-mute">
-          本周额度 {alertWeekPct}%
-          <input
-            type="range"
-            min={50}
-            max={95}
-            step={5}
-            value={alertWeekPct}
-            onChange={(e) => onAlertWeek(Number(e.target.value))}
-            className="mt-2 w-full accent-accent"
-          />
-        </label>
-      </Card>
+      ) : null}
+
+      <div
+        className={cn(
+          "grid gap-5",
+          agents.includes("claude") ? "lg:grid-cols-[2fr_1fr]" : "lg:grid-cols-1",
+        )}
+      >
+        {agents.includes("claude") ? (
+          <Card>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>周额度加成</CardTitle>
+                <CardHint className="mt-1">
+                  Anthropic 目前对 Pro / Max / Team 提供临时周额度上浮。默认按 50% 计算至 8 月底。
+                </CardHint>
+              </div>
+              <Badge tone="mute">{weekBoostPct}%</Badge>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={10}
+              value={weekBoostPct}
+              onChange={(e) => onBoost(Number(e.target.value))}
+              className="mt-5 w-full accent-accent"
+              aria-label="周额度加成百分比"
+            />
+            <div className="mt-2 flex justify-between font-mono text-xs text-faint">
+              <span>0%</span>
+              <span>50%</span>
+              <span>100%</span>
+            </div>
+          </Card>
+        ) : null}
+
+        <Card>
+          <CardTitle>告警阈值</CardTitle>
+          <CardHint className="mt-1">
+            窗口或周额度越过这条线时，底部弹出提醒并记入报告。
+          </CardHint>
+          <label className="mt-5 block text-xs text-mute">
+            五小时窗 {alertWindowPct}%
+            <input
+              type="range"
+              min={50}
+              max={95}
+              step={5}
+              value={alertWindowPct}
+              onChange={(e) => onAlertWindow(Number(e.target.value))}
+              className="mt-2 w-full accent-accent"
+            />
+          </label>
+          <label className="mt-4 block text-xs text-mute">
+            本周额度 {alertWeekPct}%
+            <input
+              type="range"
+              min={50}
+              max={95}
+              step={5}
+              value={alertWeekPct}
+              onChange={(e) => onAlertWeek(Number(e.target.value))}
+              className="mt-2 w-full accent-accent"
+            />
+          </label>
+        </Card>
+      </div>
     </div>
   );
 }

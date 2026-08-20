@@ -5,10 +5,17 @@ import { PlansPanel } from "@/components/synq/plans-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { detectedAgentIds } from "@/lib/quota/agent-availability";
+import { detectedAgentIds, visibleAgentIds } from "@/lib/quota/agent-availability";
 import { useQuota } from "@/lib/quota/store";
+import type { AgentId } from "@/lib/quota/types";
 import { pullAgentAvailability } from "@/lib/quota/watch";
 import { cn } from "@/lib/utils";
+
+const CAPTURE: Record<AgentId, { name: string; adapter: string }> = {
+  claude: { name: "Claude Code", adapter: "~/.claude" },
+  grok: { name: "Grok", adapter: "~/.grok" },
+  codex: { name: "Codex", adapter: "~/.codex" },
+};
 
 function CaptureToggle({
   name,
@@ -42,6 +49,7 @@ export function SettingsPanel() {
   const liveCodex = useQuota((s) => s.liveCodex);
   const demoMode = useQuota((s) => s.demoMode);
   const agentAvailability = useQuota((s) => s.agentAvailability);
+  const realEvents = useQuota((s) => s.realEvents);
   const claudePlanId = useQuota((s) => s.claudePlanId);
   const grokPlanId = useQuota((s) => s.grokPlanId);
   const codexPlanId = useQuota((s) => s.codexPlanId);
@@ -49,7 +57,8 @@ export function SettingsPanel() {
   const alertWindowPct = useQuota((s) => s.alertWindowPct);
   const alertWeekPct = useQuota((s) => s.alertWeekPct);
   const sampleCount = useQuota((s) => s.quotaSamples.length);
-  const detectedCount = detectedAgentIds(agentAvailability).length;
+  const detectedAgents = detectedAgentIds(agentAvailability);
+  const visibleAgents = visibleAgentIds(agentAvailability, demoMode, realEvents);
 
   const detect = async () => {
     setDetecting(true);
@@ -75,7 +84,7 @@ export function SettingsPanel() {
               Synq 只读本机 Agent 日志和官方百分比，不需要账号。套餐、阈值和采样都保存在这台浏览器里。
             </CardHint>
             <p className={cn("mt-3 font-mono text-xs", sampleCount ? "text-mute" : "text-faint")}>
-              已检测 {detectedCount} 个 Agent · 已存校准样本 {sampleCount} 条
+              已检测 {detectedAgents.length} 个 Agent · 已存校准样本 {sampleCount} 条
             </p>
           </div>
           <Button variant="secondary" onClick={() => void detect()} disabled={detecting}>
@@ -89,28 +98,25 @@ export function SettingsPanel() {
         <CardTitle>日志采集</CardTitle>
         <CardHint className="mt-1">关掉某一路后，不再读取对应客户端的新回合。</CardHint>
         <div className="mt-4 space-y-2">
-          <CaptureToggle
-            name="Claude Code"
-            adapter="~/.claude"
-            live={liveClaude}
-            onToggle={() => useQuota.getState().toggleLive("claude")}
-          />
-          <CaptureToggle
-            name="Grok"
-            adapter="~/.grok"
-            live={liveGrok}
-            onToggle={() => useQuota.getState().toggleLive("grok")}
-          />
-          <CaptureToggle
-            name="Codex"
-            adapter="~/.codex"
-            live={liveCodex}
-            onToggle={() => useQuota.getState().toggleLive("codex")}
-          />
+          {detectedAgents.map((agent) => (
+            <CaptureToggle
+              key={agent}
+              name={CAPTURE[agent].name}
+              adapter={CAPTURE[agent].adapter}
+              live={agent === "claude" ? liveClaude : agent === "grok" ? liveGrok : liveCodex}
+              onToggle={() => useQuota.getState().toggleLive(agent)}
+            />
+          ))}
+          {detectedAgents.length === 0 ? (
+            <p className="rounded-lg bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
+              暂未检测到本机 Agent。运行一次 Agent 后，使用上方“重新检测”更新采集入口。
+            </p>
+          ) : null}
         </div>
       </Card>
 
       <PlansPanel
+        agents={visibleAgents}
         claudePlanId={claudePlanId}
         grokPlanId={grokPlanId}
         codexPlanId={codexPlanId}

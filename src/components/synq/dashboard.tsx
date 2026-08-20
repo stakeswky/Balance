@@ -606,7 +606,7 @@ export function Dashboard() {
           />
         ) : null}
 
-        {view === "plugin" ? <PluginPanel /> : null}
+        {view === "plugin" ? <PluginPanel agents={visibleAgents} /> : null}
       </main>
     </div>
   );
