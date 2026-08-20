@@ -47,6 +47,47 @@ function meterStatus(windowPct: number, weekPct: number): MeterSnapshot["status"
   return "ok";
 }
 
+export type MeterDataSource = "official" | "official-stale" | "local-estimate";
+
+export interface MeterDataSources {
+  window: MeterDataSource;
+  week: MeterDataSource;
+}
+
+function meterFieldSource(
+  value: number | null | undefined,
+  stale: boolean | undefined,
+): MeterDataSource {
+  if (value == null) return "local-estimate";
+  return stale ? "official-stale" : "official";
+}
+
+export function meterDataSources(official: OfficialSlice | null | undefined): MeterDataSources {
+  return {
+    window: meterFieldSource(official?.windowPct, official?.windowStale),
+    week: meterFieldSource(official?.weekPct, official?.weekStale),
+  };
+}
+
+export function officialOnlyMeter(
+  meter: MeterSnapshot,
+  sources: MeterDataSources,
+): MeterSnapshot | null {
+  const hasOfficialWindow = sources.window === "official";
+  const hasOfficialWeek = sources.week === "official";
+  if (!hasOfficialWindow && !hasOfficialWeek) return null;
+  const windowPct = hasOfficialWindow ? meter.windowPct : 0;
+  const weekPct = hasOfficialWeek ? meter.weekPct : 0;
+  return {
+    ...meter,
+    windowPct,
+    weekPct,
+    burnPctPerHour: hasOfficialWindow ? meter.burnPctPerHour : 0,
+    etaMs: hasOfficialWindow ? meter.etaMs : null,
+    status: meterStatus(windowPct, weekPct),
+  };
+}
+
 export function eventWindowShare(event: UsageEvent, plan: PlanDef): number {
   if (plan.agent === "codex" && plan.windowReasoningMin > 0) {
     const reason = (event.reasoningMin / plan.windowReasoningMin) * 100;
