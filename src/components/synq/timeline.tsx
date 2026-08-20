@@ -1,41 +1,21 @@
-import { rawTokens } from "@/lib/quota/engine";
 import { agentTextClass } from "@/lib/quota/agent";
 import type { AgentId, UsageEvent } from "@/lib/quota/types";
 import { WINDOW_MS } from "@/lib/quota/types";
+import { timelineSessions } from "@/lib/quota/timeline-sessions";
 import { cn } from "@/lib/utils";
 
-function sessionsInWindow(events: UsageEvent[], agent: AgentId, now: number) {
-  const from = now - WINDOW_MS;
-  const slice = events.filter((e) => e.agent === agent && e.ts >= from && e.ts <= now);
-  const map = new Map<string, { start: number; end: number; tokens: number; task: string }>();
-  for (const e of slice) {
-    const cur = map.get(e.sessionId);
-    if (!cur) {
-      map.set(e.sessionId, { start: e.ts, end: e.ts, tokens: rawTokens(e), task: e.task });
-    } else {
-      cur.start = Math.min(cur.start, e.ts);
-      cur.end = Math.max(cur.end, e.ts);
-      cur.tokens += rawTokens(e);
-    }
-  }
-  return [...map.values()].map((s) => ({
-    ...s,
-    end: Math.max(s.end, s.start + 4 * 60_000),
-  }));
-}
-
 function Lane({ agent, events, now }: { agent: AgentId; events: UsageEvent[]; now: number }) {
-  const blocks = sessionsInWindow(events, agent, now);
+  const blocks = timelineSessions(events, agent, now);
   const from = now - WINDOW_MS;
   return (
     <div className="relative h-9 overflow-hidden rounded-md bg-raised">
-      {blocks.map((b, i) => {
-        const left = ((b.start - from) / WINDOW_MS) * 100;
-        const width = Math.max(1.6, ((b.end - b.start) / WINDOW_MS) * 100);
+      {blocks.map((block) => {
+        const left = ((block.start - from) / WINDOW_MS) * 100;
+        const width = Math.max(1.6, ((block.end - block.start) / WINDOW_MS) * 100);
         return (
           <div
-            key={`${agent}-${i}-${b.start}`}
-            title={b.task}
+            key={block.id}
+            title={block.task}
             className={cn(
               "absolute top-1.5 bottom-1.5 rounded-sm",
               agent === "claude" ? "bg-claude/80" : agent === "grok" ? "bg-grok/80" : "bg-codex/80",

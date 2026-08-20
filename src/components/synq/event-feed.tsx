@@ -1,7 +1,7 @@
 import { formatTokens, modelLabel } from "@/components/synq/format";
 import { AGENT_LABEL, agentDotClass } from "@/lib/quota/agent";
 import { rawTokens } from "@/lib/quota/engine";
-import type { UsageEvent } from "@/lib/quota/types";
+import { activityIdOf, type UsageEvent } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
 function timeLabel(ts: number, now: number) {
@@ -31,7 +31,7 @@ export function EventFeed({
         <li key={e.id}>
           <button
             type="button"
-            onClick={() => onOpen?.(e.sessionId)}
+            onClick={() => onOpen?.(activityIdOf(e))}
             className="flex w-full items-start gap-3 py-3 text-left first:pt-0 last:pb-0"
           >
             <span

@@ -2,7 +2,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { formatDuration, formatTokens, formatUsd, modelLabel } from "@/components/synq/format";
 import { AGENT_LABEL } from "@/lib/quota/agent";
 import { apiUsd, rawTokens } from "@/lib/quota/engine";
-import type { UsageEvent } from "@/lib/quota/types";
+import { eventsForActivity, type UsageEvent } from "@/lib/quota/types";
 
 export function SessionDialog({
   sessionId,
@@ -15,7 +15,7 @@ export function SessionDialog({
   now: number;
   onClose: () => void;
 }) {
-  const rows = events.filter((e) => e.sessionId === sessionId).sort((a, b) => a.ts - b.ts);
+  const rows = sessionId ? eventsForActivity(events, sessionId).sort((a, b) => a.ts - b.ts) : [];
   const first = rows[0];
   const tokens = rows.reduce((s, e) => s + rawTokens(e), 0);
   const usd = rows.reduce((s, e) => s + apiUsd(e), 0);

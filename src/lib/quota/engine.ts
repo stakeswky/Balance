@@ -11,7 +11,7 @@ import type {
   PlanDef,
   UsageEvent,
 } from "./types.ts";
-import { WEEK_MS, WINDOW_MS } from "./types.ts";
+import { WEEK_MS, WINDOW_MS, activityIdOf } from "./types.ts";
 
 export function weightedTokens(event: UsageEvent): number {
   const meta = MODEL_META[event.model];
@@ -255,10 +255,11 @@ export function groupSessions(events: UsageEvent[], now: number, span: number): 
   const slice = inWindow(events, now, span);
   const map = new Map<string, SessionGroup>();
   for (const e of slice) {
-    const cur = map.get(e.sessionId);
+    const id = activityIdOf(e);
+    const cur = map.get(id);
     if (!cur) {
-      map.set(e.sessionId, {
-        id: e.sessionId,
+      map.set(id, {
+        id,
         agent: e.agent,
         task: e.task,
         model: e.model,

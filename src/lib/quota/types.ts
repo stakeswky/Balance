@@ -59,6 +59,10 @@ export function activityIdOf(event: Pick<UsageEvent, "sessionId" | "actorId">): 
   return event.actorId ?? event.sessionId;
 }
 
+export function eventsForActivity(events: UsageEvent[], activityId: string): UsageEvent[] {
+  return events.filter((event) => activityIdOf(event) === activityId);
+}
+
 export function latestActivities(candidates: AgentLiveInfo[]): { live: AgentLiveInfo | null; active: AgentLiveInfo[] } {
   const sorted = [...candidates].sort((left, right) => right.lastTs - left.lastTs);
   const merged = new Map<string, AgentLiveInfo>();
