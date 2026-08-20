@@ -2,7 +2,7 @@
 set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
-APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Synq.app}"
+APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
 APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
 SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
 HEALTH_URL="http://127.0.0.1:4780/api/desktop-health"

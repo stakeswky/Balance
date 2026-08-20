@@ -2,7 +2,7 @@
 set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
-APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Synq.app}"
+APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
 APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
 SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
 OCCUPIER_PID=""
@@ -71,7 +71,7 @@ while [ -z "$APP_PID" ]; do
   APP_PID=$(exact_pids "$APP_BINARY")
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 60 ]; then
-    echo "Synq startup-error process did not appear" >&2
+    echo "Balance startup-error process did not appear" >&2
     exit 1
   fi
   sleep 0.25
@@ -101,7 +101,7 @@ done
 STARTED_APP=0
 
 if ! kill -0 "$OCCUPIER_PID" 2>/dev/null; then
-  echo "Synq unexpectedly terminated the unrelated port occupier" >&2
+  echo "Balance unexpectedly terminated the unrelated port occupier" >&2
   exit 1
 fi
 kill "$OCCUPIER_PID"

@@ -2,7 +2,7 @@
 set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
-APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Synq.app}"
+APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
 SCREENSHOT_PATH="${2:-$REPO_ROOT/screenshots/synq-macos-app.png}"
 BROWSER_SCREENSHOT_PATH="${3:-$REPO_ROOT/screenshots/browser-smoke.png}"
 APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
@@ -86,7 +86,7 @@ assert_arm64_binary() {
 
 if listen_output=$(lsof -nP -iTCP:4780 -sTCP:LISTEN 2>&1); then
   printf '%s\n' "$listen_output" >&2
-  echo "Refusing to launch Synq: TCP 4780 is already in use" >&2
+  echo "Refusing to launch Balance: TCP 4780 is already in use" >&2
   exit 1
 fi
 
@@ -94,7 +94,7 @@ for binary_path in "$SIDECAR_BINARY" "$APP_BINARY"; do
   existing_pids=$(exact_pids "$binary_path")
   if [ -n "$existing_pids" ]; then
     printf '%s\n' "$existing_pids" >&2
-    echo "Refusing to launch Synq: an exact bundle process is already running" >&2
+    echo "Refusing to launch Balance: an exact bundle process is already running" >&2
     exit 1
   fi
 done
@@ -114,14 +114,14 @@ while :; do
   if health_body=$(curl_loopback -fsS --max-time 2 "$HEALTH_URL"); then
     printf '%s\n' "$health_body"
     if [ "$health_body" != "$EXPECTED_HEALTH" ]; then
-      echo "Unexpected Synq desktop health response" >&2
+      echo "Unexpected Balance desktop health response" >&2
       exit 1
     fi
     break
   fi
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 60 ]; then
-    echo "Synq desktop health check timed out" >&2
+    echo "Balance desktop health check timed out" >&2
     exit 1
   fi
   sleep 0.25
@@ -131,7 +131,7 @@ app_pids=$(exact_pids "$APP_BINARY")
 app_count=$(printf '%s\n' "$app_pids" | awk 'NF { count += 1 } END { print count + 0 }')
 if [ "$app_count" -ne 1 ]; then
   printf '%s\n' "$app_pids" >&2
-  echo "Expected exactly one Synq desktop process" >&2
+  echo "Expected exactly one Balance desktop process" >&2
   exit 1
 fi
 APP_PID=$app_pids
@@ -145,7 +145,7 @@ if [ "$listen_count" -ne 1 ]; then
 fi
 printf '%s\n' "$listen_output" | awk 'NR > 1 && index($0, "127.0.0.1:4780 (LISTEN)") == 0 { exit 1 }'
 if printf '%s\n' "$listen_output" | grep -E 'TCP (\*|0\.0\.0\.0|\[::\]):4780' >/dev/null; then
-  echo "Synq desktop server is not loopback-only" >&2
+  echo "Balance desktop server is not loopback-only" >&2
   exit 1
 fi
 
@@ -157,7 +157,7 @@ ui_status=$?
 set -e
 if [ "$ui_status" -ne 0 ]; then
   cat "$ui_stderr" >&2
-  echo "Synq native UI smoke failed or timed out (status $ui_status)" >&2
+  echo "Balance native UI smoke failed or timed out (status $ui_status)" >&2
   exit 1
 fi
 cat "$ui_stderr" >&2
@@ -187,7 +187,7 @@ for value in "$ui_x" "$ui_y" "$ui_width" "$ui_height" "$ui_window_id"; do
       ;;
   esac
 done
-if [ "$ui_title" != "Synq" ] || [ "$ui_width" -lt 960 ] || [ "$ui_height" -lt 680 ]; then
+if [ "$ui_title" != "Balance" ] || [ "$ui_width" -lt 960 ] || [ "$ui_height" -lt 680 ]; then
   echo "Native UI smoke returned unexpected window evidence: $ui_output" >&2
   exit 1
 fi
@@ -216,7 +216,7 @@ close_status=$?
 set -e
 if [ "$close_status" -ne 0 ]; then
   cat "$close_stderr" >&2
-  echo "Synq native close action failed or timed out (status $close_status)" >&2
+  echo "Balance native close action failed or timed out (status $close_status)" >&2
   exit 1
 fi
 cat "$close_stderr" >&2
@@ -233,7 +233,7 @@ while :; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 40 ]; then
     printf 'remaining app pids: %s\nremaining sidecar pids: %s\n' "$remaining_app" "$remaining_sidecar" >&2
-    echo "Synq app or sidecar remained alive after native window close" >&2
+    echo "Balance app or sidecar remained alive after native window close" >&2
     exit 1
   fi
   sleep 0.25

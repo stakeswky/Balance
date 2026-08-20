@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Minimal capability for Synq desktop windows","local":true,"windows":["main","startup-error"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Minimal capability for Balance desktop windows","local":true,"windows":["main","startup-error"],"permissions":["core:default"]}}

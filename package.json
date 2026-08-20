@@ -18,7 +18,7 @@
     "desktop:verify:app": "sh scripts/verify-macos-app.sh",
     "desktop:verify:crash": "sh scripts/verify-macos-crash-cleanup.sh",
     "desktop:verify:startup-error": "sh scripts/verify-macos-startup-error.sh",
-    "desktop:verify:dmg": "hdiutil verify src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Synq_0.1.0_aarch64.dmg",
+    "desktop:verify:dmg": "hdiutil verify src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Balance_0.1.0_aarch64.dmg",
     "desktop:verify:ci": "npm run desktop:verify:security && npm run desktop:verify:crash && npm run desktop:verify:dmg",
     "desktop:verify": "npm run desktop:verify:security && npm run desktop:verify:app && npm run desktop:verify:crash && npm run desktop:verify:startup-error && npm run desktop:verify:dmg",
     "screenshots:public": "node scripts/capture-public-screenshots.mjs",

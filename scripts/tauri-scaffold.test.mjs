@@ -46,7 +46,7 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.match(watchdog, /process\.stdin/);
   assert.match(watchdog, /process\.ppid/);
   assert.match(verifier, /Mach-O 64-bit executable arm64/);
-  assert.doesNotMatch(nativeSmoke, /title\.isEmpty \? "Synq"/);
+  assert.match(nativeSmoke, /title == "Balance"/);
   assert.match(nativeSmoke, /waitForInitialAppState/);
   assert.match(nativeSmoke, /Thread\.sleep\(forTimeInterval: 1\)/);
   assert.match(nativeSmoke, /case \.onboarding/);
