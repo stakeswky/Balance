@@ -590,7 +590,8 @@ export function Dashboard() {
 
         {view === "report" ? (
           <ReportPanel
-            events={events}
+            agents={visibleAgents}
+            events={visibleEvents}
             now={now}
             claudeMeter={claudeMeter}
             grokMeter={grokMeter}
