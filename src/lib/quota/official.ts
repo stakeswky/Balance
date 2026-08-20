@@ -28,6 +28,9 @@ export interface OfficialSlice {
   onDemandUsed: number | null;
   onDemandCap: number | null;
   modelWeekLimits?: OfficialModelWeekLimits;
+  windowStale?: boolean;
+  weekStale?: boolean;
+  modelWeekLimitsStale?: boolean;
   source: string;
   fetchedAt: number;
   windowKind: "five_hour" | "weekly";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -426,6 +426,198 @@ test("Claude network failures use the same guarded backoff", async () => {
   assert.equal(claudeCalls, 1);
   await readAt(now + 30_000);
   assert.equal(claudeCalls, 2);
+});
+
+test("Claude last-success snapshot survives cache reset without persisting auth", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  writeFileSync(
+    join(home, "Library", "Application Support", "Claude", "plan-usage-history.json"),
+    JSON.stringify({ version: 2, samples: [{ t: now, u: { fh: 24, sd: 34 } }] }),
+  );
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      if (claudeCalls === 1) {
+        return new Response(JSON.stringify({
+          five_hour: 24,
+          seven_day: 34,
+          limits: [{
+            kind: "weekly_scoped",
+            scope: { model: { display_name: "Fable" } },
+            percent: 26,
+          }],
+        }), { status: 200 });
+      }
+      return new Response("rate limited", { status: 429 });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    snapshotPath,
+    now: at,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "never-write-this-token" }),
+  });
+
+  await readAt(now);
+  clearOfficialCache();
+  const restored = await readAt(now + 30_001);
+
+  assert.equal(restored.claude?.windowPct, 24);
+  assert.equal(restored.claude?.weekPct, 34);
+  assert.equal(restored.claude?.modelWeekLimits?.fable?.usedPct, 26);
+  assert.equal(restored.claude?.windowStale, undefined);
+  assert.equal(restored.claude?.weekStale, undefined);
+  assert.equal(restored.claude?.modelWeekLimitsStale, true);
+  const serialized = JSON.stringify(JSON.parse(readFileSync(snapshotPath, "utf8")));
+  assert.doesNotMatch(serialized, /never-write-this-token|authorization|access.?token|bearer|headers/i);
+  assert.equal(statSync(join(home, "state")).mode & 0o777, 0o700);
+  assert.equal(statSync(snapshotPath).mode & 0o777, 0o600);
+  assert.deepEqual(
+    readdirSync(join(home, "state")).filter((name) => name.endsWith(".tmp") || name.endsWith(".lock")),
+    [],
+  );
+});
+
+test("Claude snapshot shares Retry-After across cache resets", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      return new Response("rate limited", {
+        status: 429,
+        headers: { "retry-after": "120" },
+      });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    snapshotPath,
+    now: at,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  await readAt(now);
+  clearOfficialCache();
+  await readAt(now + 30_000);
+  assert.equal(claudeCalls, 1);
+});
+
+test("Claude snapshot lock coalesces concurrent OAuth refreshes", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return new Response(JSON.stringify({ five_hour: 24, seven_day: 34 }), { status: 200 });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const read = () => readOfficialQuota({
+    home,
+    grokHome,
+    snapshotPath,
+    now,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  const [first, second] = await Promise.all([read(), read()]);
+  assert.equal(claudeCalls, 1);
+  assert.equal(first.claude?.windowPct, 24);
+  assert.equal(second.claude?.windowPct, 24);
+});
+
+test("Claude ignores malformed snapshot data", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const stateDir = join(home, "state");
+  const snapshotPath = join(stateDir, "official-quota.json");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(snapshotPath, JSON.stringify({ version: 1, claude: { loadedAt: "yesterday" } }));
+  let claudeCalls = 0;
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    snapshotPath,
+    fetchImpl: async (input) => {
+      if (String(input) === CLAUDE_USAGE_URL) {
+        claudeCalls += 1;
+        return new Response(JSON.stringify({ five_hour: 24, seven_day: 34 }), { status: 200 });
+      }
+      return new Response(JSON.stringify(LIVE), { status: 200 });
+    },
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  assert.equal(claudeCalls, 1);
+  assert.equal(q.claude?.windowPct, 24);
+  assert.equal(q.claude?.weekPct, 34);
+});
+
+test("Claude does not reuse a persisted success after the one-hour stale window", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    snapshotPath,
+    now: at,
+    fetchImpl: async (input) => {
+      if (String(input) === CLAUDE_USAGE_URL) {
+        claudeCalls += 1;
+        if (claudeCalls === 1) {
+          return new Response(JSON.stringify({
+            five_hour: 24,
+            seven_day: 34,
+            limits: [{
+              kind: "weekly_scoped",
+              scope: { model: { display_name: "Fable" } },
+              percent: 26,
+            }],
+          }), { status: 200 });
+        }
+        return new Response("rate limited", { status: 429 });
+      }
+      return new Response(JSON.stringify(LIVE), { status: 200 });
+    },
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  await readAt(now);
+  clearOfficialCache();
+  const expired = await readAt(now + CLAUDE_USAGE_STALE_MS + 1);
+
+  assert.equal(claudeCalls, 2);
+  assert.equal(expired.claude?.windowPct, 7);
+  assert.equal(expired.claude?.weekPct, 19);
+  assert.equal(expired.claude?.modelWeekLimits?.fable, undefined);
+  assert.equal(expired.claude?.source, "plan-usage-history");
 });
 
 test("Claude OAuth auth parser rejects expired and empty credentials", () => {
