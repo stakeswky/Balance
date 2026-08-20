@@ -6,6 +6,7 @@ import { formatDuration, formatTokens, formatUsd, formatUsdRange, modelLabel } f
 import { MeterBar } from "@/components/synq/meter-bar";
 import { inWindow, modelShares, weightedTokens } from "@/lib/quota/engine";
 import { grokProductLabel, type OfficialProductShare } from "@/lib/quota/official";
+import { parallelTaskSummary } from "@/lib/quota/parallel-tasks";
 import {
   apiEquivalentSections,
   effectiveQuotaStatus,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/quota/presentation";
 import type { QuotaValue } from "@/lib/quota/quota-value";
 import type {
+  AgentLiveInfo,
   MeterSnapshot,
   ModelWeekLimitSnapshot,
   PlanDef,
@@ -48,6 +50,7 @@ export function AgentCard({
   meter,
   session,
   live,
+  activeTasks,
   liveNote,
   windowLabel = "5 小时窗",
   quotaNote,
@@ -65,6 +68,7 @@ export function AgentCard({
   meter: MeterSnapshot;
   session: SessionState | null;
   live: boolean;
+  activeTasks?: AgentLiveInfo[];
   liveNote?: string;
   windowLabel?: string;
   quotaNote?: string;
@@ -92,6 +96,7 @@ export function AgentCard({
   const l1 = formatL1(weekValue);
   const winL1 = formatL1(windowValue);
   const creditL1 = formatCreditL1(weekValue);
+  const parallel = parallelTaskSummary(activeTasks ?? [], live);
 
   return (
     <Card>
@@ -303,7 +308,32 @@ export function AgentCard({
         {valueSections.some((section) => section.value.externalUsageDetected) ? " · 检测到本机以外用量" : ""}
       </p>
 
-      {session && live ? (
+      {parallel ? (
+        <div className="mt-5 rounded-md bg-raised px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs tracking-wide text-faint uppercase">并行任务</p>
+            <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-xs text-mute">
+              {parallel.total} 个活跃
+            </span>
+          </div>
+          <ul className="mt-2 space-y-1.5">
+            {parallel.visible.map((task) => (
+              <li key={task.actorId ?? task.sessionId} className="flex min-w-0 items-center gap-2 text-xs">
+                <span className="size-1.5 shrink-0 rounded-full bg-ok" />
+                <span className="min-w-0 flex-1 truncate text-ink">{task.task}</span>
+                <span className="shrink-0 text-faint">
+                  {task.actorKind === "workflow-subagent"
+                    ? "工作流"
+                    : task.actorKind === "subagent"
+                      ? "子代理"
+                      : "会话"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {parallel.overflow > 0 ? <p className="mt-2 text-xs text-faint">另有 {parallel.overflow} 个任务</p> : null}
+        </div>
+      ) : session && live ? (
         <div className="mt-5 rounded-md bg-raised px-3 py-3">
           <p className="text-xs tracking-wide text-faint uppercase">实时会话</p>
           <p className="mt-1 text-sm text-ink">{session.task}</p>

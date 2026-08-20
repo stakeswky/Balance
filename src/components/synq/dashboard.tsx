@@ -62,6 +62,9 @@ export function Dashboard() {
   const claudeWriting = useQuota((s) => s.claudeWriting);
   const grokWriting = useQuota((s) => s.grokWriting);
   const codexWriting = useQuota((s) => s.codexWriting);
+  const activeClaude = useQuota((s) => s.activeClaude);
+  const activeGrok = useQuota((s) => s.activeGrok);
+  const activeCodex = useQuota((s) => s.activeCodex);
   const grokPlanId = useQuota((s) => s.grokPlanId);
   const grokSession = useQuota((s) => s.grokSession);
   const claudePlanId = useQuota((s) => s.claudePlanId);
@@ -513,6 +516,7 @@ export function Dashboard() {
                   meter={claudeMeter}
                   session={claudeSession}
                   live={liveClaude}
+                  activeTasks={activeClaude}
                   quotaNote={
                     official.claude
                       ? claudeFableLimit
@@ -543,6 +547,7 @@ export function Dashboard() {
                   meter={grokMeter}
                   session={grokSession}
                   live={liveGrok}
+                  activeTasks={activeGrok}
                   windowLabel="本周额度"
                   quotaNote={
                     official.grok
@@ -574,6 +579,7 @@ export function Dashboard() {
                   meter={codexMeter}
                   session={codexSession}
                   live={liveCodex}
+                  activeTasks={activeCodex}
                   windowLabel={official.codex?.windowKind === "weekly" ? "本周额度" : "5 小时窗"}
                   quotaNote={
                     official.codex
