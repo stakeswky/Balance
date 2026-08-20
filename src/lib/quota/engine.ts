@@ -2,10 +2,12 @@ import { costBreakdown, eventRawTokens } from "./cost.ts";
 import { modelDisplayLabel } from "./model-label.ts";
 import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, MODEL_META, planById } from "./plans.ts";
 import type { OfficialSlice } from "./official.ts";
+import { eventsInWindow, windowBounds } from "./quota-value.ts";
 import type {
   AgentId,
   MeterSnapshot,
   ModelId,
+  ModelWeekLimitSnapshot,
   ModelShare,
   PlanDef,
   UsageEvent,
@@ -57,6 +59,33 @@ export function eventWeekShare(event: UsageEvent, plan: PlanDef, boostPct: numbe
     return reason * 0.72 + tok * 0.28;
   }
   return (weightedTokens(event) / (plan.weekTokenBudget * boost)) * 100;
+}
+
+export function modelWeekLimitFor(
+  events: UsageEvent[],
+  plan: PlanDef,
+  official: OfficialSlice | null | undefined,
+  model: ModelId,
+  now: number,
+  boostPct: number,
+): ModelWeekLimitSnapshot | null {
+  const limitPctOfWeek = plan.modelWeekLimitPct?.[model];
+  if (limitPctOfWeek == null || limitPctOfWeek <= 0) return null;
+
+  const boost = 1 + Math.max(0, boostPct) / 100;
+  const budget = plan.weekTokenBudget * boost * (limitPctOfWeek / 100);
+  const bounds = windowBounds(official, "weekly", now);
+  const weighted = eventsInWindow(events, plan.agent, bounds.start, bounds.end)
+    .filter((event) => event.model === model)
+    .reduce((sum, event) => sum + weightedTokens(event), 0);
+
+  return {
+    model,
+    limitPctOfWeek,
+    weightedTokens: weighted,
+    budget,
+    usedPct: clampPct(budget > 0 ? (weighted / budget) * 100 : 0),
+  };
 }
 
 export function meterFor(

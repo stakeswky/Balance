@@ -6,9 +6,20 @@ import { formatDuration, formatTokens, formatUsd, formatUsdRange, modelLabel } f
 import { MeterBar } from "@/components/synq/meter-bar";
 import { inWindow, modelShares, weightedTokens } from "@/lib/quota/engine";
 import { grokProductLabel, type OfficialProductShare } from "@/lib/quota/official";
-import { apiEquivalentSections, formatCreditRange, formatCredits } from "@/lib/quota/presentation";
+import {
+  apiEquivalentSections,
+  effectiveQuotaStatus,
+  formatCreditRange,
+  formatCredits,
+} from "@/lib/quota/presentation";
 import type { QuotaValue } from "@/lib/quota/quota-value";
-import type { MeterSnapshot, PlanDef, SessionState, UsageEvent } from "@/lib/quota/types";
+import type {
+  MeterSnapshot,
+  ModelWeekLimitSnapshot,
+  PlanDef,
+  SessionState,
+  UsageEvent,
+} from "@/lib/quota/types";
 import { WEEK_MS, WINDOW_MS } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +52,7 @@ export function AgentCard({
   windowLabel = "5 小时窗",
   quotaNote,
   products,
+  modelWeekLimit,
   weekValue,
   windowValue,
   events,
@@ -57,6 +69,7 @@ export function AgentCard({
   windowLabel?: string;
   quotaNote?: string;
   products?: OfficialProductShare[];
+  modelWeekLimit?: ModelWeekLimitSnapshot | null;
   weekValue?: QuotaValue;
   windowValue?: QuotaValue;
   events: UsageEvent[];
@@ -68,6 +81,7 @@ export function AgentCard({
   const primaryPct = windowLabel === "本周额度" ? meter.weekPct : meter.windowPct;
   const remain = Math.max(0, 100 - primaryPct);
   const weighted = inWindow(events, now, WINDOW_MS, meter.agent).reduce((s, e) => s + weightedTokens(e), 0);
+  const effectiveStatus = effectiveQuotaStatus(meter.status, modelWeekLimit?.usedPct);
   const barTone = meter.status === "critical" ? "crit" : meter.status === "watch" ? "warn" : tone;
   const primaryKind = windowLabel === "本周额度" ? "weekly" : "five_hour";
   const primary = primaryKind === "weekly" ? weekValue : windowValue;
@@ -86,7 +100,7 @@ export function AgentCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-faint")} />
             <CardTitle>{name}</CardTitle>
-            <Badge tone={meter.status}>{statusCopy[meter.status]}</Badge>
+            <Badge tone={effectiveStatus}>{statusCopy[effectiveStatus]}</Badge>
           </div>
           <CardHint className="mt-1 break-words">
             {plan.name} · {adapter}
@@ -153,6 +167,24 @@ export function AgentCard({
               tone={meter.weekPct >= 88 ? "crit" : meter.weekPct >= 72 ? "warn" : tone}
               label={quotaNote ? "本周额度（官方）" : "本周额度"}
             />
+            {modelWeekLimit ? (
+              <>
+                <MeterBar
+                  value={modelWeekLimit.usedPct}
+                  tone={
+                    modelWeekLimit.usedPct >= 88
+                      ? "crit"
+                      : modelWeekLimit.usedPct >= 72
+                        ? "warn"
+                        : tone
+                  }
+                  label="Fable 5 周额度（本机估算）"
+                />
+                <p className="text-xs leading-relaxed text-faint">
+                  {`Claude Max 的 Fable 5 上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；未包含其他设备用量。`}
+                </p>
+              </>
+            ) : null}
           </>
         )}
       </div>

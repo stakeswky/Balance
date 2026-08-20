@@ -204,3 +204,22 @@ test("official samples are calibrated from realEvents instead of demo events", (
   assert.ok(sample.cumulativeObservedUsd > 0);
   assert.ok(sample.cumulativeObservedUsd < 0.02);
 });
+
+test("same-tick Claude total and Fable alerts receive distinct ids", () => {
+  useQuota.setState({ alerts: [] });
+  useQuota.getState().pushAlert({
+    ts: 1_000,
+    agent: "claude",
+    kind: "week",
+    message: "Claude Code 本周额度已用 90%",
+  });
+  useQuota.getState().pushAlert({
+    ts: 1_000,
+    agent: "claude",
+    kind: "week",
+    message: "Claude Code Fable 5 周额度已用 90%",
+  });
+
+  assert.equal(useQuota.getState().alerts.length, 2);
+  assert.equal(new Set(useQuota.getState().alerts.map((alert) => alert.id)).size, 2);
+});

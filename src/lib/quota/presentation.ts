@@ -47,6 +47,35 @@ export function primaryWindowResetsAt(meter: MeterSnapshot, kind: PrimaryWindowK
   return kind === "weekly" ? meter.weekResetsAt : meter.windowResetsAt;
 }
 
+export function effectiveQuotaStatus(
+  meterStatus: MeterSnapshot["status"],
+  extraUsedPct: number | null | undefined,
+): MeterSnapshot["status"] {
+  const extraStatus =
+    extraUsedPct == null || extraUsedPct < 72 ? "ok" : extraUsedPct >= 88 ? "critical" : "watch";
+  if (meterStatus === "critical" || extraStatus === "critical") return "critical";
+  if (meterStatus === "watch" || extraStatus === "watch") return "watch";
+  return "ok";
+}
+
+export function tightestQuota<T extends { pct: number }>(limits: readonly T[]): T | null {
+  return [...limits].sort((a, b) => b.pct - a.pct)[0] ?? null;
+}
+
+export function quotaAlertLatch(
+  usedPct: number | null,
+  threshold: number,
+  warned: boolean,
+): { triggered: boolean; nextWarned: boolean } {
+  if (usedPct == null || usedPct < threshold - 12) {
+    return { triggered: false, nextWarned: false };
+  }
+  if (usedPct >= threshold) {
+    return { triggered: !warned, nextWarned: true };
+  }
+  return { triggered: false, nextWarned: warned };
+}
+
 export function quotaAlertDecision(opts: {
   meter: MeterSnapshot;
   kind: PrimaryWindowKind;

@@ -13,7 +13,7 @@ Synq 是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 
 ## 功能
 
 - 同时监听 Claude Code、Grok 和 Codex 的本地 JSONL 用量。
-- 获取 Claude 5h/7d、Grok 共享周池和 Codex 官方订阅百分比。
+- 获取 Claude 5h/7d 官方利用率，并按本机日志估算 Claude Max 的 Fable 5 周子额度（总周额度的 50%）；同时读取 Grok 共享周池和 Codex 官方订阅百分比。
 - 按版本化公开价格计算 L1 已观测 API 等价金额。
 - 使用同窗口连续样本估计 L2 整窗价值和 L3 剩余价值区间。
 - 显示价格覆盖率、模型组合、置信度、reset 时间、实时会话与路由建议。

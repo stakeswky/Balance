@@ -163,7 +163,13 @@ export const useQuota = create<QuotaState>()(
       setAlertWeek: (n) => set({ alertWeekPct: Math.max(40, Math.min(99, Math.round(n))) }),
       pushAlert: (alert) =>
         set({
-          alerts: [{ ...alert, id: `al_${alert.ts}_${alert.agent}` }, ...get().alerts].slice(0, MAX_ALERTS),
+          alerts: [
+            {
+              ...alert,
+              id: `al_${alert.ts}_${alert.agent}_${alert.kind}_${alert.message}`,
+            },
+            ...get().alerts,
+          ].slice(0, MAX_ALERTS),
         }),
       clearAlerts: () => set({ alerts: [] }),
       setAgentAvailability: (agentAvailability) => {

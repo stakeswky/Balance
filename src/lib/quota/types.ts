@@ -60,7 +60,16 @@ export interface PlanDef {
   weekTokenBudget: number;
   windowReasoningMin: number;
   weekReasoningMin: number;
+  modelWeekLimitPct?: Partial<Record<ModelId, number>>;
   kind: "subscription" | "api";
+}
+
+export interface ModelWeekLimitSnapshot {
+  model: ModelId;
+  limitPctOfWeek: number;
+  weightedTokens: number;
+  budget: number;
+  usedPct: number;
 }
 
 export interface MeterSnapshot {

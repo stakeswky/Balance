@@ -15,13 +15,15 @@ import { UsageChart } from "@/components/synq/usage-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { eventsForAgents, visibleAgentIds } from "@/lib/quota/agent-availability";
-import { applyOfficial, meterFor } from "@/lib/quota/engine";
+import { applyOfficial, meterFor, modelWeekLimitFor } from "@/lib/quota/engine";
 import { inferCodexProPlanId } from "@/lib/quota/estimate";
 import { planById } from "@/lib/quota/plans";
 import {
   primaryUsagePercent,
   primaryWindowResetsAt,
   quotaAlertDecision,
+  quotaAlertLatch,
+  tightestQuota,
   type PrimaryWindowKind,
 } from "@/lib/quota/presentation";
 import { quotaValueFor } from "@/lib/quota/quota-value";
@@ -43,6 +45,7 @@ export function Dashboard() {
   const warned = useRef({
     claudeWin: false,
     claudeWeek: false,
+    claudeFable: false,
     grokWin: false,
     grokWeek: false,
     codexWin: false,
@@ -130,6 +133,14 @@ export function Dashboard() {
         meterFor(activeEvents, "claude", planById(state.claudePlanId), t, state.weekBoostPct),
         state.official.claude,
       );
+      const claudeFableLimit = modelWeekLimitFor(
+        activeEvents,
+        planById(state.claudePlanId),
+        state.official.claude,
+        "fable",
+        t,
+        state.weekBoostPct,
+      );
       const grokMeter = applyOfficial(
         meterFor(activeEvents, "grok", planById(state.grokPlanId), t, state.weekBoostPct),
         state.official.grok,
@@ -147,6 +158,17 @@ export function Dashboard() {
           "claudeWeek",
           "Claude Code",
         );
+        const fableAlert = quotaAlertLatch(
+          claudeFableLimit?.usedPct ?? null,
+          state.alertWeekPct,
+          warned.current.claudeFable,
+        );
+        warned.current.claudeFable = fableAlert.nextWarned;
+        if (claudeFableLimit && fableAlert.triggered) {
+          const message = `Claude Code Fable 5 周额度已用 ${claudeFableLimit.usedPct.toFixed(0)}%`;
+          toast.error(message);
+          state.pushAlert({ ts: t, agent: "claude", kind: "week", message });
+        }
       }
       if (activeAgents.includes("grok")) {
         check(
@@ -261,6 +283,10 @@ export function Dashboard() {
       ),
     [visibleEvents, claudePlan, now, weekBoostPct, official.claude],
   );
+  const claudeFableLimit = useMemo(
+    () => modelWeekLimitFor(visibleEvents, claudePlan, official.claude, "fable", now, weekBoostPct),
+    [visibleEvents, claudePlan, official.claude, now, weekBoostPct],
+  );
   const grokMeter = useMemo(
     () =>
       applyOfficial(meterFor(visibleEvents, "grok", grokPlan, now, weekBoostPct), official.grok),
@@ -317,11 +343,20 @@ export function Dashboard() {
     { meter: codexMeter, kind: official.codex?.windowKind ?? "five_hour" },
   ] satisfies { meter: typeof claudeMeter; kind: PrimaryWindowKind }[];
   const primaryMeters = allPrimaryMeters.filter(({ meter }) => visibleAgents.includes(meter.agent));
-  const tighter =
-    [...primaryMeters].sort(
-      (a, b) => primaryUsagePercent(b.meter, b.kind) - primaryUsagePercent(a.meter, a.kind),
-    )[0] ?? null;
-  const tighterPct = tighter ? primaryUsagePercent(tighter.meter, tighter.kind) : 0;
+  const primaryLimits = primaryMeters.map(({ meter, kind }) => ({
+    label: AGENT_LABEL[meter.agent],
+    pct: primaryUsagePercent(meter, kind),
+    resetsAt: primaryWindowResetsAt(meter, kind),
+  }));
+  if (claudeFableLimit && visibleAgents.includes("claude")) {
+    primaryLimits.push({
+      label: "Claude Fable 5",
+      pct: claudeFableLimit.usedPct,
+      resetsAt: claudeMeter.weekResetsAt,
+    });
+  }
+  const tighter = tightestQuota(primaryLimits);
+  const tighterPct = tighter?.pct ?? 0;
   const watching = visibleAgents
     .map((agent) => {
       if (agent === "claude") return liveClaude ? "Claude" : null;
@@ -414,9 +449,7 @@ export function Dashboard() {
                     {Math.max(0, 100 - tighterPct).toFixed(0)}
                     <span className="ml-1 text-xl text-mute">%</span>
                   </p>
-                  <p className="mt-3 text-sm text-mute">
-                    {AGENT_LABEL[tighter.meter.agent]} 先碰到上限
-                  </p>
+                  <p className="mt-3 text-sm text-mute">{tighter.label} 先碰到上限</p>
                   <dl className="mt-5 space-y-2 text-xs">
                     <div className="flex justify-between">
                       <dt className="text-faint">本周 API 等价</dt>
@@ -429,9 +462,7 @@ export function Dashboard() {
                     <div className="flex justify-between">
                       <dt className="text-faint">窗口回补</dt>
                       <dd className="font-mono tabular">
-                        {formatDuration(
-                          Math.max(0, primaryWindowResetsAt(tighter.meter, tighter.kind) - now),
-                        )}
+                        {formatDuration(Math.max(0, tighter.resetsAt - now))}
                       </dd>
                     </div>
                   </dl>
@@ -490,6 +521,7 @@ export function Dashboard() {
                         ? "jsonl 正在写入"
                         : "已接上日志，等待新回合"
                   }
+                  modelWeekLimit={claudeFableLimit}
                   weekValue={claudeWeekVal}
                   windowValue={claudeWinVal}
                   events={visibleEvents}

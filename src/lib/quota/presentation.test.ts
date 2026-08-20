@@ -4,12 +4,15 @@ import { applyOfficial, routingAdvice } from "./engine.ts";
 import type { OfficialSlice } from "./official.ts";
 import {
   apiEquivalentSections,
+  effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
   primaryUsagePercent,
   primaryWindowLabel,
   primaryWindowResetsAt,
   quotaAlertDecision,
+  quotaAlertLatch,
+  tightestQuota,
 } from "./presentation.ts";
 import type { QuotaValue } from "./quota-value.ts";
 import type { MeterSnapshot } from "./types.ts";
@@ -185,4 +188,37 @@ test("sample-insufficient sections remain visible", () => {
   const sections = apiEquivalentSections("claude", "five_hour", none, none);
   assert.equal(sections.length, 2);
   assert.equal(sections[0]?.value.confidence, "none");
+});
+
+test("Fable sub-limit can raise the Claude card status", () => {
+  assert.equal(effectiveQuotaStatus("ok", 90), "critical");
+  assert.equal(effectiveQuotaStatus("ok", 75), "watch");
+  assert.equal(effectiveQuotaStatus("critical", 10), "critical");
+});
+
+test("tightest quota includes a stricter Fable sub-limit", () => {
+  const result = tightestQuota([
+    { label: "Claude", pct: 30, resetsAt: 10 },
+    { label: "Claude Fable 5", pct: 80, resetsAt: 20 },
+  ]);
+  assert.deepEqual(result, { label: "Claude Fable 5", pct: 80, resetsAt: 20 });
+});
+
+test("Fable alert latch triggers once and unlocks after a 12 point drop", () => {
+  assert.deepEqual(quotaAlertLatch(90, 85, false), {
+    triggered: true,
+    nextWarned: true,
+  });
+  assert.deepEqual(quotaAlertLatch(90, 85, true), {
+    triggered: false,
+    nextWarned: true,
+  });
+  assert.deepEqual(quotaAlertLatch(72, 85, true), {
+    triggered: false,
+    nextWarned: false,
+  });
+  assert.deepEqual(quotaAlertLatch(null, 85, true), {
+    triggered: false,
+    nextWarned: false,
+  });
 });
