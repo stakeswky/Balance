@@ -27,6 +27,31 @@ Synq 是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 
 | Grok | `$GROK_HOME/sessions/**/updates.jsonl` 或 `~/.grok/sessions/**/updates.jsonl` | Grok billing API；`~/.grok/logs/unified.jsonl` 后备 |
 | Codex | `$CODEX_HOME/sessions/**/rollout-*.jsonl` 或 `~/.codex/sessions/**/rollout-*.jsonl` | ChatGPT `/wham/usage`；session `rate_limits` 后备 |
 
+## macOS app
+
+The first desktop build targets Apple Silicon Macs. Download the GitHub Actions artifact named `Synq-macos-arm64`, unzip `Synq-macos-arm64.app.zip` or open the included DMG, then launch Synq. Node.js, Rust, Docker, and a database are bundled or unnecessary.
+
+The current build uses macOS ad-hoc signing, not Apple Developer ID signing or notarization. A build downloaded from the internet can therefore show a macOS security prompt on first launch.
+
+Maintainers can build the same artifacts locally on an Apple Silicon Mac:
+
+```bash
+npm ci
+npm test
+npm run typecheck
+npm run desktop:prepare
+npm run desktop:test
+npm run desktop:build
+```
+
+Before running the native verification suite, grant the terminal application that launches it permission under macOS **System Settings → Privacy & Security → Accessibility**. Then verify the already-built app and DMG with one command:
+
+```bash
+npm run desktop:verify
+```
+
+This exercises environment and auth isolation, the real app UI and normal close path, sidecar cleanup after a parent `SIGKILL`, the occupied-port `startup-error` path, and the packaged DMG with `hdiutil verify`.
+
 ## 快速开始
 
 要求 Node.js 22 或更高版本。

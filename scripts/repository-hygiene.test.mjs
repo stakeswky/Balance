@@ -41,6 +41,48 @@ test("README documents local usage, verification, and real screenshots", () => {
   assert.ok(existsSync(join(root, "screenshots/claude-grok-quota-mobile.png")));
 });
 
+test("macOS verification is one-command and documented", () => {
+  const packageJson = JSON.parse(read("package.json"));
+  for (const script of [
+    "desktop:verify:security",
+    "desktop:verify:app",
+    "desktop:verify:crash",
+    "desktop:verify:startup-error",
+    "desktop:verify:dmg",
+    "desktop:verify:ci",
+  ]) {
+    assert.equal(typeof packageJson.scripts[script], "string", `missing npm script: ${script}`);
+  }
+  assert.ok(
+    packageJson.scripts["desktop:verify:security"].includes("verify-macos-env-isolation.sh"),
+    "desktop:verify:security omits packaged environment isolation",
+  );
+  assert.ok(
+    packageJson.scripts["desktop:verify:security"].includes("verify-desktop-security.mjs"),
+    "desktop:verify:security omits live Host/Fetch-Metadata verification",
+  );
+  const ciVerify = packageJson.scripts["desktop:verify:ci"];
+  for (const script of ["security", "crash", "dmg"]) {
+    assert.ok(ciVerify.includes(`desktop:verify:${script}`), `desktop:verify:ci omits ${script}`);
+  }
+  const verify = packageJson.scripts["desktop:verify"];
+  assert.equal(typeof verify, "string", "missing npm script: desktop:verify");
+  for (const script of ["security", "app", "crash", "startup-error", "dmg"]) {
+    assert.ok(verify.includes(`desktop:verify:${script}`), `desktop:verify omits ${script}`);
+  }
+
+  const readme = read("README.md");
+  for (const required of [
+    "npm run desktop:verify",
+    "Accessibility",
+    "SIGKILL",
+    "startup-error",
+    "hdiutil verify",
+  ]) {
+    assert.ok(readme.includes(required), `README missing desktop verification detail: ${required}`);
+  }
+});
+
 test("private local artifacts are ignored", () => {
   const ignore = read(".gitignore").split(/\r?\n/);
   for (const entry of [
