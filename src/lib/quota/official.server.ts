@@ -25,9 +25,27 @@ export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const GROK_BILLING_CACHE_MS = 30_000;
 export const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const CLAUDE_USAGE_STALE_MS = 60 * 60 * 1000;
+export const CLAUDE_BACKOFF_BASE_MS = 30_000;
+export const CLAUDE_BACKOFF_MAX_MS = 60 * 60 * 1000;
 
 export interface ClaudeOauthAuth {
   accessToken: string;
+}
+
+interface ClaudeUsageFetchResult {
+  slice: OfficialSlice | null;
+  status: number | null;
+  retryAfterMs: number | null;
+}
+
+interface ClaudeCacheEntry {
+  checkedAt: number;
+  loadedAt: number;
+  slice: OfficialSlice | null;
+  failureCount: number;
+  nextAllowedAt: number;
+  updatedAt: number;
+  lastAttemptFailed: boolean;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -50,7 +68,7 @@ const execFileText: ExecFileText = async (file, args, options) => {
   const result = await execFileAsync(file, args, options);
   return { stdout: String(result.stdout) };
 };
-const claudeCache = new Map<string, { checkedAt: number; loadedAt: number; slice: OfficialSlice | null }>();
+const claudeCache = new Map<string, ClaudeCacheEntry>();
 const grokCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 const codexCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 
@@ -384,11 +402,26 @@ export async function fetchGrokBilling(
   }
 }
 
-export async function fetchClaudeUsage(
+export function claudeRetryAfterMs(value: string | null, now: number): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  const raw = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now;
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return Math.max(1000, Math.min(CLAUDE_BACKOFF_MAX_MS, Math.ceil(raw)));
+}
+
+function claudeBackoffMs(failureCount: number, retryAfterMs: number | null): number {
+  if (retryAfterMs != null) return retryAfterMs;
+  const exponent = Math.max(0, Math.min(10, failureCount - 1));
+  return Math.min(CLAUDE_BACKOFF_MAX_MS, CLAUDE_BACKOFF_BASE_MS * 2 ** exponent);
+}
+
+async function fetchClaudeUsageResult(
   auth: ClaudeOauthAuth,
   opts?: { fetchImpl?: FetchLike; now?: number },
-): Promise<OfficialSlice | null> {
+): Promise<ClaudeUsageFetchResult> {
   const fetchImpl = opts?.fetchImpl ?? fetch;
+  const now = opts?.now ?? Date.now();
   try {
     const res = await fetchImpl(CLAUDE_USAGE_URL, {
       method: "GET",
@@ -399,15 +432,31 @@ export async function fetchClaudeUsage(
       },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return {
+        slice: null,
+        status: res.status,
+        retryAfterMs: res.status === 429
+          ? claudeRetryAfterMs(res.headers.get("retry-after"), now)
+          : null,
+      };
+    }
     const body: unknown = await res.json();
-    return parseClaudeUsagePayload(body, {
-      fetchedAt: opts?.now ?? Date.now(),
-      source: "oauth-usage",
-    });
+    return {
+      slice: parseClaudeUsagePayload(body, { fetchedAt: now, source: "oauth-usage" }),
+      status: res.status,
+      retryAfterMs: null,
+    };
   } catch {
-    return null;
+    return { slice: null, status: null, retryAfterMs: null };
   }
+}
+
+export async function fetchClaudeUsage(
+  auth: ClaudeOauthAuth,
+  opts?: { fetchImpl?: FetchLike; now?: number },
+): Promise<OfficialSlice | null> {
+  return (await fetchClaudeUsageResult(auth, opts)).slice;
 }
 
 export async function readOfficialQuota(opts?: {
@@ -429,10 +478,12 @@ export async function readOfficialQuota(opts?: {
   const codexLog = readCodexOfficialFromSessions(codexHome);
 
   const cacheMs = opts?.cacheMs ?? GROK_BILLING_CACHE_MS;
-  const claudeHit = !opts?.skipCache ? claudeCache.get(home) : undefined;
+  const claudeHit = claudeCache.get(home);
   const grokHit = !opts?.skipCache ? grokCache.get(grokHome) : undefined;
   const codexHit = !opts?.skipCache ? codexCache.get(codexHome) : undefined;
-  const claudeFresh = Boolean(claudeHit && now - claudeHit.checkedAt < cacheMs);
+  const claudeFresh = Boolean(
+    !opts?.skipCache && claudeHit && now - claudeHit.checkedAt < cacheMs,
+  );
   const grokFresh = Boolean(grokHit && now - grokHit.at < cacheMs);
   const codexFresh = Boolean(codexHit && now - codexHit.at < cacheMs);
   if (claudeFresh && grokFresh && codexFresh) {
@@ -445,25 +496,52 @@ export async function readOfficialQuota(opts?: {
 
   let claudeLive: OfficialSlice | null = claudeFresh ? (claudeHit?.slice ?? null) : null;
   if (!claudeFresh) {
-    const readAuth = opts?.readClaudeAuth ?? readClaudeOauthAuth;
-    const auth = await readAuth(home, now);
-    const fetched = auth
-      ? await fetchClaudeUsage(auth, { fetchImpl: opts?.fetchImpl, now })
-      : null;
-    if (fetched) {
-      claudeLive = fetched;
-      claudeCache.set(home, { checkedAt: now, loadedAt: now, slice: fetched });
-    } else {
-      const stale =
-        claudeHit && now - claudeHit.loadedAt <= CLAUDE_USAGE_STALE_MS
-          ? claudeHit.slice
-          : null;
+    if (claudeHit && now < claudeHit.nextAllowedAt) {
+      const stale = now - claudeHit.loadedAt <= CLAUDE_USAGE_STALE_MS
+        ? claudeHit.slice
+        : null;
       claudeLive = stale;
       claudeCache.set(home, {
+        ...claudeHit,
         checkedAt: now,
-        loadedAt: stale ? (claudeHit?.loadedAt ?? now) : 0,
+        loadedAt: stale ? claudeHit.loadedAt : 0,
         slice: stale,
       });
+    } else {
+      const readAuth = opts?.readClaudeAuth ?? readClaudeOauthAuth;
+      const auth = await readAuth(home, now);
+      const result = auth
+        ? await fetchClaudeUsageResult(auth, { fetchImpl: opts?.fetchImpl, now })
+        : { slice: null, status: null, retryAfterMs: null };
+      if (result.slice) {
+        claudeLive = result.slice;
+        claudeCache.set(home, {
+          checkedAt: now,
+          loadedAt: now,
+          slice: result.slice,
+          failureCount: 0,
+          nextAllowedAt: 0,
+          updatedAt: now,
+          lastAttemptFailed: false,
+        });
+      } else {
+        const stale = claudeHit && now - claudeHit.loadedAt <= CLAUDE_USAGE_STALE_MS
+          ? claudeHit.slice
+          : null;
+        const failureCount = auth ? (claudeHit?.failureCount ?? 0) + 1 : 0;
+        claudeLive = stale;
+        claudeCache.set(home, {
+          checkedAt: now,
+          loadedAt: stale ? (claudeHit?.loadedAt ?? 0) : 0,
+          slice: stale,
+          failureCount,
+          nextAllowedAt: auth
+            ? now + claudeBackoffMs(failureCount, result.retryAfterMs)
+            : 0,
+          updatedAt: now,
+          lastAttemptFailed: Boolean(auth),
+        });
+      }
     }
   }
 

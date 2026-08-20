@@ -9,6 +9,7 @@ import {
   claudeDesktopManagedPids,
   claudeOauthAuthFromCredentials,
   claudeOauthAuthFromProcessEnvironment,
+  claudeRetryAfterMs,
   clearOfficialCache,
   CODEX_USAGE_URL,
   GROK_BILLING_URL,
@@ -312,6 +313,119 @@ test("Claude usage cache keeps a successful Fable snapshot for at most 60 minute
   assert.equal(stale.claude?.modelWeekLimits?.fable?.usedPct, 24);
   assert.equal(expired.claude?.modelWeekLimits?.fable, undefined);
   assert.equal(claudeCalls, 3);
+});
+
+test("Claude 429 Retry-After suppresses repeated OAuth requests even with skipCache", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      if (claudeCalls === 1) {
+        return new Response("rate limited", {
+          status: 429,
+          headers: { "retry-after": "120" },
+        });
+      }
+      return new Response(JSON.stringify({ five_hour: 24, seven_day: 34 }), { status: 200 });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    now: at,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  await readAt(now);
+  await readAt(now + 30_000);
+  assert.equal(claudeCalls, 1);
+  const recovered = await readAt(now + 120_001);
+  assert.equal(claudeCalls, 2);
+  assert.equal(recovered.claude?.windowPct, 24);
+  assert.equal(recovered.claude?.weekPct, 34);
+});
+
+test("Claude failures back off exponentially and success resets the sequence", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) !== CLAUDE_USAGE_URL) {
+      return new Response(JSON.stringify(LIVE), { status: 200 });
+    }
+    claudeCalls += 1;
+    if (claudeCalls === 1 || claudeCalls === 2 || claudeCalls === 4) {
+      return new Response("rate limited", { status: 429 });
+    }
+    return new Response(JSON.stringify({ five_hour: 24, seven_day: 34 }), { status: 200 });
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    now: at,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  await readAt(now);
+  await readAt(now + 29_999);
+  assert.equal(claudeCalls, 1);
+  await readAt(now + 30_000);
+  await readAt(now + 89_999);
+  assert.equal(claudeCalls, 2);
+  await readAt(now + 90_000);
+  assert.equal(claudeCalls, 3);
+  await readAt(now + 90_001);
+  await readAt(now + 120_000);
+  assert.equal(claudeCalls, 4);
+  await readAt(now + 120_001);
+  assert.equal(claudeCalls, 5);
+});
+
+test("Claude Retry-After parses dates, rejects invalid values, and clamps long delays", () => {
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  assert.equal(claudeRetryAfterMs("Thu, 20 Aug 2026 12:02:00 GMT", now), 120_000);
+  assert.equal(claudeRetryAfterMs("3", now), 3_000);
+  assert.equal(claudeRetryAfterMs("0", now), null);
+  assert.equal(claudeRetryAfterMs("-3", now), null);
+  assert.equal(claudeRetryAfterMs("invalid", now), null);
+  assert.equal(claudeRetryAfterMs("7200", now), 60 * 60 * 1000);
+});
+
+test("Claude network failures use the same guarded backoff", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      throw new Error("offline");
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    now: at,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  await readAt(now);
+  await readAt(now + 29_999);
+  assert.equal(claudeCalls, 1);
+  await readAt(now + 30_000);
+  assert.equal(claudeCalls, 2);
 });
 
 test("Claude OAuth auth parser rejects expired and empty credentials", () => {
