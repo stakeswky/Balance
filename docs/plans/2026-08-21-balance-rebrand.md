@@ -2,7 +2,7 @@
 
 对应规格：`docs/designs/2026-08-21-balance-rebrand.md`
 日期：2026-08-21
-状态：待执行
+状态：实施完成（远端发布结果见 Git 历史）
 执行 worktree：`/Volumes/data/dev/synq-balance-rebrand`
 执行分支：`feat/balance-rebrand`
 
