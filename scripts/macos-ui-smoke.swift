@@ -12,6 +12,51 @@ private func fail(_ message: String) -> Never {
   exit(1)
 }
 
+private struct PersistedSettings: Decodable {
+  let claudePlanId: String
+  let grokPlanId: String
+  let codexPlanId: String
+  let weekBoostPct: Int
+  let alertWindowPct: Int
+  let alertWeekPct: Int
+  let onboardingComplete: Bool
+}
+
+private struct PersistenceSnapshot: Decodable {
+  let version: Int
+  let state: PersistedSettings
+}
+
+private let expectedSettings: PersistenceSnapshot? = {
+  guard let path = ProcessInfo.processInfo.environment["BALANCE_EXPECTED_SETTINGS"] else {
+    return nil
+  }
+  do {
+    return try JSONDecoder().decode(
+      PersistenceSnapshot.self,
+      from: Data(contentsOf: URL(fileURLWithPath: path))
+    )
+  } catch {
+    fail("could not decode Balance persistence snapshot: \(error)")
+  }
+}()
+
+private let planNameById = [
+  "claude-pro": "Claude Pro",
+  "claude-max-5x": "Claude Max 5×",
+  "claude-max-20x": "Claude Max 20×",
+  "claude-api": "Anthropic API",
+  "grok-free": "Grok",
+  "grok-super": "SuperGrok",
+  "grok-heavy": "SuperGrok Heavy",
+  "grok-api": "xAI API",
+  "chatgpt-plus": "ChatGPT Plus",
+  "chatgpt-pro-5x": "ChatGPT Pro 5×",
+  "chatgpt-pro-20x": "ChatGPT Pro 20×",
+  "chatgpt-team": "ChatGPT Business",
+  "openai-api": "OpenAI API",
+]
+
 private let startupErrorMode = CommandLine.arguments.count == 3 &&
   CommandLine.arguments[1] == "--startup-error"
 private let pidArgument = startupErrorMode ? CommandLine.arguments[2] :
@@ -24,7 +69,7 @@ guard (CommandLine.arguments.count == 2 || startupErrorMode),
 }
 
 guard AXIsProcessTrusted() else {
-  fail("macOS Accessibility permission is required for the native Synq UI smoke test")
+  fail("macOS Accessibility permission is required for the native Balance UI smoke test")
 }
 
 private let app = AXUIElementCreateApplication(pid_t(rawPid))
@@ -61,7 +106,7 @@ private func waitForWindow(timeout: TimeInterval) -> AXUIElement {
     }
     Thread.sleep(forTimeInterval: pollInterval)
   }
-  fail("Synq native window did not appear")
+  fail("Balance native window did not appear")
 }
 
 private func firstElement(
@@ -99,7 +144,42 @@ private func waitForExactText(_ target: String, timeout: TimeInterval) {
     if hasExactText(target) { return }
     Thread.sleep(forTimeInterval: pollInterval)
   }
-  fail("Synq native UI text did not appear: \(target)")
+  fail("Balance native UI text did not appear: \(target)")
+}
+
+private func numericAttribute(_ element: AXUIElement, _ name: String) -> Double? {
+  guard let value = attribute(element, name) else { return nil }
+  if let number = value as? NSNumber { return number.doubleValue }
+  if let string = value as? String { return Double(string) }
+  return nil
+}
+
+private func slider(named target: String) -> AXUIElement? {
+  guard let window = firstWindow() else { return nil }
+  return firstElement(in: window) {
+    stringAttribute($0, kAXRoleAttribute) == kAXSliderRole &&
+      elementHasExactText($0, target)
+  }
+}
+
+private func waitForSliderValue(
+  _ target: String,
+  expected: Int,
+  timeout: TimeInterval
+) {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if let match = slider(named: target),
+       let value = numericAttribute(match, kAXValueAttribute),
+       abs(value - Double(expected)) < 0.001 {
+      return
+    }
+    Thread.sleep(forTimeInterval: pollInterval)
+  }
+  let observed = slider(named: target)
+    .flatMap { numericAttribute($0, kAXValueAttribute) }
+    .map { String($0) } ?? "<missing>"
+  fail("Balance native UI slider \(target) expected \(expected), observed \(observed)")
 }
 
 private func button(named target: String) -> AXUIElement? {
@@ -110,7 +190,7 @@ private func button(named target: String) -> AXUIElement? {
   }
 }
 
-private enum InitialAppState {
+private enum InitialAppState: Equatable {
   case onboarding
   case dashboard
 }
@@ -122,7 +202,7 @@ private func initialAppState() -> InitialAppState? {
   func walk(_ element: AXUIElement, depth: Int) -> InitialAppState? {
     guard depth <= maximumDepth, visited < maximumElements else { return nil }
     visited += 1
-    if elementHasExactText(element, "Synq 初始设置") { return .onboarding }
+    if elementHasExactText(element, "余量初始设置") { return .onboarding }
     if stringAttribute(element, kAXRoleAttribute) == kAXButtonRole &&
        stringAttribute(element, kAXTitleAttribute) == "设置" {
       return .dashboard
@@ -142,7 +222,7 @@ private func waitForInitialAppState(timeout: TimeInterval) -> InitialAppState {
     if let state = initialAppState() { return state }
     Thread.sleep(forTimeInterval: 1)
   }
-  fail("Synq native UI did not leave its loading shell")
+  fail("Balance native UI did not leave its loading shell")
 }
 
 private func waitForButton(_ target: String, timeout: TimeInterval) -> AXUIElement {
@@ -151,14 +231,14 @@ private func waitForButton(_ target: String, timeout: TimeInterval) -> AXUIEleme
     if let match = button(named: target) { return match }
     Thread.sleep(forTimeInterval: pollInterval)
   }
-  fail("Synq native UI button did not appear: \(target)")
+  fail("Balance native UI button did not appear: \(target)")
 }
 
 private func press(_ target: String, timeout: TimeInterval) {
   let match = waitForButton(target, timeout: timeout)
   let result = AXUIElementPerformAction(match, kAXPressAction as CFString)
   guard result == .success else {
-    fail("Synq native UI button press failed for \(target): AXError \(result.rawValue)")
+    fail("Balance native UI button press failed for \(target): AXError \(result.rawValue)")
   }
 }
 
@@ -202,14 +282,14 @@ private func nativeWindowID(ownerPid: pid_t) -> Int? {
 
 private func printWindowEvidence(_ window: AXUIElement, prefix: String) {
   guard let point = cgPoint(window), let size = cgSize(window) else {
-    fail("could not read Synq native window bounds")
+    fail("could not read Balance native window bounds")
   }
   guard let windowID = nativeWindowID(ownerPid: pid_t(rawPid)) else {
-    fail("could not resolve the Synq CoreGraphics window id")
+    fail("could not resolve the Balance CoreGraphics window id")
   }
   let title = stringAttribute(window, kAXTitleAttribute)
-  guard title == "Synq" else {
-    fail("unexpected Synq native window title: \(title.isEmpty ? "<empty>" : title)")
+  guard title == "Balance" else {
+    fail("unexpected Balance native window title: \(title.isEmpty ? "<empty>" : title)")
   }
   let fields = [
     prefix,
@@ -230,18 +310,19 @@ let frontmostResult = AXUIElementSetAttributeValue(
   kCFBooleanTrue,
 )
 guard frontmostResult == .success else {
-  fail("could not bring the exact Synq process to the foreground: AXError \(frontmostResult.rawValue)")
+  fail("could not bring the exact Balance process to the foreground: AXError \(frontmostResult.rawValue)")
 }
 
 let initialWindow = waitForWindow(timeout: 15)
 
 if startupErrorMode {
-  waitForExactText("Synq 无法启动本地服务", timeout: 15)
+  waitForExactText("Balance 无法启动本地服务", timeout: 15)
   printWindowEvidence(firstWindow() ?? initialWindow, prefix: "native-startup-error-ok")
   exit(0)
 }
 
-switch waitForInitialAppState(timeout: 15) {
+private let observedInitialState = waitForInitialAppState(timeout: 15)
+switch observedInitialState {
 case .onboarding:
   let detectionDeadline = Date().addingTimeInterval(15)
   while Date() < detectionDeadline {
@@ -249,7 +330,7 @@ case .onboarding:
     Thread.sleep(forTimeInterval: pollInterval)
   }
   guard hasExactText("已找到") || hasExactText("未检测到") else {
-    fail("Synq native Agent detection did not resolve")
+    fail("Balance native Agent detection did not resolve")
   }
   press("查看演示", timeout: 10)
 case .dashboard:
@@ -258,6 +339,41 @@ case .dashboard:
 
 press("设置", timeout: 15)
 waitForExactText("本机监控", timeout: 10)
+
+if let expected = expectedSettings {
+  if expected.state.onboardingComplete,
+     observedInitialState != .dashboard {
+    fail("Balance did not restore the completed onboarding state")
+  }
+
+  for planId in [
+    expected.state.claudePlanId,
+    expected.state.grokPlanId,
+    expected.state.codexPlanId,
+  ] {
+    guard let planName = planNameById[planId] else {
+      fail("unknown persisted plan id: \(planId)")
+    }
+    _ = waitForButton("\(planName)，当前套餐", timeout: 10)
+  }
+
+  waitForSliderValue(
+    "五小时窗告警阈值",
+    expected: expected.state.alertWindowPct,
+    timeout: 10
+  )
+  waitForSliderValue(
+    "本周额度告警阈值",
+    expected: expected.state.alertWeekPct,
+    timeout: 10
+  )
+  waitForSliderValue(
+    "周额度加成百分比",
+    expected: expected.state.weekBoostPct,
+    timeout: 10
+  )
+  FileHandle.standardError.write(Data("native-persistence-ok\n".utf8))
+}
 
 let finalWindow = firstWindow() ?? initialWindow
 printWindowEvidence(finalWindow, prefix: "native-ui-ok")

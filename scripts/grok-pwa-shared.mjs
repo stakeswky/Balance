@@ -5,7 +5,7 @@
  * the Nitro bundler can both consume it.
  */
 
-export const DEFAULT_APP_NAME = "Grok App";
+export const DEFAULT_APP_NAME = "Balance";
 
 export function escapeHtml(value) {
   return String(value)

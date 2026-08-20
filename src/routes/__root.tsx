@@ -3,7 +3,7 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import "../styles.css";
 
-const APP_NAME = "Synq";
+const APP_NAME = "Balance";
 const host = import.meta.env.VITE_PUBLIC_HOSTNAME;
 const ogImage = host
   ? `https://og.grok.me/v1/card.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}&color=09090B`
@@ -17,8 +17,11 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Synq — Claude × Grok × Codex 额度监控" },
-      { name: "description", content: "协同监控 Claude Code、Grok 与 Codex 的模型用量，实时换算订阅额度。" },
+      { title: "余量 / Balance — Claude × Grok × Codex 额度监控" },
+      {
+        name: "description",
+        content: "协同监控 Claude Code、Grok 与 Codex 的模型用量，实时换算订阅额度。",
+      },
       { name: "apple-mobile-web-app-title", content: APP_NAME },
       { name: "theme-color", content: "#09090b" },
       { name: "twitter:card", content: "summary_large_image" },

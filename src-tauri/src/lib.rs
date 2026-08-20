@@ -187,7 +187,7 @@ fn wait_for_health(timeout: Duration) -> Result<(), String> {
         }
         thread::sleep(Duration::from_millis(200));
     }
-    Err("timed out waiting for the Synq desktop server".to_owned())
+    Err("timed out waiting for the Balance desktop server".to_owned())
 }
 
 fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
@@ -281,18 +281,18 @@ fn open_window(app: &AppHandle, label: &'static str, url: WebviewUrl) {
     let handle = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
         if let Err(error) = WebviewWindowBuilder::new(&handle, label, url)
-            .title("Synq")
+            .title("Balance")
             .inner_size(1440.0, 960.0)
             .min_inner_size(960.0, 680.0)
             .center()
             .resizable(true)
             .build()
         {
-            eprintln!("failed to create Synq window: {error}");
+            eprintln!("failed to create Balance window: {error}");
             handle.exit(1);
         }
     }) {
-        eprintln!("failed to schedule Synq window creation: {error}");
+        eprintln!("failed to schedule Balance window creation: {error}");
         app.exit(1);
     }
 }
@@ -322,7 +322,7 @@ fn bootstrap(app: AppHandle, state: SidecarState) {
             }
             let url = sidecar_url()
                 .parse()
-                .expect("the fixed Synq loopback URL must parse");
+                .expect("the fixed Balance loopback URL must parse");
             open_window(&app, "main", WebviewUrl::External(url));
         }
         Err(error) => {
@@ -357,14 +357,14 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building Synq")
+        .expect("error while building Balance")
         .run({
             let state = sidecar_state.clone();
             let bootstrap_state = bootstrap_state.clone();
             move |app, event| match event {
                 RunEvent::Ready => {
                     if claim_bootstrap(&bootstrap_state) {
-                        eprintln!("Synq desktop app is ready; starting bootstrap");
+                        eprintln!("Balance desktop app is ready; starting bootstrap");
                         let handle = app.clone();
                         let state_for_thread = state.clone();
                         thread::spawn(move || bootstrap(handle, state_for_thread));

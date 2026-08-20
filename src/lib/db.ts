@@ -186,7 +186,7 @@ async function createSql(): Promise<Sql> {
     );
   }
   if (dbSource === "disabled") {
-    throw new Error("Database access is disabled in the Synq desktop runtime");
+    throw new Error("Database access is disabled in the Balance desktop runtime");
   }
   return dbSource === "neon" ? createNeonSql() : createPgliteSql();
 }

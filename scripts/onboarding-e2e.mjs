@@ -4,7 +4,14 @@ import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
 import { checkedOutputPath, checkedUrl } from "./browser-guard.mjs";
 
-for (const key of ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"]) {
+for (const key of [
+  "http_proxy",
+  "https_proxy",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "all_proxy",
+]) {
   delete process.env[key];
 }
 process.env.NO_PROXY = "*";
@@ -80,9 +87,7 @@ function serializeAvailability(avail) {
 function isAvailabilityRequest(request) {
   const url = request.url();
   if (!url.includes("/_serverFn/") || request.method() !== "GET") return false;
-  return (
-    url.includes("cHVsbEFnZW50QXZhaWxhYmlsaXR5") || url.includes("pullAgentAvailability")
-  );
+  return url.includes("cHVsbEFnZW50QXZhaWxhYmlsaXR5") || url.includes("pullAgentAvailability");
 }
 
 function attachDiagnostics(page, bucket) {
@@ -113,7 +118,12 @@ async function newPage(browser, viewport) {
     const type = route.request().resourceType();
     await route.fulfill({
       status: 200,
-      contentType: type === "script" ? "application/javascript" : type === "stylesheet" ? "text/css" : "application/octet-stream",
+      contentType:
+        type === "script"
+          ? "application/javascript"
+          : type === "stylesheet"
+            ? "text/css"
+            : "application/octet-stream",
       body: "",
     });
   });
@@ -182,13 +192,15 @@ async function interceptAvailability(page, options = {}) {
 
 async function startFresh(page, interceptOptions) {
   await clearOriginStorage(page);
-  const hook = interceptOptions ? await interceptAvailability(page, interceptOptions) : { seen: () => 0, release() {} };
+  const hook = interceptOptions
+    ? await interceptAvailability(page, interceptOptions)
+    : { seen: () => 0, release() {} };
   await page.reload({ waitUntil: "domcontentloaded", timeout: 20_000 });
   return hook;
 }
 
 async function waitForOnboarding(page) {
-  await page.getByText("Synq 初始设置").waitFor({ timeout: 20_000 });
+  await page.getByText("余量初始设置").waitFor({ timeout: 20_000 });
 }
 
 async function enterWorkbench(page) {
@@ -201,7 +213,9 @@ async function openView(page, name) {
 }
 
 function cardAround(page, heading) {
-  return page.getByRole("heading", { name: heading, exact: true }).locator("xpath=ancestor::div[contains(@class,'rounded-2xl')][1]");
+  return page
+    .getByRole("heading", { name: heading, exact: true })
+    .locator("xpath=ancestor::div[contains(@class,'rounded-2xl')][1]");
 }
 
 async function overflow(page) {
@@ -239,9 +253,30 @@ async function assertCase(name, fn) {
 }
 
 const LABELS = {
-  claude: { card: "Claude Code", lane: "Claude", plan: "Claude Code 套餐", reportPlan: "若换 Claude 套餐", reportShare: "Claude 模型占比", import: "默认 Claude" },
-  grok: { card: "Grok", lane: "Grok", plan: "Grok 套餐", reportPlan: "若换 Grok 套餐", reportShare: "Grok 模型占比", import: "默认 Grok" },
-  codex: { card: "Codex", lane: "Codex", plan: "Codex 套餐", reportPlan: "若换 Codex 套餐", reportShare: "Codex 模型占比", import: "默认 Codex" },
+  claude: {
+    card: "Claude Code",
+    lane: "Claude",
+    plan: "Claude Code 套餐",
+    reportPlan: "若换 Claude 套餐",
+    reportShare: "Claude 模型占比",
+    import: "默认 Claude",
+  },
+  grok: {
+    card: "Grok",
+    lane: "Grok",
+    plan: "Grok 套餐",
+    reportPlan: "若换 Grok 套餐",
+    reportShare: "Grok 模型占比",
+    import: "默认 Grok",
+  },
+  codex: {
+    card: "Codex",
+    lane: "Codex",
+    plan: "Codex 套餐",
+    reportPlan: "若换 Codex 套餐",
+    reportShare: "Codex 模型占比",
+    import: "默认 Codex",
+  },
 };
 
 async function assertOneAgent(page, agent) {
@@ -261,14 +296,23 @@ async function assertOneAgent(page, agent) {
   const grokSeries = await page.locator('path[stroke="var(--color-grok)"]').count();
   const claudeSeries = await page.locator('path[stroke="var(--color-claude)"]').count();
   const codexSeries = await page.locator('path[stroke="var(--color-codex)"]').count();
-  if (agent === "claude" && (grokSeries || codexSeries)) throw new Error("chart still has Grok/Codex series");
-  if (agent === "grok" && (claudeSeries || codexSeries)) throw new Error("chart still has Claude/Codex series");
-  if (agent === "codex" && (claudeSeries || grokSeries)) throw new Error("chart still has Claude/Grok series");
+  if (agent === "claude" && (grokSeries || codexSeries))
+    throw new Error("chart still has Grok/Codex series");
+  if (agent === "grok" && (claudeSeries || codexSeries))
+    throw new Error("chart still has Claude/Codex series");
+  if (agent === "codex" && (claudeSeries || grokSeries))
+    throw new Error("chart still has Claude/Grok series");
 
   const advice = page.locator("main").filter({ hasText: "节奏" });
-  const adviceText = (await advice.count()) ? await page.locator("main").innerText() : await bodyText(page);
+  const adviceText = (await advice.count())
+    ? await page.locator("main").innerText()
+    : await bodyText(page);
   for (const other of hidden) {
-    if (adviceText.includes(`把重活交给 ${other.lane}`) || adviceText.includes(`${other.lane} 先歇`) || adviceText.includes(`${other.card} 切到`)) {
+    if (
+      adviceText.includes(`把重活交给 ${other.lane}`) ||
+      adviceText.includes(`${other.lane} 先歇`) ||
+      adviceText.includes(`${other.card} 切到`)
+    ) {
       throw new Error(`advice mentioned ${other.lane}`);
     }
   }
@@ -286,8 +330,12 @@ async function assertOneAgent(page, agent) {
     if (await dialog.count()) {
       const dialogText = await dialog.innerText();
       for (const other of hidden) {
-        if (dialogText.includes(other.card) || dialogText.includes(other.lane) && other.lane !== present.lane) {
-          if (dialogText.includes(other.card)) throw new Error(`session dialog mentioned ${other.card}`);
+        if (
+          dialogText.includes(other.card) ||
+          (dialogText.includes(other.lane) && other.lane !== present.lane)
+        ) {
+          if (dialogText.includes(other.card))
+            throw new Error(`session dialog mentioned ${other.card}`);
         }
       }
       await page.keyboard.press("Escape");
@@ -311,9 +359,22 @@ async function assertOneAgent(page, agent) {
 
   await openView(page, "插件");
   const adapters = cardAround(page, "适配器");
-  await adapters.getByText(present.card === "Claude Code" ? "Claude Code" : present.card === "Grok" ? "Grok CLI / Grok Build" : "Codex CLI").waitFor();
+  await adapters
+    .getByText(
+      present.card === "Claude Code"
+        ? "Claude Code"
+        : present.card === "Grok"
+          ? "Grok CLI / Grok Build"
+          : "Codex CLI",
+    )
+    .waitFor();
   for (const other of hidden) {
-    const adapterName = other.card === "Claude Code" ? "Claude Code" : other.card === "Grok" ? "Grok CLI / Grok Build" : "Codex CLI";
+    const adapterName =
+      other.card === "Claude Code"
+        ? "Claude Code"
+        : other.card === "Grok"
+          ? "Grok CLI / Grok Build"
+          : "Codex CLI";
     if (await adapters.getByText(adapterName, { exact: true }).count()) {
       throw new Error(`adapter card still shows ${adapterName}`);
     }
@@ -347,13 +408,13 @@ const browser = await chromium.launch({
 });
 
 try {
-  await assertCase("dev homepage is HTTP 200 with Synq title", async () => {
+  await assertCase("dev homepage is HTTP 200 with Balance title", async () => {
     const { context, page } = await newPage(browser, { width: 1280, height: 900 });
     const response = await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 20_000 });
     const title = await page.title();
     const status = response?.status() ?? 0;
     if (status !== 200) throw new Error(`status ${status}`);
-    if (!title.includes("Synq")) throw new Error(`title ${title}`);
+    if (!title.includes("Balance")) throw new Error(`title ${title}`);
     await context.close();
     return `${status} ${title}`;
   });
@@ -380,7 +441,8 @@ try {
       await page.screenshot({ path: shotPath("onboarding-e2e-desktop.png"), fullPage: true });
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("button", { name: "监控" }).waitFor({ timeout: 20_000 });
-      if (await page.getByText("Synq 初始设置").count()) throw new Error("onboarding returned after refresh");
+      if (await page.getByText("余量初始设置").count())
+        throw new Error("onboarding returned after refresh");
       report.consoleErrors.push(...bucket.consoleErrors);
       report.pageErrors.push(...bucket.pageErrors);
       report.requestFailures.push(...bucket.requestFailures);
@@ -450,7 +512,10 @@ try {
     await openView(page, "监控");
     await page.waitForTimeout(2800);
     const text = await bodyText(page);
-    if (text.includes("当前是演示数据") || (await page.getByRole("button", { name: "重置演示" }).count())) {
+    if (
+      text.includes("当前是演示数据") ||
+      (await page.getByRole("button", { name: "重置演示" }).count())
+    ) {
       throw new Error("demo chrome remained after turning demo off");
     }
     for (const task of DEMO_TASKS) {
@@ -472,21 +537,66 @@ try {
     return `samples ${beforeCount} -> ${after.state.quotaSamples.length}`;
   });
 
-  for (const [name, payload] of PROD ? [] : [
-    ["claude-only", { claude: true, grok: false, codex: false }],
-    ["grok-only", { claude: false, grok: true, codex: false }],
-    ["codex-only", { claude: false, grok: false, codex: true }],
-  ]) {
+  for (const [name, payload] of PROD
+    ? []
+    : [
+        ["claude-only", { claude: true, grok: false, codex: false }],
+        ["grok-only", { claude: false, grok: true, codex: false }],
+        ["codex-only", { claude: false, grok: false, codex: true }],
+      ]) {
     const agent = name.replace("-only", "");
-    await assertCase(`${name} hides the other agents across monitor/settings/plugin/report`, async () => {
+    await assertCase(
+      `${name} hides the other agents across monitor/settings/plugin/report`,
+      async () => {
+        const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
+        await startFresh(page, { payload });
+        await waitForOnboarding(page);
+        await page.getByText("已找到").first().waitFor({ timeout: 20_000 });
+        await enterWorkbench(page);
+        await assertOneAgent(page, agent);
+        if (name === "claude-only") {
+          await page.screenshot({ path: shotPath("onboarding-e2e-one-agent.png"), fullPage: true });
+        }
+        report.consoleErrors.push(...bucket.consoleErrors);
+        report.pageErrors.push(...bucket.pageErrors);
+        report.requestFailures.push(...bucket.requestFailures);
+        report.httpErrors.push(...bucket.httpErrors);
+        await context.close();
+      },
+    );
+  }
+
+  if (!PROD)
+    await assertCase("zero agents shows recoverable empty states", async () => {
       const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
-      await startFresh(page, { payload });
+      await startFresh(page, { payload: { claude: false, grok: false, codex: false } });
       await waitForOnboarding(page);
-      await page.getByText("已找到").first().waitFor({ timeout: 20_000 });
+      await page.getByText("未检测到").nth(2).waitFor({ timeout: 20_000 });
       await enterWorkbench(page);
-      await assertOneAgent(page, agent);
-      if (name === "claude-only") {
-        await page.screenshot({ path: shotPath("onboarding-e2e-one-agent.png"), fullPage: true });
+      await page.getByRole("heading", { name: "未发现可监控 Agent" }).waitFor();
+      await page.getByRole("button", { name: "打开设置" }).waitFor();
+      await page.screenshot({ path: shotPath("onboarding-e2e-empty.png"), fullPage: true });
+      await page.getByRole("button", { name: "打开设置" }).click();
+      await page.getByText("暂未检测到本机 Agent").waitFor();
+      await page.getByRole("button", { name: "重新检测" }).waitFor();
+      const demoSwitch = page.getByRole("switch", { name: "演示数据" });
+      await demoSwitch.waitFor();
+      await openView(page, "报告");
+      await page.getByRole("heading", { name: "暂无可报告的 Agent" }).waitFor();
+      await openView(page, "插件");
+      await page.getByRole("heading", { name: "事件协议" }).waitFor();
+      const imports = cardAround(page, "导入用量");
+      const merge = imports.getByRole("button", { name: "并入额度" });
+      if (!(await merge.isDisabled()))
+        throw new Error("import button should be disabled with 0 agents");
+      const body = await bodyText(page);
+      if (!body.trim()) throw new Error("blank plugin page");
+      await openView(page, "设置");
+      await demoSwitch.click();
+      await page.getByText("已开启演示数据").waitFor({ timeout: 10_000 });
+      await openView(page, "监控");
+      for (const heading of ["Claude Code", "Grok", "Codex"]) {
+        await page.getByRole("heading", { name: heading, exact: true }).waitFor();
       }
       report.consoleErrors.push(...bucket.consoleErrors);
       report.pageErrors.push(...bucket.pageErrors);
@@ -494,91 +604,59 @@ try {
       report.httpErrors.push(...bucket.httpErrors);
       await context.close();
     });
-  }
 
-  if (!PROD) await assertCase("zero agents shows recoverable empty states", async () => {
-    const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
-    await startFresh(page, { payload: { claude: false, grok: false, codex: false } });
-    await waitForOnboarding(page);
-    await page.getByText("未检测到").nth(2).waitFor({ timeout: 20_000 });
-    await enterWorkbench(page);
-    await page.getByRole("heading", { name: "未发现可监控 Agent" }).waitFor();
-    await page.getByRole("button", { name: "打开设置" }).waitFor();
-    await page.screenshot({ path: shotPath("onboarding-e2e-empty.png"), fullPage: true });
-    await page.getByRole("button", { name: "打开设置" }).click();
-    await page.getByText("暂未检测到本机 Agent").waitFor();
-    await page.getByRole("button", { name: "重新检测" }).waitFor();
-    const demoSwitch = page.getByRole("switch", { name: "演示数据" });
-    await demoSwitch.waitFor();
-    await openView(page, "报告");
-    await page.getByRole("heading", { name: "暂无可报告的 Agent" }).waitFor();
-    await openView(page, "插件");
-    await page.getByRole("heading", { name: "事件协议" }).waitFor();
-    const imports = cardAround(page, "导入用量");
-    const merge = imports.getByRole("button", { name: "并入额度" });
-    if (!(await merge.isDisabled())) throw new Error("import button should be disabled with 0 agents");
-    const body = await bodyText(page);
-    if (!body.trim()) throw new Error("blank plugin page");
-    await openView(page, "设置");
-    await demoSwitch.click();
-    await page.getByText("已开启演示数据").waitFor({ timeout: 10_000 });
-    await openView(page, "监控");
-    for (const heading of ["Claude Code", "Grok", "Codex"]) {
-      await page.getByRole("heading", { name: heading, exact: true }).waitFor();
-    }
-    report.consoleErrors.push(...bucket.consoleErrors);
-    report.pageErrors.push(...bucket.pageErrors);
-    report.requestFailures.push(...bucket.requestFailures);
-    report.httpErrors.push(...bucket.httpErrors);
-    await context.close();
-  });
-
-  if (!PROD) await assertCase("onboarding network error stays on the setup page and retries", async () => {
-    const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
-    const hook = await startFresh(page, { failFirst: true });
-    await waitForOnboarding(page);
-    await page.getByText("无法检测本机 Agent，请稍后重试").waitFor({ timeout: 20_000 });
-    const retry = page.getByRole("button", { name: "重新检测" });
-    if (await retry.isDisabled()) throw new Error("retry stayed disabled");
-    if (await page.getByText("检测中").count()) throw new Error("stuck in checking after error");
-    await retry.click();
-    await page.getByText("已找到").nth(2).waitFor({ timeout: 20_000 });
-    report.consoleErrors.push(...bucket.consoleErrors);
-    report.pageErrors.push(...bucket.pageErrors);
-    report.requestFailures.push(...bucket.requestFailures);
-    report.httpErrors.push(...bucket.httpErrors);
-    await context.close();
-  });
-
-  if (!PROD) await assertCase("returning users see LoadingShell instead of stale agent cards", async () => {
-    const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
-    await seedPersist(page, {
-      onboardingComplete: true,
-      demoMode: false,
-      agentAvailability: { claude: true, grok: true, codex: true },
+  if (!PROD)
+    await assertCase("onboarding network error stays on the setup page and retries", async () => {
+      const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
+      const hook = await startFresh(page, { failFirst: true });
+      await waitForOnboarding(page);
+      await page.getByText("无法检测本机 Agent，请稍后重试").waitFor({ timeout: 20_000 });
+      const retry = page.getByRole("button", { name: "重新检测" });
+      if (await retry.isDisabled()) throw new Error("retry stayed disabled");
+      if (await page.getByText("检测中").count()) throw new Error("stuck in checking after error");
+      await retry.click();
+      await page.getByText("已找到").nth(2).waitFor({ timeout: 20_000 });
+      report.consoleErrors.push(...bucket.consoleErrors);
+      report.pageErrors.push(...bucket.pageErrors);
+      report.requestFailures.push(...bucket.requestFailures);
+      report.httpErrors.push(...bucket.httpErrors);
+      await context.close();
     });
-    const hook = await interceptAvailability(page, {
-      payload: { claude: true, grok: false, codex: false },
-      hold: true,
+
+  if (!PROD)
+    await assertCase("returning users see LoadingShell instead of stale agent cards", async () => {
+      const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
+      await seedPersist(page, {
+        onboardingComplete: true,
+        demoMode: false,
+        agentAvailability: { claude: true, grok: true, codex: true },
+      });
+      const hook = await interceptAvailability(page, {
+        payload: { claude: true, grok: false, codex: false },
+        hold: true,
+      });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(250);
+      const during = await bodyText(page);
+      if (
+        during.includes("Claude Code") ||
+        during.includes("协同时间线") ||
+        during.includes("余量初始设置")
+      ) {
+        throw new Error(`stale workbench flashed: ${during.slice(0, 180)}`);
+      }
+      hook.release();
+      await page.getByText("1 路 Agent 额度").waitFor({ timeout: 20_000 });
+      await page.getByRole("heading", { name: "Claude Code", exact: true }).waitFor();
+      if (await page.getByRole("heading", { name: "Grok", exact: true }).count()) {
+        throw new Error("stale Grok card remained after delayed detect");
+      }
+      report.consoleErrors.push(...bucket.consoleErrors);
+      report.pageErrors.push(...bucket.pageErrors);
+      report.requestFailures.push(...bucket.requestFailures);
+      report.httpErrors.push(...bucket.httpErrors);
+      await context.close();
     });
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(250);
-    const during = await bodyText(page);
-    if (during.includes("Claude Code") || during.includes("协同时间线") || during.includes("Synq 初始设置")) {
-      throw new Error(`stale workbench flashed: ${during.slice(0, 180)}`);
-    }
-    hook.release();
-    await page.getByText("1 路 Agent 额度").waitFor({ timeout: 20_000 });
-    await page.getByRole("heading", { name: "Claude Code", exact: true }).waitFor();
-    if (await page.getByRole("heading", { name: "Grok", exact: true }).count()) {
-      throw new Error("stale Grok card remained after delayed detect");
-    }
-    report.consoleErrors.push(...bucket.consoleErrors);
-    report.pageErrors.push(...bucket.pageErrors);
-    report.requestFailures.push(...bucket.requestFailures);
-    report.httpErrors.push(...bucket.httpErrors);
-    await context.close();
-  });
 
   await assertCase("desktop and mobile viewports have no horizontal overflow", async () => {
     for (const viewport of [
@@ -591,13 +669,17 @@ try {
       await page.getByText("已找到").nth(2).waitFor({ timeout: 20_000 });
       const onboardingOverflow = await overflow(page);
       if (onboardingOverflow.scrollWidth > onboardingOverflow.clientWidth) {
-        throw new Error(`${viewport.name} onboarding overflow ${onboardingOverflow.scrollWidth}>${onboardingOverflow.clientWidth}`);
+        throw new Error(
+          `${viewport.name} onboarding overflow ${onboardingOverflow.scrollWidth}>${onboardingOverflow.clientWidth}`,
+        );
       }
       await enterWorkbench(page);
       await page.getByRole("button", { name: "监控" }).waitFor();
       const workbenchOverflow = await overflow(page);
       if (workbenchOverflow.scrollWidth > workbenchOverflow.clientWidth) {
-        throw new Error(`${viewport.name} workbench overflow ${workbenchOverflow.scrollWidth}>${workbenchOverflow.clientWidth}`);
+        throw new Error(
+          `${viewport.name} workbench overflow ${workbenchOverflow.scrollWidth}>${workbenchOverflow.clientWidth}`,
+        );
       }
       if (viewport.name === "mobile") {
         await page.screenshot({ path: shotPath(viewport.shot), fullPage: true });
@@ -631,5 +713,26 @@ report.httpErrors = unique(
 
 const out = resolve("/tmp/synq-onboarding-e2e.json");
 writeFileSync(out, JSON.stringify(report, null, 2));
-console.log(JSON.stringify({ summary: { passed: report.passed, failed: report.failed, consoleErrors: report.consoleErrors.length, pageErrors: report.pageErrors.length, requestFailures: report.requestFailures.length, httpErrors: report.httpErrors.length }, cases: report.cases, consoleErrors: report.consoleErrors, pageErrors: report.pageErrors, requestFailures: report.requestFailures, httpErrors: report.httpErrors, availabilityUrl: report.availabilityUrl }, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      summary: {
+        passed: report.passed,
+        failed: report.failed,
+        consoleErrors: report.consoleErrors.length,
+        pageErrors: report.pageErrors.length,
+        requestFailures: report.requestFailures.length,
+        httpErrors: report.httpErrors.length,
+      },
+      cases: report.cases,
+      consoleErrors: report.consoleErrors,
+      pageErrors: report.pageErrors,
+      requestFailures: report.requestFailures,
+      httpErrors: report.httpErrors,
+      availabilityUrl: report.availabilityUrl,
+    },
+    null,
+    2,
+  ),
+);
 process.exit(report.failed ? 1 : 0);

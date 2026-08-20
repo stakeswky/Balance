@@ -63,7 +63,7 @@ jobs:
 
       - name: Verify and archive application
         run: |
-          APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Synq.app"
+          APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app"
           APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
           SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
           test -d "$APP_PATH"
@@ -74,13 +74,13 @@ jobs:
           done
           codesign --verify --deep --strict "$APP_PATH"
           mkdir -p artifacts
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/Synq-macos-arm64.app.zip
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/Balance-macos-arm64.app.zip
 
       - name: Upload macOS bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Synq-macos-arm64
+          name: Balance-macos-arm64
           if-no-files-found: error
           path: |
-            artifacts/Synq-macos-arm64.app.zip
+            artifacts/Balance-macos-arm64.app.zip
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg

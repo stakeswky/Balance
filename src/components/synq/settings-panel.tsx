@@ -81,7 +81,8 @@ export function SettingsPanel() {
           <div>
             <CardTitle>本机监控</CardTitle>
             <CardHint className="mt-1">
-              Synq 只读本机 Agent 日志和官方百分比，不需要账号。套餐、阈值和采样都保存在这台浏览器里。
+              余量只读本机 Agent
+              日志和官方百分比，不需要账号。套餐、阈值和采样都保存在这台浏览器里。
             </CardHint>
             <p className={cn("mt-3 font-mono text-xs", sampleCount ? "text-mute" : "text-faint")}>
               已检测 {detectedAgents.length} 个 Agent · 已存校准样本 {sampleCount} 条

@@ -1,14 +1,14 @@
-# Synq
+# 余量 / Balance
 
-Synq 是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 配额监控面板。它读取本机 Agent 会话日志和供应商官方订阅百分比，把实际模型/token 用量折算成公开 API 价格等价，并给出 5 小时窗、周窗和剩余额度区间。
+余量（Balance）是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 配额监控面板。它读取本机 Agent 会话日志和供应商官方订阅百分比，把实际模型/token 用量折算成公开 API 价格等价，并给出 5 小时窗、周窗和剩余额度区间。
 
 > “API 等价金额”表示同样模型与 token 通过公开 API 调用时的理论价格，不是现金余额，也不是供应商承诺的可提现额度。
 
 ## 界面预览
 
-<img src="./screenshots/claude-grok-quota-desktop.png" alt="Synq desktop quota dashboard" width="900">
+<img src="./screenshots/claude-grok-quota-desktop.png" alt="Balance desktop quota dashboard" width="900">
 
-<img src="./screenshots/claude-grok-quota-mobile.png" alt="Synq mobile quota dashboard" width="360">
+<img src="./screenshots/claude-grok-quota-mobile.png" alt="Balance mobile quota dashboard" width="360">
 
 ## 功能
 
@@ -21,15 +21,15 @@ Synq 是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 
 
 ## 数据来源
 
-| Agent | 本地用量 | 官方订阅信息 |
-| --- | --- | --- |
-| Claude | `~/.claude/projects/**/*.jsonl`、`~/.config/claude/projects/**/*.jsonl` | Claude OAuth `/api/oauth/usage`（含 Fable）；macOS Claude Desktop `plan-usage-history.json` 后备 5h/7d |
-| Grok | `$GROK_HOME/sessions/**/updates.jsonl` 或 `~/.grok/sessions/**/updates.jsonl` | Grok billing API；`~/.grok/logs/unified.jsonl` 后备 |
-| Codex | `$CODEX_HOME/sessions/**/rollout-*.jsonl` 或 `~/.codex/sessions/**/rollout-*.jsonl` | ChatGPT `/wham/usage`；session `rate_limits` 后备 |
+| Agent  | 本地用量                                                                            | 官方订阅信息                                                                                           |
+| ------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Claude | `~/.claude/projects/**/*.jsonl`、`~/.config/claude/projects/**/*.jsonl`             | Claude OAuth `/api/oauth/usage`（含 Fable）；macOS Claude Desktop `plan-usage-history.json` 后备 5h/7d |
+| Grok   | `$GROK_HOME/sessions/**/updates.jsonl` 或 `~/.grok/sessions/**/updates.jsonl`       | Grok billing API；`~/.grok/logs/unified.jsonl` 后备                                                    |
+| Codex  | `$CODEX_HOME/sessions/**/rollout-*.jsonl` 或 `~/.codex/sessions/**/rollout-*.jsonl` | ChatGPT `/wham/usage`；session `rate_limits` 后备                                                      |
 
 ## macOS app
 
-The first desktop build targets Apple Silicon Macs. Download the GitHub Actions artifact named `Synq-macos-arm64`, unzip `Synq-macos-arm64.app.zip` or open the included DMG, then launch Synq. Node.js, Rust, Docker, and a database are bundled or unnecessary.
+The first desktop build targets Apple Silicon Macs. Download the GitHub Actions artifact named `Balance-macos-arm64`, unzip `Balance-macos-arm64.app.zip` or open the included DMG, then launch Balance. Node.js, Rust, Docker, and a database are bundled or unnecessary.
 
 The current build uses macOS ad-hoc signing, not Apple Developer ID signing or notarization. A build downloaded from the internet can therefore show a macOS security prompt on first launch.
 
@@ -52,6 +52,10 @@ npm run desktop:verify
 
 This exercises environment and auth isolation, the real app UI and normal close path, sidecar cleanup after a parent `SIGKILL`, the occupied-port `startup-error` path, and the packaged DMG with `hdiutil verify`.
 
+## 从 Synq 升级
+
+Balance 是 Synq 的原地品牌升级。桌面应用继续使用 bundle identifier `com.synq.desktop`、固定 origin `127.0.0.1:4780` 和持久化 key `synq-quota-v8`；官方成功快照仍位于 `~/Library/Application Support/Synq/official-quota.json`。因此覆盖安装后，既有套餐、阈值、采样设置和最后一次官方额度快照会继续可用。
+
 ## 快速开始
 
 要求 Node.js 22 或更高版本。
@@ -61,7 +65,7 @@ npm install
 npm run dev
 ```
 
-打开 <http://localhost:8080>。Synq 必须运行在保存上述本地日志和认证文件的机器上，才能自动读取真实用量；没有本地数据时仍可使用匿名演示数据或在“插件”页手动导入 JSON/JSONL。
+打开 <http://localhost:8080>。余量必须运行在保存上述本地日志和认证文件的机器上，才能自动读取真实用量；没有本地数据时仍可使用匿名演示数据或在“插件”页手动导入 JSON/JSONL。
 
 常用验证命令：
 
@@ -86,6 +90,6 @@ npm run build
 ## 隐私与部署边界
 
 - 不要提交 `~/.claude`、`~/.grok`、`~/.codex`、auth 文件或真实导出日志。
-- Synq 对本地 JSONL 只读扫描；校准样本不保存 prompt、cwd、access token 或账户 ID。
+- 余量对本地 JSONL 只读扫描；校准样本不保存 prompt、cwd、access token 或账户 ID。
 - 部署到远端 Vercel 的实例无法读取访问者电脑上的本地 Agent 文件；远端部署适合演示、手动导入或与独立 sidecar 集成。
 - 仓库自带的 Claude 数据已经匿名化，只用于首次打开时展示界面。

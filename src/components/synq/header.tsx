@@ -57,7 +57,7 @@ export function Header({
             </svg>
           </span>
           <span className="leading-tight">
-            <span className="block text-sm font-medium tracking-tight">Synq</span>
+            <span className="block text-sm font-medium tracking-tight">余量</span>
             <span className="hidden text-xs text-mute sm:block">
               {agents.length ? `${agents.length} 路 Agent 额度` : "本机 Agent 额度"}
             </span>
