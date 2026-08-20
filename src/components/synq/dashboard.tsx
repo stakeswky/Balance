@@ -37,6 +37,7 @@ import {
 import { quotaValueFor } from "@/lib/quota/quota-value";
 import type { OfficialLoadState } from "@/lib/quota/quota-label";
 import { useQuota } from "@/lib/quota/store";
+import { useTheme } from "@/lib/theme";
 import { AGENT_LABEL } from "@/lib/quota/agent";
 import {
   pullClaudeUsage,
@@ -97,6 +98,7 @@ export function Dashboard() {
   const alertWindowPct = useQuota((s) => s.alertWindowPct);
   const alertWeekPct = useQuota((s) => s.alertWeekPct);
   const alerts = useQuota((s) => s.alerts);
+  const theme = useTheme((s) => s.theme);
   const visibleAgents = useMemo(
     () => visibleAgentIds(agentAvailability, demoMode, realEvents),
     [agentAvailability, demoMode, realEvents],
@@ -468,7 +470,7 @@ export function Dashboard() {
   return (
     <div className="min-h-dvh bg-canvas text-ink">
       <Toaster
-        theme="dark"
+        theme={theme}
         position="bottom-center"
         toastOptions={{
           className: "!bg-surface !text-ink !border-line",
