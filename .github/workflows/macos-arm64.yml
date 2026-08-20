@@ -58,10 +58,20 @@ jobs:
       - name: Build macOS Apple Silicon bundles
         run: npm run desktop:build
 
+      - name: Verify desktop security, crash cleanup, and DMG
+        run: npm run desktop:verify:ci
+
       - name: Verify and archive application
         run: |
           APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Synq.app"
+          APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
+          SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
           test -d "$APP_PATH"
+          for binary in "$APP_BINARY" "$SIDECAR_BINARY"; do
+            file_output=$(file "$binary")
+            echo "$file_output"
+            test "$file_output" = "$binary: Mach-O 64-bit executable arm64"
+          done
           codesign --verify --deep --strict "$APP_PATH"
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/Synq-macos-arm64.app.zip

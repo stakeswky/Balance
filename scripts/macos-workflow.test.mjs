@@ -15,7 +15,9 @@ test("macOS workflow builds, verifies, and uploads both bundles", async () => {
   assert.match(yaml, /npm run desktop:prepare/);
   assert.match(yaml, /npm run desktop:test/);
   assert.match(yaml, /npm run desktop:build/);
+  assert.match(yaml, /npm run desktop:verify:ci/);
   assert.match(yaml, /codesign --verify --deep --strict/);
+  assert.match(yaml, /Mach-O 64-bit executable arm64/);
   assert.match(yaml, /Synq-macos-arm64\.app\.zip/);
   assert.match(yaml, /bundle\/dmg\/\*\.dmg/);
   assert.ok(

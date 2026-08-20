@@ -49,8 +49,21 @@ test("macOS verification is one-command and documented", () => {
     "desktop:verify:crash",
     "desktop:verify:startup-error",
     "desktop:verify:dmg",
+    "desktop:verify:ci",
   ]) {
     assert.equal(typeof packageJson.scripts[script], "string", `missing npm script: ${script}`);
+  }
+  assert.ok(
+    packageJson.scripts["desktop:verify:security"].includes("verify-macos-env-isolation.sh"),
+    "desktop:verify:security omits packaged environment isolation",
+  );
+  assert.ok(
+    packageJson.scripts["desktop:verify:security"].includes("verify-desktop-security.mjs"),
+    "desktop:verify:security omits live Host/Fetch-Metadata verification",
+  );
+  const ciVerify = packageJson.scripts["desktop:verify:ci"];
+  for (const script of ["security", "crash", "dmg"]) {
+    assert.ok(ciVerify.includes(`desktop:verify:${script}`), `desktop:verify:ci omits ${script}`);
   }
   const verify = packageJson.scripts["desktop:verify"];
   assert.equal(typeof verify, "string", "missing npm script: desktop:verify");

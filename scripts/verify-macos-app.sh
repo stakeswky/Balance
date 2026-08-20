@@ -22,6 +22,13 @@ curl_loopback() {
   curl --noproxy '*' "$@"
 }
 
+browser_smoke() {
+  NO_PROXY='*' no_proxy='*' \
+    HTTP_PROXY='' HTTPS_PROXY='' ALL_PROXY='' \
+    http_proxy='' https_proxy='' all_proxy='' \
+    node "$REPO_ROOT/scripts/browser-smoke.mjs" "$@"
+}
+
 run_timeout() {
   timeout_seconds=$1
   stdout_path=$2
@@ -189,9 +196,9 @@ screencapture -x -o -l "$ui_window_id" "$SCREENSHOT_PATH"
 
 set +e
 if [ "$BROWSER_SCREENSHOT_PATH" = "$REPO_ROOT/screenshots/browser-smoke.png" ]; then
-  browser_output=$(node "$REPO_ROOT/scripts/browser-smoke.mjs" "http://127.0.0.1:4780/" 2>&1)
+  browser_output=$(browser_smoke "http://127.0.0.1:4780/" 2>&1)
 else
-  browser_output=$(node "$REPO_ROOT/scripts/browser-smoke.mjs" "http://127.0.0.1:4780/" "$BROWSER_SCREENSHOT_PATH" 2>&1)
+  browser_output=$(browser_smoke "http://127.0.0.1:4780/" "$BROWSER_SCREENSHOT_PATH" 2>&1)
 fi
 browser_status=$?
 set -e
