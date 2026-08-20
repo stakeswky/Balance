@@ -368,7 +368,7 @@ function mergeClaudeOfficial(
     modelWeekLimitsStale: liveModelLimits
       ? live.modelWeekLimitsStale
       : history.modelWeekLimitsStale,
-    source: live.source,
+    source: useHistoryWindow || useHistoryWeek ? history.source : live.source,
     fetchedAt: Math.max(live.fetchedAt, history.fetchedAt),
     windowKind: live.windowKind,
   };

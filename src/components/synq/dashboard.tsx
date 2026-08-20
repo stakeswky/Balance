@@ -15,8 +15,16 @@ import { UsageChart } from "@/components/synq/usage-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { eventsForAgents, visibleAgentIds } from "@/lib/quota/agent-availability";
-import { applyOfficial, meterFor, modelWeekLimitFor } from "@/lib/quota/engine";
+import {
+  applyOfficial,
+  meterDataSources,
+  meterFor,
+  modelWeekLimitFor,
+  officialOnlyMeter,
+  type MeterDataSources,
+} from "@/lib/quota/engine";
 import { inferCodexProPlanId } from "@/lib/quota/estimate";
+import type { OfficialSlice } from "@/lib/quota/official";
 import { planById } from "@/lib/quota/plans";
 import {
   primaryUsagePercent,
@@ -27,6 +35,7 @@ import {
   type PrimaryWindowKind,
 } from "@/lib/quota/presentation";
 import { quotaValueFor } from "@/lib/quota/quota-value";
+import type { OfficialLoadState } from "@/lib/quota/quota-label";
 import { useQuota } from "@/lib/quota/store";
 import { AGENT_LABEL } from "@/lib/quota/agent";
 import {
@@ -37,10 +46,22 @@ import {
   pullOfficialQuota,
 } from "@/lib/quota/watch";
 
+function claudeQuotaNote(slice: OfficialSlice | null): string | undefined {
+  if (!slice) return undefined;
+  const base =
+    slice.source === "plan-usage-history"
+      ? "Claude Desktop 历史利用率"
+      : slice.windowStale || slice.weekStale
+        ? "上次官方快照"
+        : "官方 OAuth 利用率";
+  return slice.modelWeekLimitsStale ? `${base} · Fable 上次官方快照` : base;
+}
+
 export function Dashboard() {
   const [view, setView] = useState<ViewId>("monitor");
   const [now, setNow] = useState(() => Date.now());
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [officialLoadState, setOfficialLoadState] = useState<OfficialLoadState>("loading");
   const historyLoaded = useRef(false);
   const warned = useRef({
     claudeWin: false,
@@ -149,41 +170,58 @@ export function Dashboard() {
         meterFor(activeEvents, "codex", planById(state.codexPlanId), t, state.weekBoostPct),
         state.official.codex,
       );
+      const claudeDecisionMeter = state.demoMode
+        ? claudeMeter
+        : officialOnlyMeter(claudeMeter, meterDataSources(state.official.claude));
+      const grokDecisionMeter = state.demoMode
+        ? grokMeter
+        : officialOnlyMeter(grokMeter, meterDataSources(state.official.grok));
+      const codexDecisionMeter = state.demoMode
+        ? codexMeter
+        : officialOnlyMeter(codexMeter, meterDataSources(state.official.codex));
       if (activeAgents.includes("claude")) {
-        check(
-          "claude",
-          claudeMeter,
-          state.official.claude?.windowKind ?? "five_hour",
-          "claudeWin",
-          "claudeWeek",
-          "Claude Code",
-        );
+        if (claudeDecisionMeter) {
+          check(
+            "claude",
+            claudeDecisionMeter,
+            state.official.claude?.windowKind ?? "five_hour",
+            "claudeWin",
+            "claudeWeek",
+            "Claude Code",
+          );
+        }
         const fableAlert = quotaAlertLatch(
-          claudeFableLimit?.usedPct ?? null,
+          state.demoMode || !state.official.claude?.modelWeekLimitsStale
+            ? (claudeFableLimit?.usedPct ?? null)
+            : null,
           state.alertWeekPct,
           warned.current.claudeFable,
         );
         warned.current.claudeFable = fableAlert.nextWarned;
-        if (claudeFableLimit && fableAlert.triggered) {
+        if (
+          claudeFableLimit &&
+          (state.demoMode || !state.official.claude?.modelWeekLimitsStale) &&
+          fableAlert.triggered
+        ) {
           const message = `Claude Code Fable 5 周额度已用 ${claudeFableLimit.usedPct.toFixed(0)}%`;
           toast.error(message);
           state.pushAlert({ ts: t, agent: "claude", kind: "week", message });
         }
       }
-      if (activeAgents.includes("grok")) {
+      if (activeAgents.includes("grok") && grokDecisionMeter) {
         check(
           "grok",
-          grokMeter,
+          grokDecisionMeter,
           state.official.grok?.windowKind ?? "five_hour",
           "grokWin",
           "grokWeek",
           "Grok",
         );
       }
-      if (activeAgents.includes("codex")) {
+      if (activeAgents.includes("codex") && codexDecisionMeter) {
         check(
           "codex",
-          codexMeter,
+          codexDecisionMeter,
           state.official.codex?.windowKind ?? "five_hour",
           "codexWin",
           "codexWeek",
@@ -196,11 +234,13 @@ export function Dashboard() {
         const official = await pullOfficialQuota();
         if (!cancelled) {
           useQuota.getState().setOfficial(official);
+          setOfficialLoadState("ready");
           const t = Date.now();
           setNow(t);
           checkAlerts(t);
         }
       } catch {
+        if (!cancelled) setOfficialLoadState("error");
         /* keep last official snapshot */
       }
     };
@@ -300,6 +340,9 @@ export function Dashboard() {
       applyOfficial(meterFor(visibleEvents, "codex", codexPlan, now, weekBoostPct), official.codex),
     [visibleEvents, codexPlan, now, weekBoostPct, official.codex],
   );
+  const claudeSources = meterDataSources(official.claude);
+  const grokSources = meterDataSources(official.grok);
+  const codexSources = meterDataSources(official.codex);
 
   const live = visibleAgents.some((agent) =>
     agent === "claude" ? liveClaude : agent === "grok" ? liveGrok : liveCodex,
@@ -341,23 +384,53 @@ export function Dashboard() {
     return sum + (plan.kind === "subscription" ? plan.priceUsd : 0);
   }, 0);
   const allPrimaryMeters = [
-    { meter: claudeMeter, kind: official.claude?.windowKind ?? "five_hour" },
-    { meter: grokMeter, kind: official.grok?.windowKind ?? "five_hour" },
-    { meter: codexMeter, kind: official.codex?.windowKind ?? "five_hour" },
-  ] satisfies { meter: typeof claudeMeter; kind: PrimaryWindowKind }[];
+    {
+      meter: claudeMeter,
+      kind: official.claude?.windowKind ?? "five_hour",
+      sources: claudeSources,
+    },
+    {
+      meter: grokMeter,
+      kind: official.grok?.windowKind ?? "five_hour",
+      sources: grokSources,
+    },
+    {
+      meter: codexMeter,
+      kind: official.codex?.windowKind ?? "five_hour",
+      sources: codexSources,
+    },
+  ] satisfies {
+    meter: typeof claudeMeter;
+    kind: PrimaryWindowKind;
+    sources: MeterDataSources;
+  }[];
   const primaryMeters = allPrimaryMeters.filter(({ meter }) => visibleAgents.includes(meter.agent));
-  const primaryLimits = primaryMeters.map(({ meter, kind }) => ({
-    label: AGENT_LABEL[meter.agent],
-    pct: primaryUsagePercent(meter, kind),
-    resetsAt: primaryWindowResetsAt(meter, kind),
-  }));
-  if (claudeFableLimit && visibleAgents.includes("claude")) {
+  const primaryLimits = primaryMeters.flatMap(({ meter, kind, sources }) => {
+    const primarySource = kind === "weekly" ? sources.week : sources.window;
+    if (!demoMode && primarySource !== "official") return [];
+    return [
+      {
+        label: AGENT_LABEL[meter.agent],
+        pct: primaryUsagePercent(meter, kind),
+        resetsAt: primaryWindowResetsAt(meter, kind),
+      },
+    ];
+  });
+  if (
+    claudeFableLimit &&
+    visibleAgents.includes("claude") &&
+    (demoMode || !official.claude?.modelWeekLimitsStale)
+  ) {
     primaryLimits.push({
       label: "Claude Fable 5",
       pct: claudeFableLimit.usedPct,
       resetsAt: claudeFableLimit.resetsAt ?? claudeMeter.weekResetsAt,
     });
   }
+  const adviceMeters = primaryMeters.flatMap(({ meter, sources }) => {
+    const decisionMeter = demoMode ? meter : officialOnlyMeter(meter, sources);
+    return decisionMeter ? [decisionMeter] : [];
+  });
   const tighter = tightestQuota(primaryLimits);
   const tighterPct = tighter?.pct ?? 0;
   const watching = visibleAgents
@@ -421,7 +494,7 @@ export function Dashboard() {
             <p className="flex-1 text-sm text-mute">
               {demoMode
                 ? "当前是演示数据。可在设置中关闭演示，恢复只读监听本机日志。"
-                : "额度百分比来自官方。金额是本机日志按公开 API 价折算的 API 等价，不是账户现金余额。"}
+                : "官方额度可用时优先显示；未读到的窗口会明确标为本地估算。金额仍是本机日志按公开 API 价折算的 API 等价。"}
             </p>
             <Button size="sm" variant="ghost" onClick={() => useQuota.getState().setHint(false)}>
               知道了
@@ -517,13 +590,9 @@ export function Dashboard() {
                   session={claudeSession}
                   live={liveClaude}
                   activeTasks={activeClaude}
-                  quotaNote={
-                    official.claude
-                      ? claudeFableLimit
-                        ? "官方 5h / 7d / Fable 利用率"
-                        : "官方 5h / 7d 利用率"
-                      : undefined
-                  }
+                  quotaNote={claudeQuotaNote(official.claude)}
+                  quotaSources={claudeSources}
+                  officialLoadState={demoMode ? undefined : officialLoadState}
                   liveNote={
                     demoMode
                       ? undefined
@@ -532,6 +601,7 @@ export function Dashboard() {
                         : "已接上日志，等待新回合"
                   }
                   modelWeekLimit={claudeFableLimit}
+                  modelWeekLimitStale={official.claude?.modelWeekLimitsStale}
                   weekValue={claudeWeekVal}
                   windowValue={claudeWinVal}
                   events={visibleEvents}
@@ -549,6 +619,8 @@ export function Dashboard() {
                   live={liveGrok}
                   activeTasks={activeGrok}
                   windowLabel="本周额度"
+                  quotaSources={grokSources}
+                  officialLoadState={demoMode ? undefined : officialLoadState}
                   quotaNote={
                     official.grok
                       ? `${official.grok.source === "billing-api" ? "官方实时账单" : "官方账单日志"}${
@@ -581,6 +653,8 @@ export function Dashboard() {
                   live={liveCodex}
                   activeTasks={activeCodex}
                   windowLabel={official.codex?.windowKind === "weekly" ? "本周额度" : "5 小时窗"}
+                  quotaSources={codexSources}
+                  officialLoadState={demoMode ? undefined : officialLoadState}
                   quotaNote={
                     official.codex
                       ? `${official.codex.source === "wham-usage" ? "官方实时额度" : "官方会话额度"}${
@@ -605,9 +679,7 @@ export function Dashboard() {
               ) : null}
             </section>
 
-            {primaryMeters.length ? (
-              <AdviceCard meters={primaryMeters.map(({ meter }) => meter)} />
-            ) : null}
+            {adviceMeters.length ? <AdviceCard meters={adviceMeters} /> : null}
 
             <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
               <Card>

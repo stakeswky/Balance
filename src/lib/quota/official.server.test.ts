@@ -473,6 +473,7 @@ test("Claude last-success snapshot survives cache reset without persisting auth"
   assert.equal(restored.claude?.windowPct, 24);
   assert.equal(restored.claude?.weekPct, 34);
   assert.equal(restored.claude?.modelWeekLimits?.fable?.usedPct, 26);
+  assert.equal(restored.claude?.source, "plan-usage-history");
   assert.equal(restored.claude?.windowStale, undefined);
   assert.equal(restored.claude?.weekStale, undefined);
   assert.equal(restored.claude?.modelWeekLimitsStale, true);

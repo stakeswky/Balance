@@ -2,9 +2,21 @@ import { Pause, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardHint, CardTitle } from "@/components/ui/card";
-import { formatDuration, formatTokens, formatUsd, formatUsdRange, modelLabel } from "@/components/synq/format";
+import {
+  formatDuration,
+  formatTokens,
+  formatUsd,
+  formatUsdRange,
+  modelLabel,
+} from "@/components/synq/format";
 import { MeterBar } from "@/components/synq/meter-bar";
-import { inWindow, modelShares, weightedTokens } from "@/lib/quota/engine";
+import {
+  inWindow,
+  modelShares,
+  officialOnlyMeter,
+  weightedTokens,
+  type MeterDataSources,
+} from "@/lib/quota/engine";
 import { grokProductLabel, type OfficialProductShare } from "@/lib/quota/official";
 import { parallelTaskSummary } from "@/lib/quota/parallel-tasks";
 import {
@@ -14,6 +26,11 @@ import {
   formatCredits,
 } from "@/lib/quota/presentation";
 import type { QuotaValue } from "@/lib/quota/quota-value";
+import {
+  quotaSourceLabel,
+  quotaSourceMessage,
+  type OfficialLoadState,
+} from "@/lib/quota/quota-label";
 import type {
   AgentLiveInfo,
   MeterSnapshot,
@@ -56,6 +73,9 @@ export function AgentCard({
   quotaNote,
   products,
   modelWeekLimit,
+  modelWeekLimitStale = false,
+  quotaSources = { window: "local-estimate", week: "local-estimate" },
+  officialLoadState,
   weekValue,
   windowValue,
   events,
@@ -74,6 +94,9 @@ export function AgentCard({
   quotaNote?: string;
   products?: OfficialProductShare[];
   modelWeekLimit?: ModelWeekLimitSnapshot | null;
+  modelWeekLimitStale?: boolean;
+  quotaSources?: MeterDataSources;
+  officialLoadState?: OfficialLoadState;
   weekValue?: QuotaValue;
   windowValue?: QuotaValue;
   events: UsageEvent[];
@@ -84,10 +107,49 @@ export function AgentCard({
   const shares = modelShares(events, meter.agent, now, WEEK_MS);
   const primaryPct = windowLabel === "本周额度" ? meter.weekPct : meter.windowPct;
   const remain = Math.max(0, 100 - primaryPct);
-  const weighted = inWindow(events, now, WINDOW_MS, meter.agent).reduce((s, e) => s + weightedTokens(e), 0);
-  const effectiveStatus = effectiveQuotaStatus(meter.status, modelWeekLimit?.usedPct);
-  const barTone = meter.status === "critical" ? "crit" : meter.status === "watch" ? "warn" : tone;
+  const weighted = inWindow(events, now, WINDOW_MS, meter.agent).reduce(
+    (s, e) => s + weightedTokens(e),
+    0,
+  );
   const primaryKind = windowLabel === "本周额度" ? "weekly" : "five_hour";
+  const primarySource = primaryKind === "weekly" ? quotaSources.week : quotaSources.window;
+  const freshMeter = officialOnlyMeter(meter, quotaSources);
+  const freshModelWeekLimit = modelWeekLimitStale ? null : modelWeekLimit;
+  const hasFreshOfficial = Boolean(freshMeter || freshModelWeekLimit);
+  const hasLocalEstimate = Object.values(quotaSources).includes("local-estimate");
+  const hasStaleSnapshot =
+    Object.values(quotaSources).includes("official-stale") ||
+    Boolean(modelWeekLimit && modelWeekLimitStale);
+  const sourceMessage = officialLoadState
+    ? quotaSourceMessage(officialLoadState, hasFreshOfficial, hasLocalEstimate, hasStaleSnapshot)
+    : null;
+  const effectiveStatus = effectiveQuotaStatus(
+    freshMeter?.status ?? "ok",
+    freshModelWeekLimit?.usedPct,
+  );
+  const statusLabel = hasFreshOfficial
+    ? statusCopy[effectiveStatus]
+    : hasStaleSnapshot
+      ? "官方快照"
+      : "本地估算";
+  const primaryRemainingLabel =
+    primarySource === "official"
+      ? primaryKind === "weekly"
+        ? "官方周额度剩余"
+        : "官方窗口剩余"
+      : primarySource === "official-stale"
+        ? primaryKind === "weekly"
+          ? "官方快照周额度剩余"
+          : "官方快照窗口剩余"
+        : primaryKind === "weekly"
+          ? "本地估算周用量剩余"
+          : "本地估算窗口剩余";
+  const primaryUsedLabel =
+    primarySource === "official"
+      ? "已用"
+      : primarySource === "official-stale"
+        ? "快照已用"
+        : "估算已用";
   const primary = primaryKind === "weekly" ? weekValue : windowValue;
   const valueSections =
     weekValue && windowValue
@@ -105,7 +167,7 @@ export function AgentCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-faint")} />
             <CardTitle>{name}</CardTitle>
-            <Badge tone={effectiveStatus}>{statusCopy[effectiveStatus]}</Badge>
+            <Badge tone={hasFreshOfficial ? effectiveStatus : "mute"}>{statusLabel}</Badge>
           </div>
           <CardHint className="mt-1 break-words">
             {plan.name} · {adapter}
@@ -120,7 +182,7 @@ export function AgentCard({
 
       <div className="flex items-end justify-between gap-4">
         <div>
-          <p className="text-xs text-mute">{windowLabel === "本周额度" ? "周额度剩余" : "窗口剩余"}</p>
+          <p className="text-xs text-mute">{primaryRemainingLabel}</p>
           <p className="mt-1 font-mono text-4xl leading-none font-medium tracking-tight tabular">
             {remain.toFixed(0)}
             <span className="ml-1 text-lg text-mute">%</span>
@@ -130,7 +192,7 @@ export function AgentCard({
           {windowLabel === "本周额度" ? (
             <>
               <p>
-                已用 {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
+                {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
                 <span className="text-faint"> %</span>
               </p>
               <p className="mt-1">
@@ -140,7 +202,12 @@ export function AgentCard({
           ) : (
             <>
               <p>
-                燃烧 {meter.burnPctPerHour.toFixed(1)}
+                {primarySource === "official"
+                  ? "燃烧"
+                  : primarySource === "official-stale"
+                    ? "快照燃烧"
+                    : "估算燃烧"}{" "}
+                {meter.burnPctPerHour.toFixed(1)}
                 <span className="text-faint"> %/时</span>
               </p>
               <p className="mt-1">
@@ -153,24 +220,54 @@ export function AgentCard({
         </div>
       </div>
 
+      {sourceMessage ? (
+        <p className="mt-4 rounded-lg bg-raised px-3 py-2 text-xs leading-relaxed text-mute">
+          {sourceMessage}
+        </p>
+      ) : null}
+
       <div className="mt-5 space-y-3">
         {windowLabel === "本周额度" ? (
           <MeterBar
             value={meter.weekPct}
-            tone={meter.weekPct >= 88 ? "crit" : meter.weekPct >= 72 ? "warn" : tone}
-            label="本周额度（官方）"
+            tone={
+              quotaSources.week === "official"
+                ? meter.weekPct >= 88
+                  ? "crit"
+                  : meter.weekPct >= 72
+                    ? "warn"
+                    : tone
+                : tone
+            }
+            label={quotaSourceLabel("本周额度", quotaSources.week)}
           />
         ) : (
           <>
             <MeterBar
               value={meter.windowPct}
-              tone={barTone === "crit" || barTone === "warn" ? barTone : tone}
-              label={quotaNote && windowLabel === "5 小时窗" ? "5 小时窗（官方）" : windowLabel}
+              tone={
+                quotaSources.window === "official"
+                  ? meter.windowPct >= 88
+                    ? "crit"
+                    : meter.windowPct >= 68
+                      ? "warn"
+                      : tone
+                  : tone
+              }
+              label={quotaSourceLabel(windowLabel, quotaSources.window)}
             />
             <MeterBar
               value={meter.weekPct}
-              tone={meter.weekPct >= 88 ? "crit" : meter.weekPct >= 72 ? "warn" : tone}
-              label={quotaNote ? "本周额度（官方）" : "本周额度"}
+              tone={
+                quotaSources.week === "official"
+                  ? meter.weekPct >= 88
+                    ? "crit"
+                    : meter.weekPct >= 72
+                      ? "warn"
+                      : tone
+                  : tone
+              }
+              label={quotaSourceLabel("本周额度", quotaSources.week)}
             />
             {modelWeekLimit ? (
               <>
@@ -181,12 +278,19 @@ export function AgentCard({
                       ? "crit"
                       : modelWeekLimit.usedPct >= 72
                         ? "warn"
-                      : tone
+                        : tone
                   }
-                  label="Fable 5 周额度（官方）"
+                  label={quotaSourceLabel(
+                    "Fable 5 周额度",
+                    modelWeekLimitStale ? "official-stale" : "official",
+                  )}
                 />
                 <p className="text-xs leading-relaxed text-faint">
-                  {`Claude Max 的 Fable 5 套餐上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；当前利用率来自 Claude Code。`}
+                  {`Claude Max 的 Fable 5 套餐上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；${
+                    modelWeekLimitStale
+                      ? "当前显示上次成功读取的官方利用率。"
+                      : "当前利用率来自 Claude Code。"
+                  }`}
                 </p>
               </>
             ) : null}
@@ -226,16 +330,13 @@ export function AgentCard({
         <Stat
           label={meter.agent === "codex" ? "本窗推理" : "加权用量"}
           value={
-            meter.agent === "codex" ? `${meter.windowReasoningMin.toFixed(1)} 分` : formatTokens(weighted)
+            meter.agent === "codex"
+              ? `${meter.windowReasoningMin.toFixed(1)} 分`
+              : formatTokens(weighted)
           }
         />
         <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
-        <Stat
-          label="本周 API 等价"
-          value={l1.text}
-          dim={l1.dim}
-          hint={VALUE_HINT}
-        />
+        <Stat label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
         {meter.agent === "codex" ? (
           <Stat
             label="本周 credit 等价"
@@ -257,7 +358,11 @@ export function AgentCard({
             <Stat
               key={`${section.key}-total`}
               label={`估算${section.label}总 API 等价`}
-              value={hasRange ? formatUsdRange(section.value.totalLowUsd, section.value.totalHighUsd) : "样本不足"}
+              value={
+                hasRange
+                  ? formatUsdRange(section.value.totalLowUsd, section.value.totalHighUsd)
+                  : "样本不足"
+              }
               hint={VALUE_HINT}
             />,
             <Stat
@@ -286,7 +391,10 @@ export function AgentCard({
             />
             <Stat
               label="估算本周剩余 credit"
-              value={formatCreditRange(weekValue.remainingLowCredits, weekValue.remainingHighCredits)}
+              value={formatCreditRange(
+                weekValue.remainingLowCredits,
+                weekValue.remainingHighCredits,
+              )}
               hint={CREDIT_HINT}
             />
           </>
@@ -305,7 +413,9 @@ export function AgentCard({
       <p className="mt-3 text-[11px] leading-5 text-faint">
         按当前片段模型组合校准 · 本地日志覆盖 · 不是账户现金余额
         {valueSections.some((section) => section.value.rolling) ? " · 滚动窗口金额" : ""}
-        {valueSections.some((section) => section.value.externalUsageDetected) ? " · 检测到本机以外用量" : ""}
+        {valueSections.some((section) => section.value.externalUsageDetected)
+          ? " · 检测到本机以外用量"
+          : ""}
       </p>
 
       {parallel ? (
@@ -318,7 +428,10 @@ export function AgentCard({
           </div>
           <ul className="mt-2 space-y-1.5">
             {parallel.visible.map((task) => (
-              <li key={task.actorId ?? task.sessionId} className="flex min-w-0 items-center gap-2 text-xs">
+              <li
+                key={task.actorId ?? task.sessionId}
+                className="flex min-w-0 items-center gap-2 text-xs"
+              >
                 <span className="size-1.5 shrink-0 rounded-full bg-ok" />
                 <span className="min-w-0 flex-1 truncate text-ink">{task.task}</span>
                 <span className="shrink-0 text-faint">
@@ -331,14 +444,17 @@ export function AgentCard({
               </li>
             ))}
           </ul>
-          {parallel.overflow > 0 ? <p className="mt-2 text-xs text-faint">另有 {parallel.overflow} 个任务</p> : null}
+          {parallel.overflow > 0 ? (
+            <p className="mt-2 text-xs text-faint">另有 {parallel.overflow} 个任务</p>
+          ) : null}
         </div>
       ) : session && live ? (
         <div className="mt-5 rounded-md bg-raised px-3 py-3">
           <p className="text-xs tracking-wide text-faint uppercase">实时会话</p>
           <p className="mt-1 text-sm text-ink">{session.task}</p>
           <p className="mt-1 font-mono text-xs text-mute">
-            {modelLabel(session.model, session.modelRaw)} · {session.events} 轮 · {formatTokens(session.tokens)}
+            {modelLabel(session.model, session.modelRaw)} · {session.events} 轮 ·{" "}
+            {formatTokens(session.tokens)}
           </p>
           {liveNote ? <p className="mt-1 text-xs text-mute">{liveNote}</p> : null}
         </div>
@@ -364,7 +480,9 @@ export function AgentCard({
                   style={{ width: `${s.pct}%` }}
                 />
               </div>
-              <span className="w-10 text-right font-mono tabular text-ink">{s.pct.toFixed(0)}%</span>
+              <span className="w-10 text-right font-mono tabular text-ink">
+                {s.pct.toFixed(0)}%
+              </span>
             </div>
           ))
         ) : (
@@ -407,7 +525,9 @@ function Stat({
   return (
     <div className="rounded-md bg-raised px-3 py-2.5" title={hint}>
       <dt className="text-faint">{label}</dt>
-      <dd className={cn("mt-1 font-mono text-sm tabular", dim ? "text-faint" : "text-ink")}>{value}</dd>
+      <dd className={cn("mt-1 font-mono text-sm tabular", dim ? "text-faint" : "text-ink")}>
+        {value}
+      </dd>
     </div>
   );
 }
