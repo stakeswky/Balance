@@ -1,4 +1,5 @@
 import { formatTokens, modelLabel } from "@/components/synq/format";
+import { AGENT_LABEL, agentDotClass } from "@/lib/quota/agent";
 import { rawTokens } from "@/lib/quota/engine";
 import type { UsageEvent } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
@@ -36,13 +37,13 @@ export function EventFeed({
             <span
               className={cn(
                 "mt-1.5 size-1.5 shrink-0 rounded-full",
-                e.agent === "claude" ? "bg-claude" : "bg-codex",
+                agentDotClass(e.agent),
               )}
             />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm text-ink">{e.task}</p>
               <p className="mt-0.5 font-mono text-xs text-mute">
-                {e.agent === "claude" ? "Claude Code" : "Codex"} · {modelLabel(e.model)} ·{" "}
+                {AGENT_LABEL[e.agent]} · {modelLabel(e.model, e.modelRaw)} ·{" "}
                 {formatTokens(rawTokens(e))}
                 {e.reasoningMin > 0 ? ` · ${e.reasoningMin.toFixed(1)} 分推理` : ""}
               </p>

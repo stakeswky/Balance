@@ -13,6 +13,7 @@ const buttonVariants = cva(
         ghost: "text-mute hover:bg-raised hover:text-ink",
         outline: "bg-transparent text-ink shadow-[var(--shadow-border)] hover:bg-raised",
         claude: "bg-claude text-accent-fg hover:opacity-90",
+        grok: "bg-grok text-accent-fg hover:opacity-90",
         codex: "bg-codex text-accent-fg hover:opacity-90",
       },
       size: {

@@ -209,6 +209,11 @@ test("vite config keeps the nitro serverDir wiring", () => {
   assert.match(viteConfig, /grokPwaPlugin\(\)/);
 });
 
+test("vite config full-traces the PGLite production fallback", () => {
+  const viteConfig = readFileSync(join(TEMPLATE_ROOT, "vite.config.ts"), "utf8");
+  assert.match(viteConfig, /traceDeps:\s*\["@electric-sql\/pglite\*"\]/);
+});
+
 test("nitro middleware and its bundled assets exist", () => {
   const middleware = readFileSync(join(TEMPLATE_ROOT, "server/middleware/grok-pwa.ts"), "utf8");
   assert.match(middleware, /install-page\.html\?raw/);

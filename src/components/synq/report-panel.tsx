@@ -12,9 +12,10 @@ import {
   modelShares,
   rawTokens,
 } from "@/lib/quota/engine";
-import { CLAUDE_PLANS, CODEX_PLANS } from "@/lib/quota/plans";
+import { agentDotClass } from "@/lib/quota/agent";
+import { CLAUDE_PLANS, CODEX_PLANS, GROK_PLANS } from "@/lib/quota/plans";
 import type { QuotaAlert } from "@/lib/quota/store";
-import type { MeterSnapshot, PlanDef, UsageEvent } from "@/lib/quota/types";
+import type { AgentId, MeterSnapshot, PlanDef, UsageEvent } from "@/lib/quota/types";
 import { WEEK_MS } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
@@ -62,7 +63,7 @@ function PlanCompare({
 }: {
   title: string;
   events: UsageEvent[];
-  agent: "claude" | "codex";
+  agent: AgentId;
   currentId: string;
   plans: PlanDef[];
   now: number;
@@ -113,28 +114,35 @@ export function ReportPanel({
   events,
   now,
   claudeMeter,
+  grokMeter,
   codexMeter,
   claudePlanId,
+  grokPlanId,
   codexPlanId,
   weekBoostPct,
   alerts,
+  weekApiUsd,
   onClearAlerts,
   onOpenSession,
 }: {
   events: UsageEvent[];
   now: number;
   claudeMeter: MeterSnapshot;
+  grokMeter: MeterSnapshot;
   codexMeter: MeterSnapshot;
   claudePlanId: string;
+  grokPlanId: string;
   codexPlanId: string;
   weekBoostPct: number;
   alerts: QuotaAlert[];
+  weekApiUsd?: number;
   onClearAlerts: () => void;
   onOpenSession: (id: string) => void;
 }) {
   const week = inWindow(events, now, WEEK_MS);
   const sessions = groupSessions(events, now, WEEK_MS).slice(0, 8);
   const claudeShare = modelShares(events, "claude", now, WEEK_MS);
+  const grokShare = modelShares(events, "grok", now, WEEK_MS);
   const codexShare = modelShares(events, "codex", now, WEEK_MS);
   const weekTokens = week.reduce((s, e) => s + rawTokens(e), 0);
 
@@ -146,9 +154,9 @@ export function ReportPanel({
           <p className="mt-2 font-mono text-3xl tracking-tight tabular">{formatTokens(weekTokens)}</p>
         </Card>
         <Card>
-          <p className="text-xs text-mute">等价 API</p>
+          <p className="text-xs text-mute">本周 API 等价</p>
           <p className="mt-2 font-mono text-3xl tracking-tight tabular">
-            {formatUsd(claudeMeter.apiUsdWeek + codexMeter.apiUsdWeek)}
+            {formatUsd(weekApiUsd ?? claudeMeter.apiUsdWeek + grokMeter.apiUsdWeek + codexMeter.apiUsdWeek)}
           </p>
         </Card>
         <Card>
@@ -161,13 +169,13 @@ export function ReportPanel({
 
       <Card>
         <CardTitle>十四日热力</CardTitle>
-        <CardHint className="mt-1">颜色越深，当天双开越猛</CardHint>
+        <CardHint className="mt-1">颜色越深，当天用量越猛</CardHint>
         <div className="mt-4">
           <Heatmap events={events} now={now} />
         </div>
       </Card>
 
-      <section className="grid gap-5 lg:grid-cols-2">
+      <section className="grid gap-5 lg:grid-cols-3">
         <Card>
           <PlanCompare
             title="若换 Claude 套餐"
@@ -175,6 +183,17 @@ export function ReportPanel({
             agent="claude"
             currentId={claudePlanId}
             plans={CLAUDE_PLANS}
+            now={now}
+            boost={weekBoostPct}
+          />
+        </Card>
+        <Card>
+          <PlanCompare
+            title="若换 Grok 套餐"
+            events={events}
+            agent="grok"
+            currentId={grokPlanId}
+            plans={GROK_PLANS}
             now={now}
             boost={weekBoostPct}
           />
@@ -217,7 +236,7 @@ export function ReportPanel({
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle>本周会话</CardTitle>
-            <CardHint className="mt-1">点开一条看 token 与等价成本</CardHint>
+            <CardHint className="mt-1">点开一条看 token 与 API 等价金额</CardHint>
           </div>
           <div className="flex gap-2">
             <Button
@@ -254,13 +273,13 @@ export function ReportPanel({
                   <span
                     className={cn(
                       "mt-1.5 size-1.5 shrink-0 rounded-full",
-                      s.agent === "claude" ? "bg-claude" : "bg-codex",
+                      agentDotClass(s.agent),
                     )}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{s.task}</span>
                     <span className="mt-0.5 block font-mono text-xs text-mute">
-                      {modelLabel(s.model)} · {s.events} 轮 · {formatTokens(s.tokens)} · {formatUsd(s.usd)}
+                      {modelLabel(s.model, s.modelRaw)} · {s.events} 轮 · {formatTokens(s.tokens)} · {formatUsd(s.usd)}
                     </span>
                   </span>
                   <span className="font-mono text-xs text-faint tabular">
@@ -275,13 +294,24 @@ export function ReportPanel({
         )}
       </Card>
 
-      <section className="grid gap-5 lg:grid-cols-2">
+      <section className="grid gap-5 lg:grid-cols-3">
         <Card>
           <CardTitle>Claude 模型占比</CardTitle>
           <ul className="mt-3 space-y-2 text-sm">
             {claudeShare.map((s) => (
-              <li key={s.model} className="flex justify-between">
-                <span className="text-mute">{modelLabel(s.model)}</span>
+              <li key={s.label} className="flex justify-between">
+                <span className="text-mute">{s.label}</span>
+                <span className="font-mono tabular">{s.pct.toFixed(0)}%</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+        <Card>
+          <CardTitle>Grok 模型占比</CardTitle>
+          <ul className="mt-3 space-y-2 text-sm">
+            {grokShare.map((s) => (
+              <li key={s.label} className="flex justify-between">
+                <span className="text-mute">{s.label}</span>
                 <span className="font-mono tabular">{s.pct.toFixed(0)}%</span>
               </li>
             ))}
@@ -291,8 +321,8 @@ export function ReportPanel({
           <CardTitle>Codex 模型占比</CardTitle>
           <ul className="mt-3 space-y-2 text-sm">
             {codexShare.map((s) => (
-              <li key={s.model} className="flex justify-between">
-                <span className="text-mute">{modelLabel(s.model)}</span>
+              <li key={s.label} className="flex justify-between">
+                <span className="text-mute">{s.label}</span>
                 <span className="font-mono tabular">{s.pct.toFixed(0)}%</span>
               </li>
             ))}

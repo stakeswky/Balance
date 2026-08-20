@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { formatTokens } from "@/components/synq/format";
-import { CLAUDE_PLANS, CODEX_PLANS } from "@/lib/quota/plans";
+import { CLAUDE_PLANS, CODEX_PLANS, GROK_PLANS } from "@/lib/quota/plans";
 import type { PlanDef } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
@@ -53,32 +53,37 @@ function PlanList({
 
 export function PlansPanel({
   claudePlanId,
+  grokPlanId,
   codexPlanId,
   weekBoostPct,
   alertWindowPct,
   alertWeekPct,
   onClaude,
+  onGrok,
   onCodex,
   onBoost,
   onAlertWindow,
   onAlertWeek,
 }: {
   claudePlanId: string;
+  grokPlanId: string;
   codexPlanId: string;
   weekBoostPct: number;
   alertWindowPct: number;
   alertWeekPct: number;
   onClaude: (id: string) => void;
+  onGrok: (id: string) => void;
   onCodex: (id: string) => void;
   onBoost: (n: number) => void;
   onAlertWindow: (n: number) => void;
   onAlertWeek: (n: number) => void;
 }) {
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
+    <div className="grid gap-5 lg:grid-cols-3">
       <PlanList title="Claude Code 套餐" plans={CLAUDE_PLANS} selected={claudePlanId} onSelect={onClaude} />
+      <PlanList title="Grok 套餐" plans={GROK_PLANS} selected={grokPlanId} onSelect={onGrok} />
       <PlanList title="Codex 套餐" plans={CODEX_PLANS} selected={codexPlanId} onSelect={onCodex} />
-      <Card>
+      <Card className="lg:col-span-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle>周额度加成</CardTitle>

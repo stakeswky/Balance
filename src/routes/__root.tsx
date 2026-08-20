@@ -17,8 +17,8 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Synq — Claude Code × Codex 额度监控" },
-      { name: "description", content: "协同监控 Claude Code 与 Codex 的模型用量，实时换算订阅额度。" },
+      { title: "Synq — Claude × Grok × Codex 额度监控" },
+      { name: "description", content: "协同监控 Claude Code、Grok 与 Codex 的模型用量，实时换算订阅额度。" },
       { name: "apple-mobile-web-app-title", content: APP_NAME },
       { name: "theme-color", content: "#09090b" },
       { name: "twitter:card", content: "summary_large_image" },

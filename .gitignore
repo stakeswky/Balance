@@ -1,5 +1,10 @@
 node_modules/
+.vercel/
 .project_id
 .github_repo
 .env
 .env.*
+.playwright-mcp/
+claude-quota-report.md
+synq-claude-import.json
+screenshots/claude-grok-quota-production.png

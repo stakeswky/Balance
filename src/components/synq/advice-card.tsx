@@ -4,16 +4,18 @@ import type { MeterSnapshot } from "@/lib/quota/types";
 
 export function AdviceCard({
   claude,
+  grok,
   codex,
 }: {
   claude: MeterSnapshot;
+  grok: MeterSnapshot;
   codex: MeterSnapshot;
 }) {
-  const tips = routingAdvice(claude, codex);
+  const tips = routingAdvice(claude, grok, codex);
   return (
     <Card>
       <CardTitle>协同建议</CardTitle>
-      <CardHint className="mt-1">按两边窗口松紧，决定下一趟任务走谁</CardHint>
+      <CardHint className="mt-1">按三路窗口松紧，决定下一趟任务走谁</CardHint>
       <ul className="mt-4 space-y-3">
         {tips.map((tip) => (
           <li key={tip.title} className="rounded-md bg-raised px-3 py-3">

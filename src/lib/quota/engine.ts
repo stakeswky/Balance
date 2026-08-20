@@ -1,4 +1,7 @@
-import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, MODEL_META, planById } from "./plans";
+import { costBreakdown, eventRawTokens } from "./cost.ts";
+import { modelDisplayLabel } from "./model-label.ts";
+import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, MODEL_META, planById } from "./plans.ts";
+import type { OfficialSlice } from "./official.ts";
 import type {
   AgentId,
   MeterSnapshot,
@@ -6,8 +9,8 @@ import type {
   ModelShare,
   PlanDef,
   UsageEvent,
-} from "./types";
-import { WEEK_MS, WINDOW_MS } from "./types";
+} from "./types.ts";
+import { WEEK_MS, WINDOW_MS } from "./types.ts";
 
 export function weightedTokens(event: UsageEvent): number {
   const meta = MODEL_META[event.model];
@@ -20,13 +23,11 @@ export function weightedTokens(event: UsageEvent): number {
 }
 
 export function rawTokens(event: UsageEvent): number {
-  return event.tokensIn + event.tokensOut + event.cacheRead + event.cacheWrite;
+  return eventRawTokens(event);
 }
 
 export function apiUsd(event: UsageEvent): number {
-  const meta = MODEL_META[event.model];
-  const inTok = event.tokensIn + event.cacheWrite * CACHE_WRITE_FACTOR + event.cacheRead * CACHE_READ_FACTOR;
-  return (inTok / 1_000_000) * meta.inPerM + (event.tokensOut / 1_000_000) * meta.outPerM;
+  return costBreakdown(event).totalUsd;
 }
 
 export function inWindow(events: UsageEvent[], now: number, span: number, agent?: AgentId) {
@@ -108,21 +109,62 @@ export function meterFor(
   };
 }
 
+export function applyOfficial(meter: MeterSnapshot, official: OfficialSlice | null | undefined): MeterSnapshot {
+  if (!official) return meter;
+  let windowPct = meter.windowPct;
+  let weekPct = meter.weekPct;
+  let burnPctPerHour = meter.burnPctPerHour;
+  let windowResetsAt = meter.windowResetsAt;
+  let weekResetsAt = meter.weekResetsAt;
+  if (official.windowKind === "weekly") {
+    if (official.weekPct != null) {
+      weekPct = official.weekPct;
+    }
+    if (official.weekResetsAt) {
+      weekResetsAt = official.weekResetsAt;
+    }
+    burnPctPerHour = official.burnPctPerHour;
+  } else {
+    if (official.windowPct != null) windowPct = official.windowPct;
+    if (official.weekPct != null) weekPct = official.weekPct;
+    if (official.windowResetsAt) windowResetsAt = official.windowResetsAt;
+    if (official.weekResetsAt) weekResetsAt = official.weekResetsAt;
+    if (official.burnPctPerHour > 0) burnPctPerHour = official.burnPctPerHour;
+  }
+  const remain = Math.max(0, 100 - windowPct);
+  const etaMs = burnPctPerHour > 0.4 ? (remain / burnPctPerHour) * 60 * 60 * 1000 : null;
+  let status: MeterSnapshot["status"] = "ok";
+  if (windowPct >= 88 || weekPct >= 88) status = "critical";
+  else if (windowPct >= 68 || weekPct >= 72) status = "watch";
+  return {
+    ...meter,
+    windowPct,
+    weekPct,
+    windowResetsAt,
+    weekResetsAt,
+    burnPctPerHour,
+    etaMs,
+    status,
+  };
+}
+
 export function modelShares(events: UsageEvent[], agent: AgentId, now: number, span: number): ModelShare[] {
   const slice = inWindow(events, now, span, agent);
-  const byModel = new Map<ModelId, { tokens: number; events: number }>();
+  const byLabel = new Map<string, { model: ModelId; tokens: number; events: number }>();
   let total = 0;
   for (const e of slice) {
     const t = rawTokens(e);
     total += t;
-    const cur = byModel.get(e.model) ?? { tokens: 0, events: 0 };
+    const label = modelDisplayLabel(e.modelRaw, e.model);
+    const cur = byLabel.get(label) ?? { model: e.model, tokens: 0, events: 0 };
     cur.tokens += t;
     cur.events += 1;
-    byModel.set(e.model, cur);
+    byLabel.set(label, cur);
   }
-  return [...byModel.entries()]
-    .map(([model, v]) => ({
-      model,
+  return [...byLabel.entries()]
+    .map(([label, v]) => ({
+      model: v.model,
+      label,
       tokens: v.tokens,
       events: v.events,
       pct: total ? (v.tokens / total) * 100 : 0,
@@ -131,18 +173,20 @@ export function modelShares(events: UsageEvent[], agent: AgentId, now: number, s
 }
 
 export function hourlySeries(events: UsageEvent[], now: number, hours: number) {
-  const buckets: { t: number; claude: number; codex: number; label: string }[] = [];
+  const buckets: { t: number; claude: number; grok: number; codex: number; label: string }[] = [];
   const hour = 60 * 60 * 1000;
   for (let i = hours - 1; i >= 0; i--) {
     const end = now - i * hour;
     const start = end - hour;
     const slice = events.filter((e) => e.ts > start && e.ts <= end);
     const claude = slice.filter((e) => e.agent === "claude").reduce((s, e) => s + rawTokens(e), 0);
+    const grok = slice.filter((e) => e.agent === "grok").reduce((s, e) => s + rawTokens(e), 0);
     const codex = slice.filter((e) => e.agent === "codex").reduce((s, e) => s + rawTokens(e), 0);
     const d = new Date(end);
     buckets.push({
       t: end,
       claude,
+      grok,
       codex,
       label: `${d.getHours().toString().padStart(2, "0")}:00`,
     });
@@ -155,20 +199,22 @@ export function dailySeries(events: UsageEvent[], now: number, days: number) {
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
   const origin = startOfToday.getTime();
-  const buckets: { t: number; label: string; claude: number; codex: number; total: number }[] = [];
+  const buckets: { t: number; label: string; claude: number; grok: number; codex: number; total: number }[] = [];
   for (let i = days - 1; i >= 0; i--) {
     const start = origin - i * day;
     const end = start + day;
     const slice = events.filter((e) => e.ts >= start && e.ts < end);
     const claude = slice.filter((e) => e.agent === "claude").reduce((s, e) => s + rawTokens(e), 0);
+    const grok = slice.filter((e) => e.agent === "grok").reduce((s, e) => s + rawTokens(e), 0);
     const codex = slice.filter((e) => e.agent === "codex").reduce((s, e) => s + rawTokens(e), 0);
     const d = new Date(start);
     buckets.push({
       t: start,
       label: `${d.getMonth() + 1}/${d.getDate()}`,
       claude,
+      grok,
       codex,
-      total: claude + codex,
+      total: claude + grok + codex,
     });
   }
   return buckets;
@@ -179,6 +225,7 @@ export interface SessionGroup {
   agent: AgentId;
   task: string;
   model: ModelId;
+  modelRaw?: string;
   start: number;
   end: number;
   events: number;
@@ -199,6 +246,7 @@ export function groupSessions(events: UsageEvent[], now: number, span: number): 
         agent: e.agent,
         task: e.task,
         model: e.model,
+        modelRaw: e.modelRaw,
         start: e.ts,
         end: e.ts,
         events: 1,
@@ -208,6 +256,10 @@ export function groupSessions(events: UsageEvent[], now: number, span: number): 
         usd: apiUsd(e),
       });
     } else {
+      if (e.ts >= cur.end) {
+        cur.model = e.model;
+        cur.modelRaw = e.modelRaw;
+      }
       cur.start = Math.min(cur.start, e.ts);
       cur.end = Math.max(cur.end, e.ts);
       cur.events += 1;
@@ -238,27 +290,41 @@ export function comparePlans(
   });
 }
 
-export function routingAdvice(claude: MeterSnapshot, codex: MeterSnapshot) {
+export function routingAdvice(claude: MeterSnapshot, grok: MeterSnapshot, codex: MeterSnapshot) {
   const tips: { title: string; body: string }[] = [];
+  const grokLoad = Math.max(grok.windowPct, grok.weekPct);
+  const codexLoad = Math.max(codex.windowPct, codex.weekPct);
   if (claude.windowPct >= 68) {
     tips.push({
       title: "Claude 切到 Sonnet / Haiku",
-      body: "窗口已过警戒。简单改文件用 Haiku，重重构再开 Opus，能把窗消耗压到约五分之一。",
+      body: "窗口已过警戒。简单改文件用 Haiku 4.5，重重构再开 Opus 5，把 Fable 留给最长的 Agent。",
     });
   }
-  if (codex.windowPct >= 68) {
+  if (grokLoad >= 68) {
     tips.push({
-      title: "Codex 降推理档",
-      body: "Plus 窗按推理分钟计。短任务用 Codex Mini，避免 GPT-5.4 长思考把五小时窗吃光。",
+      title: "Grok 先歇一轮或换档",
+      body: "Grok 窗已经紧。短修补继续用 4.6，长推理先让 Claude / Codex 顶上，等周额度回补。",
     });
   }
-  if (claude.windowPct < 40 && codex.windowPct >= 70) {
+  if (codexLoad >= 68) {
+    tips.push({
+      title: "Codex 降到 Terra / Luna",
+      body: "周额度已经紧。短任务用 GPT-5.6 Luna，把 Sol 留给难的实现。",
+    });
+  }
+  if (claude.windowPct < 40 && (codexLoad >= 70 || grokLoad >= 70)) {
     tips.push({
       title: "把重活交给 Claude",
-      body: "Claude 窗口还松。长重构先走 Claude Code，Codex 留审查和补测试。",
+      body: "Claude 窗口还松。长重构先走 Claude Code，其余 Agent 留审查和补测试。",
     });
   }
-  if (codex.windowPct < 40 && claude.windowPct >= 70) {
+  if (grokLoad < 40 && claude.windowPct >= 70) {
+    tips.push({
+      title: "把重活交给 Grok",
+      body: "Claude 先碰到上限。实现和多步工具循环交给 Grok，把 Opus 留给难的设计。",
+    });
+  }
+  if (codexLoad < 40 && claude.windowPct >= 70) {
     tips.push({
       title: "把重活交给 Codex",
       body: "Claude 先碰到上限。生成样板、补测试交给 Codex，把 Opus 留给难的设计。",
@@ -266,8 +332,8 @@ export function routingAdvice(claude: MeterSnapshot, codex: MeterSnapshot) {
   }
   if (!tips.length) {
     tips.push({
-      title: "双开节奏正常",
-      body: "两边窗口都还宽裕。保持现在的模型组合即可，不必为了省额度降智。",
+      title: "三路节奏正常",
+      body: "窗口都还宽裕。保持现在的模型组合即可，不必为了省额度降智。",
     });
   }
   return tips.slice(0, 3);
@@ -311,9 +377,20 @@ export function formatTokens(n: number): string {
 }
 
 export function formatUsd(n: number): string {
-  if (n >= 100) return `$${n.toFixed(0)}`;
-  if (n >= 10) return `$${n.toFixed(1)}`;
-  return `$${n.toFixed(2)}`;
+  if (!Number.isFinite(n) || n === 0) return "$0.00";
+  const sign = n < 0 ? "-" : "";
+  const v = Math.abs(n);
+  if (v >= 10_000) return `${sign}$${(v / 1000).toFixed(0)}k`;
+  if (v >= 1000) return `${sign}$${(v / 1000).toFixed(1)}k`;
+  if (v >= 100) return `${sign}$${v.toFixed(0)}`;
+  if (v >= 10) return `${sign}$${v.toFixed(1)}`;
+  if (v >= 1) return `${sign}$${v.toFixed(2)}`;
+  return `${sign}$${v.toFixed(4)}`;
+}
+
+export function formatUsdRange(low: number | null | undefined, high: number | null | undefined): string {
+  if (low == null || high == null) return "样本不足";
+  return `${formatUsd(low)}–${formatUsd(high)}`;
 }
 
 export function formatDuration(ms: number): string {

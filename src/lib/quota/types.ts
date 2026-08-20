@@ -1,31 +1,54 @@
-export type AgentId = "claude" | "codex";
+export type AgentId = "claude" | "codex" | "grok";
 
-export type ClaudeModelId = "opus" | "sonnet" | "haiku";
-export type CodexModelId = "gpt-5.4" | "gpt-5.3-codex" | "gpt-5-codex-mini";
-export type ModelId = ClaudeModelId | CodexModelId;
+export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
+export type CodexModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-5.4";
+export type GrokModelId = "grok-4.6" | "grok-4.5";
+export type ModelId = ClaudeModelId | CodexModelId | GrokModelId;
 
 export interface UsageEvent {
   id: string;
   agent: AgentId;
   model: ModelId;
+  /** Original model id from the client log; used for price lookup. */
+  modelRaw?: string;
   ts: number;
   sessionId: string;
   task: string;
+  /** Uncached input tokens. Mutually exclusive with cacheRead. */
   tokensIn: number;
   tokensOut: number;
   cacheRead: number;
+  /** 5-minute cache write tokens (Claude); other agents use this for undifferentiated writes. */
   cacheWrite: number;
+  cacheWrite1h?: number;
+  /** True when Claude only had a combined cache-write total, billed as 5m. */
+  cacheWriteUnsplit?: boolean;
   reasoningMin: number;
+  reportedCostTicks?: number | null;
+  reportedCostByModel?: Record<string, number>;
 }
 
 export interface SessionState {
   id: string;
   task: string;
   model: ModelId;
+  modelRaw?: string;
   startedAt: number;
   events: number;
   tokens: number;
 }
+
+export interface AgentLiveInfo {
+  sessionId: string;
+  cwd: string;
+  task: string;
+  writing: boolean;
+  lastTs: number;
+  startedAt: number;
+  turns: number;
+}
+
+export type ClaudeLiveInfo = AgentLiveInfo;
 
 export interface PlanDef {
   id: string;
@@ -61,6 +84,7 @@ export interface MeterSnapshot {
 
 export interface ModelShare {
   model: ModelId;
+  label: string;
   tokens: number;
   pct: number;
   events: number;

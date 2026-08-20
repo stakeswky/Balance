@@ -1,15 +1,23 @@
 import type { AgentId, ModelId, UsageEvent } from "./types";
+import { exclusiveCachedInput } from "./tokens";
 
 function asModel(raw: string, agent: AgentId): ModelId {
   const s = raw.toLowerCase();
   if (agent === "claude") {
+    if (s.includes("fable") || s.includes("mythos")) return "fable";
     if (s.includes("opus")) return "opus";
     if (s.includes("haiku")) return "haiku";
     return "sonnet";
   }
-  if (s.includes("mini")) return "gpt-5-codex-mini";
+  if (agent === "grok") {
+    if (s.includes("4.5")) return "grok-4.5";
+    return "grok-4.6";
+  }
+  if (s.includes("luna") || s.includes("mini") || s.includes("spark")) return "gpt-5.6-luna";
+  if (s.includes("terra")) return "gpt-5.6-terra";
+  if (s.includes("sol") || s.includes("5.6")) return "gpt-5.6-sol";
   if (s.includes("5.4") || s.includes("o3")) return "gpt-5.4";
-  return "gpt-5.3-codex";
+  return "gpt-5.6-sol";
 }
 
 function num(v: unknown): number {
@@ -25,17 +33,35 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   const usage = (o.usage ?? msg.usage ?? o.token_usage ?? {}) as Record<string, unknown>;
 
   const agentRaw = String(o.agent ?? o.source ?? fallbackAgent).toLowerCase();
-  const agent: AgentId = agentRaw.includes("codex") || agentRaw.includes("openai") ? "codex" : "claude";
+  const agent: AgentId = agentRaw.includes("grok") || agentRaw.includes("xai")
+    ? "grok"
+    : agentRaw.includes("codex") || agentRaw.includes("openai")
+      ? "codex"
+      : "claude";
 
-  const modelRaw = String(o.model ?? msg.model ?? (agent === "claude" ? "sonnet" : "gpt-5.3-codex"));
+  const modelRaw = String(
+    o.model ?? msg.model ?? (agent === "claude" ? "sonnet" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol"),
+  );
   const tsRaw = o.timestamp ?? o.ts ?? o.created_at ?? Date.now();
-  const ts = typeof tsRaw === "number" ? tsRaw : Date.parse(String(tsRaw));
+  const tsNum = typeof tsRaw === "number" ? tsRaw : Date.parse(String(tsRaw));
+  const ts = Number.isFinite(tsNum) ? (tsNum > 0 && tsNum < 1e12 ? tsNum * 1000 : tsNum) : NaN;
   if (!Number.isFinite(ts)) return null;
 
-  const tokensIn = num(usage.input_tokens ?? usage.prompt_tokens ?? usage.tokensIn ?? o.tokensIn);
-  const tokensOut = num(usage.output_tokens ?? usage.completion_tokens ?? usage.tokensOut ?? o.tokensOut);
-  const cacheRead = num(usage.cache_read_input_tokens ?? usage.cache_read ?? o.cacheRead);
-  const cacheWrite = num(usage.cache_creation_input_tokens ?? usage.cache_write ?? o.cacheWrite);
+  let tokensIn = num(usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens ?? usage.tokensIn ?? o.tokensIn);
+  const tokensOut = num(
+    usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens ?? usage.tokensOut ?? o.tokensOut,
+  );
+  let cacheRead = num(
+    usage.cache_read_input_tokens ?? usage.cache_read ?? usage.cachedReadTokens ?? usage.cacheRead ?? o.cacheRead,
+  );
+  if (agent === "codex" || agent === "grok") {
+    const split = exclusiveCachedInput(tokensIn, cacheRead);
+    tokensIn = split.uncachedInputTokens;
+    cacheRead = split.cacheReadTokens;
+  }
+  const cacheWrite = num(
+    usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheCreationTokens ?? usage.cacheWrite ?? o.cacheWrite,
+  );
   const reasoningMin = num(usage.reasoning_minutes ?? o.reasoningMin ?? o.reasoning_minutes);
 
   if (tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin <= 0) return null;
@@ -44,6 +70,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
     id: String(o.id ?? `imp_${ts}_${index}`),
     agent,
     model: asModel(modelRaw, agent),
+    modelRaw,
     ts,
     sessionId: String(o.session_id ?? o.sessionId ?? o.conversation_id ?? `imp_sess_${index}`),
     task: String(o.task ?? o.cwd ?? o.prompt ?? "导入会话"),

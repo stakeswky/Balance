@@ -1,9 +1,10 @@
 import { rawTokens } from "@/lib/quota/engine";
-import type { UsageEvent } from "@/lib/quota/types";
+import { agentTextClass } from "@/lib/quota/agent";
+import type { AgentId, UsageEvent } from "@/lib/quota/types";
 import { WINDOW_MS } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
-function sessionsInWindow(events: UsageEvent[], agent: "claude" | "codex", now: number) {
+function sessionsInWindow(events: UsageEvent[], agent: AgentId, now: number) {
   const from = now - WINDOW_MS;
   const slice = events.filter((e) => e.agent === agent && e.ts >= from && e.ts <= now);
   const map = new Map<string, { start: number; end: number; tokens: number; task: string }>();
@@ -28,7 +29,7 @@ function Lane({
   events,
   now,
 }: {
-  agent: "claude" | "codex";
+  agent: AgentId;
   events: UsageEvent[];
   now: number;
 }) {
@@ -45,7 +46,7 @@ function Lane({
             title={b.task}
             className={cn(
               "absolute top-1.5 bottom-1.5 rounded-sm",
-              agent === "claude" ? "bg-claude/80" : "bg-codex/80",
+              agent === "claude" ? "bg-claude/80" : agent === "grok" ? "bg-grok/80" : "bg-codex/80",
             )}
             style={{ left: `${left}%`, width: `${width}%` }}
           />
@@ -58,6 +59,7 @@ function Lane({
 
 export function DualTimeline({ events, now }: { events: UsageEvent[]; now: number }) {
   const ticks = [5, 4, 3, 2, 1, 0];
+  const lanes: AgentId[] = ["claude", "grok", "codex"];
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between text-xs text-mute">
@@ -65,14 +67,14 @@ export function DualTimeline({ events, now }: { events: UsageEvent[]; now: numbe
         <span className="font-mono tabular">现在</span>
       </div>
       <div className="space-y-2">
-        <div className="grid grid-cols-[4.5rem_1fr] items-center gap-3">
-          <span className="text-xs font-medium text-claude">Claude</span>
-          <Lane agent="claude" events={events} now={now} />
-        </div>
-        <div className="grid grid-cols-[4.5rem_1fr] items-center gap-3">
-          <span className="text-xs font-medium text-codex">Codex</span>
-          <Lane agent="codex" events={events} now={now} />
-        </div>
+        {lanes.map((agent) => (
+          <div key={agent} className="grid grid-cols-[4.5rem_1fr] items-center gap-3">
+            <span className={cn("text-xs font-medium", agentTextClass(agent))}>
+              {agent === "claude" ? "Claude" : agent === "grok" ? "Grok" : "Codex"}
+            </span>
+            <Lane agent={agent} events={events} now={now} />
+          </div>
+        ))}
       </div>
       <div className="grid grid-cols-[4.5rem_1fr] gap-3">
         <span />

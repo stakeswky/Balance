@@ -1,5 +1,6 @@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { formatDuration, formatTokens, formatUsd, modelLabel } from "@/components/synq/format";
+import { AGENT_LABEL } from "@/lib/quota/agent";
 import { apiUsd, rawTokens } from "@/lib/quota/engine";
 import type { UsageEvent } from "@/lib/quota/types";
 
@@ -26,7 +27,7 @@ export function SessionDialog({
         <DialogTitle>{first?.task ?? "会话"}</DialogTitle>
         <DialogDescription>
           {first
-            ? `${first.agent === "claude" ? "Claude Code" : "Codex"} · ${modelLabel(first.model)}`
+            ? `${AGENT_LABEL[first.agent]} · ${modelLabel(first.model, first.modelRaw)}`
             : "没有找到这条会话"}
         </DialogDescription>
         {first ? (
@@ -41,7 +42,7 @@ export function SessionDialog({
                 <dd className="mt-1 font-mono text-sm tabular">{formatTokens(tokens)}</dd>
               </div>
               <div className="rounded-md bg-raised px-3 py-2.5">
-                <dt className="text-faint">等价 API</dt>
+                <dt className="text-faint">API 等价</dt>
                 <dd className="mt-1 font-mono text-sm tabular">{formatUsd(usd)}</dd>
               </div>
               <div className="rounded-md bg-raised px-3 py-2.5">

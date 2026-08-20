@@ -12,6 +12,7 @@ const badgeVariants = cva(
         watch: "bg-warn/15 text-warn",
         critical: "bg-crit/15 text-crit",
         claude: "bg-claude-dim text-claude",
+        grok: "bg-grok-dim text-grok",
         codex: "bg-codex-dim text-codex",
       },
     },

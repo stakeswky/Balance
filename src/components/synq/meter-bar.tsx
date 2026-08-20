@@ -6,7 +6,7 @@ export function MeterBar({
   label,
 }: {
   value: number;
-  tone: "claude" | "codex" | "ok" | "warn" | "crit";
+  tone: "claude" | "grok" | "codex" | "ok" | "warn" | "crit";
   label?: string;
 }) {
   const width = Math.max(0, Math.min(100, value));
@@ -23,6 +23,7 @@ export function MeterBar({
           className={cn(
             "meter-fill h-full rounded-full",
             tone === "claude" && "bg-claude",
+            tone === "grok" && "bg-grok",
             tone === "codex" && "bg-codex",
             tone === "ok" && "bg-ok",
             tone === "warn" && "bg-warn",

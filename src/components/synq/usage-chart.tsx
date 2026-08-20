@@ -14,6 +14,10 @@ export function UsageChart({ events, now }: { events: UsageEvent[]; now: number 
               <stop offset="0%" stopColor="var(--color-claude)" stopOpacity={0.45} />
               <stop offset="100%" stopColor="var(--color-claude)" stopOpacity={0} />
             </linearGradient>
+            <linearGradient id="gGrok" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-grok)" stopOpacity={0.42} />
+              <stop offset="100%" stopColor="var(--color-grok)" stopOpacity={0} />
+            </linearGradient>
             <linearGradient id="gCodex" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="var(--color-codex)" stopOpacity={0.4} />
               <stop offset="100%" stopColor="var(--color-codex)" stopOpacity={0} />
@@ -43,7 +47,7 @@ export function UsageChart({ events, now }: { events: UsageEvent[]; now: number 
             labelStyle={{ color: "var(--color-mute)" }}
             formatter={(value, name) => [
               formatTokens(Number(value ?? 0)),
-              name === "claude" ? "Claude" : "Codex",
+              name === "claude" ? "Claude" : name === "grok" ? "Grok" : "Codex",
             ]}
           />
           <Area
@@ -51,6 +55,13 @@ export function UsageChart({ events, now }: { events: UsageEvent[]; now: number 
             dataKey="claude"
             stroke="var(--color-claude)"
             fill="url(#gClaude)"
+            strokeWidth={1.5}
+          />
+          <Area
+            type="monotone"
+            dataKey="grok"
+            stroke="var(--color-grok)"
+            fill="url(#gGrok)"
             strokeWidth={1.5}
           />
           <Area

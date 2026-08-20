@@ -147,6 +147,10 @@ export default defineConfig(({ command }) => ({
       ? [
           nitro({
             preset: "vercel",
+            // PGLite resolves its WASM/data files relative to the package at
+            // runtime. Full-trace the package so the no-DATABASE_URL fallback
+            // remains runnable from the Vercel function bundle.
+            traceDeps: ["@electric-sql/pglite*"],
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.

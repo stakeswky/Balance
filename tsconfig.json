@@ -9,6 +9,8 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
     "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
