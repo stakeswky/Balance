@@ -1,0 +1,75 @@
+name: macOS Apple Silicon
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Cache official Node runtime archive
+        uses: actions/cache@v4
+        with:
+          path: .cache/synq-desktop
+          key: node-v22.23.2-darwin-arm64
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run JavaScript tests
+        run: npm test
+
+      - name: Run TypeScript checks
+        run: npm run typecheck
+
+      - name: Prepare desktop web and Node sidecar
+        run: npm run desktop:prepare
+
+      - name: Run Rust tests
+        run: npm run desktop:test
+
+      - name: Build macOS Apple Silicon bundles
+        run: npm run desktop:build
+
+      - name: Verify and archive application
+        run: |
+          APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Synq.app"
+          test -d "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/Synq-macos-arm64.app.zip
+
+      - name: Upload macOS bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: Synq-macos-arm64
+          if-no-files-found: error
+          path: |
+            artifacts/Synq-macos-arm64.app.zip
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
