@@ -39,6 +39,12 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.match(rust, /TrayIconBuilder/);
   assert.match(rust, /MenuBuilder/);
   assert.match(rust, /quit_app/);
+  assert.match(rust, /const TRAY_WINDOW: &str = "tray"/);
+  assert.match(rust, /toggle_tray_dashboard/);
+  assert.match(rust, /__desktop\/show-main/);
+  assert.match(rust, /\/tray/);
+  assert.match(rust, /title\("余量周限额"\)/);
+  assert.deepEqual(capability.windows, ["main", "startup-error", "tray"]);
   assert.match(rust, /BALANCE_PARENT_PID/);
   assert.match(rust, /sidecar-watchdog\.cjs/);
   assert.match(rust, /stopping/);
