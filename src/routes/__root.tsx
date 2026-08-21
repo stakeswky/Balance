@@ -1,15 +1,17 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
+import { ThemeSync } from "@/components/synq/theme-toggle";
+import { THEME_BOOT } from "@/lib/theme";
 import "../styles.css";
 
 const APP_NAME = "Balance";
 const host = import.meta.env.VITE_PUBLIC_HOSTNAME;
 const ogImage = host
-  ? `https://og.grok.me/v1/card.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}&color=09090B`
+  ? `https://og.grok.me/v1/card.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}&color=F2EFE8`
   : undefined;
 const xBanner = host
-  ? `https://og.grok.me/v1/banner.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}&color=09090B`
+  ? `https://og.grok.me/v1/banner.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}&color=F2EFE8`
   : undefined;
 
 export const Route = createRootRoute({
@@ -23,7 +25,7 @@ export const Route = createRootRoute({
         content: "协同监控 Claude Code、Grok 与 Codex 的模型用量，实时换算订阅额度。",
       },
       { name: "apple-mobile-web-app-title", content: APP_NAME },
-      { name: "theme-color", content: "#09090b" },
+      { name: "theme-color", content: "#f2efe8" },
       { name: "twitter:card", content: "summary_large_image" },
       { property: "og:type", content: "website" },
       ...(ogImage
@@ -48,13 +50,15 @@ export const Route = createRootRoute({
     ],
   }),
   component: () => (
-    <html lang="zh-CN" className="antialiased" suppressHydrationWarning>
+    <html lang="zh-CN" className="antialiased" data-theme="light" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <HeadContent />
       </head>
       <body>
         <PreviewHostBridge />
         <AuthProvider>
+          <ThemeSync />
           <Outlet />
         </AuthProvider>
         <Scripts />

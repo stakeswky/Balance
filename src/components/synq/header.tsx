@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { ThemeToggle } from "@/components/synq/theme-toggle";
 import type { AgentId } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
@@ -80,13 +81,14 @@ export function Header({
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-1 sm:gap-3">
           <span className="hidden items-center gap-1.5 text-xs text-mute md:flex">
             <span
               className={cn("size-1.5 rounded-full", live || watchText ? "bg-ok" : "bg-faint")}
             />
             {watchText ?? (live ? "协同采集中" : "采集已暂停")}
           </span>
+          <ThemeToggle />
         </div>
       </div>
     </header>
