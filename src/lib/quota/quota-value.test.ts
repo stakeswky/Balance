@@ -941,3 +941,35 @@ test("cumulative usd regressions are dropped but counted as anomalies", () => {
   assert.equal(result.anomalousPairs, 1);
   assert.equal(result.confidence, "low");
 });
+
+test("fractional percentages accumulate into valid anchor-chain slopes", () => {
+  const rows: QuotaSample[] = [];
+  for (let index = 0; index <= 200; index += 1) {
+    const usedPercent = Number((index * 0.2).toFixed(4));
+    rows.push(sample({
+      timestampMs: index * 30_000,
+      usedPercent,
+      cumulativeObservedUsd: usedPercent * 0.5,
+    }));
+  }
+  const slopes = validSlopes(rows);
+  assert.ok(slopes.length >= 30);
+  assert.ok(slopes.every((row) => row.weight >= 1));
+  assert.ok(slopes.every((row) => Math.abs(row.value - 0.5) < 1e-9));
+  assert.notEqual(calibrateFromSamples(rows, 40, false).confidence, "none");
+});
+
+test("coverage failure breaks an anchor chain", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 0.6, cumulativeObservedUsd: 0.3 }),
+    sample({ timestampMs: 3, usedPercent: 1.2, cumulativeObservedUsd: 0.6, pricedTokenCoverage: 0.5 }),
+    sample({ timestampMs: 4, usedPercent: 1.8, cumulativeObservedUsd: 0.9 }),
+    sample({ timestampMs: 5, usedPercent: 2.9, cumulativeObservedUsd: 1.45 }),
+  ];
+  const slopes = validSlopes(rows);
+  assert.equal(slopes.length, 1);
+  assert.equal(slopes[0]!.segmentId, 1);
+  assert.ok(Math.abs(slopes[0]!.weight - 1.1) < 1e-9);
+  assert.equal(slopes[0]!.value, 0.5);
+});

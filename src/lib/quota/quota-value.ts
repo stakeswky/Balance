@@ -314,25 +314,33 @@ function scanValidSlopes(samples: QuotaSample[]): QuotaSlopeScan {
   let latestTimestampMs = -Infinity;
   let cumulativeDropPairs = 0;
   for (const [groupKey, ordered] of groups) {
+    let anchor: QuotaSample | null = null;
     let segmentId = 0;
-    for (let index = 1; index < ordered.length; index += 1) {
-      const previous = ordered[index - 1]!;
-      const current = ordered[index]!;
-      const dPct = current.usedPercent - previous.usedPercent;
-      const dUsd = current.cumulativeObservedUsd - previous.cumulativeObservedUsd;
+    for (const row of ordered) {
+      if (row.pricedTokenCoverage < 0.8) {
+        anchor = null;
+        segmentId += 1;
+        continue;
+      }
+      if (!anchor) {
+        anchor = row;
+        continue;
+      }
+
+      const dPct = row.usedPercent - anchor.usedPercent;
+      const dUsd = row.cumulativeObservedUsd - anchor.cumulativeObservedUsd;
       if (dUsd < 0) {
         cumulativeDropPairs += 1;
+        anchor = row;
         segmentId += 1;
         continue;
       }
       if (dPct < 0) {
+        anchor = row;
         segmentId += 1;
         continue;
       }
-      if (previous.pricedTokenCoverage < 0.8 || current.pricedTokenCoverage < 0.8) {
-        segmentId += 1;
-        continue;
-      }
+      if (dPct < 1) continue;
       if (dPct > 0 && dUsd === 0) {
         slopes.push({
           value: 0,
@@ -342,20 +350,21 @@ function scanValidSlopes(samples: QuotaSample[]): QuotaSlopeScan {
           segmentId,
           groupKey,
         });
+        anchor = row;
         segmentId += 1;
         continue;
       }
-      if (dPct < 1) continue;
       if (dUsd > 0) {
         slopes.push({
           value: dUsd / dPct,
           weight: dPct,
           external: false,
-          modelMix: intervalModelMix(previous, current),
+          modelMix: intervalModelMix(anchor, row),
           segmentId,
           groupKey,
         });
       }
+      anchor = row;
     }
     const groupTimestampMs = ordered.at(-1)?.timestampMs ?? -Infinity;
     if (groupTimestampMs > latestTimestampMs) {
