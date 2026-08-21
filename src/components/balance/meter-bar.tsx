@@ -4,10 +4,12 @@ export function MeterBar({
   value,
   tone,
   label,
+  detail,
 }: {
   value: number;
   tone: "claude" | "grok" | "codex" | "ok" | "warn" | "crit";
   label?: string;
+  detail?: string | null;
 }) {
   const width = Math.max(0, Math.min(100, value));
   return (
@@ -32,6 +34,7 @@ export function MeterBar({
           style={{ width: `${width}%` }}
         />
       </div>
+      {detail ? <p className="text-xs text-faint">{detail}</p> : null}
     </div>
   );
 }

@@ -27,7 +27,6 @@ import { inferCodexProPlanId } from "@/lib/quota/estimate";
 import type { OfficialSlice } from "@/lib/quota/official";
 import { planById } from "@/lib/quota/plans";
 import {
-  formatResetClock,
   primaryUsagePercent,
   primaryWindowResetsAt,
   quotaAlertDecision,
@@ -544,23 +543,6 @@ export function Dashboard() {
                         {formatDuration(Math.max(0, tighter.resetsAt - now))}
                       </dd>
                     </div>
-                    {visibleAgents.flatMap((agent) => {
-                      const resetsAt =
-                        agent === "claude"
-                          ? official.claude?.weekResetsAt
-                          : agent === "grok"
-                            ? official.grok?.weekResetsAt
-                            : official.codex?.weekResetsAt;
-                      if (resetsAt == null || !Number.isFinite(resetsAt) || resetsAt <= 0) {
-                        return [];
-                      }
-                      return [
-                        <div className="flex justify-between" key={`${agent}-week-reset`}>
-                          <dt className="text-faint">{AGENT_LABEL[agent]} 周刷新</dt>
-                          <dd className="font-mono tabular">{formatResetClock(resetsAt)}</dd>
-                        </div>,
-                      ];
-                    })}
                   </dl>
                   {demoMode ? (
                     <Button

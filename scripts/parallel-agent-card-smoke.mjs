@@ -82,6 +82,7 @@ try {
   const fableHtml = renderToStaticMarkup(
     React.createElement(AgentCard, {
       ...props,
+      weekResetsAt: resetAt,
       modelWeekLimit: {
         model: "fable",
         limitPctOfWeek: 50,
@@ -91,8 +92,8 @@ try {
       now: resetAt - 4 * 24 * 60 * 60 * 1000,
     }),
   );
-  assert.match(fableHtml, /Fable 5 周限额刷新/);
-  assert.doesNotMatch(fableHtml, />周限额刷新/);
+  assert.match(fableHtml, /周限额刷新/);
+  assert.doesNotMatch(fableHtml, /Fable 5 周限额刷新/);
   process.stdout.write(`parallel-agent-card-smoke mode=${mode} ok\n`);
 } finally {
   await server.close();
