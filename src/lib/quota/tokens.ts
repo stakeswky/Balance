@@ -65,18 +65,36 @@ export function claudeCacheWrites(usage: Record<string, unknown>): {
   cacheWrite5mTokens: number;
   cacheWrite1hTokens: number;
   splitUnknown: boolean;
+  anomalies: UsageAnomaly[];
 } {
   const nested = usage.cache_creation;
   if (nested && typeof nested === "object") {
-    const o = nested as Record<string, unknown>;
-    const w5 = finiteNonNeg(Number(o.ephemeral_5m_input_tokens ?? 0));
-    const w1 = finiteNonNeg(Number(o.ephemeral_1h_input_tokens ?? 0));
-    if (w5 > 0 || w1 > 0) return { cacheWrite5mTokens: w5, cacheWrite1hTokens: w1, splitUnknown: false };
+    const value = nested as Record<string, unknown>;
+    const fiveMinute = normalizeToken(
+      value.ephemeral_5m_input_tokens,
+      "cache_creation.ephemeral_5m_input_tokens",
+    );
+    const oneHour = normalizeToken(
+      value.ephemeral_1h_input_tokens,
+      "cache_creation.ephemeral_1h_input_tokens",
+    );
+    if (fiveMinute.value > 0 || oneHour.value > 0 || fiveMinute.anomalies.length || oneHour.anomalies.length) {
+      return {
+        cacheWrite5mTokens: fiveMinute.value,
+        cacheWrite1hTokens: oneHour.value,
+        splitUnknown: false,
+        anomalies: [...fiveMinute.anomalies, ...oneHour.anomalies],
+      };
+    }
   }
-  const total = finiteNonNeg(
-    Number(usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheWrite ?? 0),
-  );
-  return { cacheWrite5mTokens: total, cacheWrite1hTokens: 0, splitUnknown: total > 0 };
+  const totalRaw = usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheWrite;
+  const total = normalizeToken(totalRaw, "cache_creation_input_tokens");
+  return {
+    cacheWrite5mTokens: total.value,
+    cacheWrite1hTokens: 0,
+    splitUnknown: total.value > 0,
+    anomalies: total.anomalies,
+  };
 }
 
 export function rawExclusiveTokens(e: {

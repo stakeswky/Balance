@@ -1,18 +1,13 @@
-import type { CodexModelId, UsageEvent } from "./types.ts";
+import type { CodexModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
 import { parseCodexRateLimits, type OfficialSlice } from "./official.ts";
-import { exclusiveCachedInput } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeToken } from "./tokens.ts";
 
 export interface CodexSessionMeta {
   sessionId: string;
   cwd: string;
   title: string;
   model: string;
-}
-
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 export function asCodexModel(raw: string): CodexModelId {
@@ -57,15 +52,19 @@ function usageFromLast(last: Record<string, unknown>): {
   cacheRead: number;
   cacheWrite: number;
   reasoningMin: number;
+  anomalies: UsageAnomaly[];
 } {
-  const reasoning = num(last.reasoning_output_tokens);
-  const split = exclusiveCachedInput(num(last.input_tokens), num(last.cached_input_tokens));
+  const split = exclusiveCachedInput(last.input_tokens, last.cached_input_tokens);
+  const output = normalizeToken(last.output_tokens, "output_tokens");
+  const cacheWrite = normalizeToken(last.cache_write_input_tokens, "cache_write_input_tokens");
+  const reasoning = normalizeToken(last.reasoning_output_tokens, "reasoning_output_tokens");
   return {
     tokensIn: split.uncachedInputTokens,
-    tokensOut: num(last.output_tokens),
+    tokensOut: output.value,
     cacheRead: split.cacheReadTokens,
-    cacheWrite: num(last.cache_write_input_tokens),
-    reasoningMin: reasoning > 0 ? reasoning / 800 : 0,
+    cacheWrite: cacheWrite.value,
+    reasoningMin: reasoning.value > 0 ? reasoning.value / 800 : 0,
+    anomalies: [...split.anomalies, ...output.anomalies, ...cacheWrite.anomalies, ...reasoning.anomalies],
   };
 }
 
@@ -101,9 +100,13 @@ export function parseCodexJsonlLine(
   }
   if (!last) return { event: null, official };
   const counts = usageFromLast(last);
-  if (counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0) {
+  if (
+    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0
+    && counts.anomalies.length === 0
+  ) {
     return { event: null, official };
   }
+
   const event: UsageEvent = {
     id: `${sessionId}:${ts}`,
     agent: "codex",
@@ -112,7 +115,12 @@ export function parseCodexJsonlLine(
     ts,
     sessionId,
     task: clipTask(meta.title || meta.cwd || sessionId),
-    ...counts,
+    tokensIn: counts.tokensIn,
+    tokensOut: counts.tokensOut,
+    cacheRead: counts.cacheRead,
+    cacheWrite: counts.cacheWrite,
+    reasoningMin: counts.reasoningMin,
+    anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };
   return { event, official };
 }

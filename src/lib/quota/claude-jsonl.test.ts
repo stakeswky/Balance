@@ -245,3 +245,36 @@ test("Claude numeric Unix seconds are converted to milliseconds", () => {
   }), meta);
   assert.equal(event!.ts, 1_725_000_000_000);
 });
+
+test("Claude parser propagates token anomalies without inventing cached-exceeds", () => {
+  const meta = { sessionId: "sess-1", cwd: "", title: "", lastUser: "" };
+  const anomalous = parseJsonlLine(
+    assistant({
+      requestId: "req_anomaly",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-6",
+        usage: { input_tokens: 10, output_tokens: -523 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(anomalous);
+  assert.equal(anomalous.tokensOut, 0);
+  assert.deepEqual(anomalous.anomalies?.map((anomaly) => anomaly.code), ["negative-token"]);
+
+  const exclusiveFields = parseJsonlLine(
+    assistant({
+      requestId: "req_exclusive",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-6",
+        usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5_000 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(exclusiveFields);
+  assert.equal(exclusiveFields.cacheRead, 5_000);
+  assert.equal(exclusiveFields.anomalies, undefined);
+});

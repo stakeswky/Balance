@@ -166,6 +166,31 @@ test("Grok per-file cursor keeps a late parallel turn older than global since", 
   assert.deepEqual(second.events.map((event) => event.id), ["prompt-late"]);
 });
 
+test("Grok parser propagates token anomalies from turn usage", () => {
+  const ev = parseGrokUpdateLine(
+    JSON.stringify({
+      timestamp: 1787153666,
+      params: {
+        sessionId: "sess-g",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "p-anomaly",
+          usage: { inputTokens: 100, cachedReadTokens: 250, outputTokens: -4, cacheCreationTokens: 0 },
+        },
+      },
+    }),
+    meta,
+  );
+  assert.ok(ev);
+  assert.equal(ev.tokensIn, 0);
+  assert.equal(ev.cacheRead, 100);
+  assert.equal(ev.tokensOut, 0);
+  assert.deepEqual(
+    ev.anomalies?.map((anomaly) => anomaly.code).sort(),
+    ["cached-input-exceeds-input", "negative-token"],
+  );
+});
+
 test("Grok reports two concurrently writing sessions", () => {
   const home = mkdtempSync(join(tmpdir(), "balance-grok-active-"));
   const grokHome = join(home, ".grok");

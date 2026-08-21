@@ -1,17 +1,12 @@
-import type { GrokModelId, UsageEvent } from "./types.ts";
+import type { GrokModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
-import { exclusiveCachedInput } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeToken } from "./tokens.ts";
 
 export interface GrokSessionMeta {
   sessionId: string;
   cwd: string;
   title: string;
   model: string;
-}
-
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 export function asGrokModel(raw: string): GrokModelId {
@@ -38,15 +33,26 @@ function usageFrom(u: Record<string, unknown>): {
   tokensOut: number;
   cacheRead: number;
   cacheWrite: number;
+  anomalies: UsageAnomaly[];
 } {
-  const input = num(u.inputTokens ?? u.input_tokens ?? u.tokensIn);
-  const cached = num(u.cachedReadTokens ?? u.cache_read_input_tokens ?? u.cacheRead);
-  const split = exclusiveCachedInput(input, cached);
+  const split = exclusiveCachedInput(
+    u.inputTokens ?? u.input_tokens ?? u.tokensIn,
+    u.cachedReadTokens ?? u.cache_read_input_tokens ?? u.cacheRead,
+  );
+  const output = normalizeToken(
+    u.outputTokens ?? u.output_tokens ?? u.tokensOut,
+    "output_tokens",
+  );
+  const write = normalizeToken(
+    u.cacheCreationTokens ?? u.cache_creation_input_tokens ?? u.cacheWrite,
+    "cache_creation_input_tokens",
+  );
   return {
     tokensIn: split.uncachedInputTokens,
-    tokensOut: num(u.outputTokens ?? u.output_tokens ?? u.tokensOut),
+    tokensOut: output.value,
     cacheRead: split.cacheReadTokens,
-    cacheWrite: num(u.cacheCreationTokens ?? u.cache_creation_input_tokens ?? u.cacheWrite),
+    cacheWrite: write.value,
+    anomalies: [...split.anomalies, ...output.anomalies, ...write.anomalies],
   };
 }
 
@@ -78,7 +84,10 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
   if (!usageRaw || typeof usageRaw !== "object") return null;
   const usage = usageRaw as Record<string, unknown>;
   const counts = usageFrom(usage);
-  if (counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0) return null;
+  if (
+    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0
+    && counts.anomalies.length === 0
+  ) return null;
 
   const metaBlock = (params._meta && typeof params._meta === "object" ? params._meta : obj._meta) as
     | Record<string, unknown>
@@ -106,10 +115,14 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
     ts,
     sessionId,
     task: clipTask(meta.title || meta.cwd || sessionId),
-    ...counts,
+    tokensIn: counts.tokensIn,
+    tokensOut: counts.tokensOut,
+    cacheRead: counts.cacheRead,
+    cacheWrite: counts.cacheWrite,
     reasoningMin: 0,
     reportedCostTicks: ticks,
     reportedCostByModel: Object.keys(byModel).length ? byModel : undefined,
+    anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };
 }
 

@@ -1,5 +1,5 @@
-import { exclusiveCachedInput } from "./tokens.ts";
-import type { AgentId, ModelId, UsageEvent } from "./types.ts";
+import { exclusiveCachedInput, normalizeToken } from "./tokens.ts";
+import type { AgentId, ModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 
 function asModel(raw: string, agent: AgentId): ModelId {
   const s = raw.toLowerCase();
@@ -47,24 +47,39 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   const ts = Number.isFinite(tsNum) ? (tsNum > 0 && tsNum < 1e12 ? tsNum * 1000 : tsNum) : NaN;
   if (!Number.isFinite(ts)) return null;
 
-  let tokensIn = num(usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens ?? usage.tokensIn ?? o.tokensIn);
-  const tokensOut = num(
+  const inputRaw = usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens ?? usage.tokensIn ?? o.tokensIn;
+  const cachedRaw = usage.cache_read_input_tokens ?? usage.cache_read ?? usage.cachedReadTokens
+    ?? usage.cacheRead ?? o.cacheRead;
+  const output = normalizeToken(
     usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens ?? usage.tokensOut ?? o.tokensOut,
+    "output_tokens",
   );
-  let cacheRead = num(
-    usage.cache_read_input_tokens ?? usage.cache_read ?? usage.cachedReadTokens ?? usage.cacheRead ?? o.cacheRead,
+  const write = normalizeToken(
+    usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheCreationTokens
+      ?? usage.cacheWrite ?? o.cacheWrite,
+    "cache_creation_input_tokens",
   );
-  if (agent === "codex" || agent === "grok") {
-    const split = exclusiveCachedInput(tokensIn, cacheRead);
-    tokensIn = split.uncachedInputTokens;
-    cacheRead = split.cacheReadTokens;
-  }
-  const cacheWrite = num(
-    usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheCreationTokens ?? usage.cacheWrite ?? o.cacheWrite,
-  );
+  const input = normalizeToken(inputRaw, "input_tokens");
+  const cached = normalizeToken(cachedRaw, "cached_input_tokens");
+  const split = agent === "codex" || agent === "grok"
+    ? exclusiveCachedInput(inputRaw, cachedRaw)
+    : {
+        uncachedInputTokens: input.value,
+        cacheReadTokens: cached.value,
+        cachedExceedsInput: false,
+        anomalies: [...input.anomalies, ...cached.anomalies],
+      };
+  const anomalies: UsageAnomaly[] = [...split.anomalies, ...output.anomalies, ...write.anomalies];
+  const tokensIn = split.uncachedInputTokens;
+  const tokensOut = output.value;
+  const cacheRead = split.cacheReadTokens;
+  const cacheWrite = write.value;
   const reasoningMin = num(usage.reasoning_minutes ?? o.reasoningMin ?? o.reasoning_minutes);
 
-  if (tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin <= 0) return null;
+  if (
+    tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin <= 0
+    && anomalies.length === 0
+  ) return null;
 
   return {
     id: String(o.id ?? `imp_${ts}_${index}`),
@@ -79,6 +94,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
     cacheRead,
     cacheWrite,
     reasoningMin,
+    anomalies: anomalies.length ? anomalies : undefined,
   };
 }
 

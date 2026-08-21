@@ -1,5 +1,5 @@
-import type { ActorKind, ClaudeModelId, UsageEvent } from "./types.ts";
-import { claudeCacheWrites } from "./tokens.ts";
+import type { ActorKind, ClaudeModelId, UsageAnomaly, UsageEvent } from "./types.ts";
+import { claudeCacheWrites, normalizeToken } from "./tokens.ts";
 
 export interface SessionMeta {
   sessionId: string;
@@ -21,11 +21,6 @@ export function asClaudeModel(raw: string): ClaudeModelId {
   if (s.includes("opus")) return "opus";
   if (s.includes("haiku")) return "haiku";
   return "sonnet";
-}
-
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 
@@ -97,11 +92,27 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
   const usage = (msg.usage ?? obj.usage) as Record<string, unknown> | undefined;
   if (!usage || typeof usage !== "object") return null;
 
-  const tokensIn = num(usage.input_tokens ?? usage.prompt_tokens);
-  const tokensOut = num(usage.output_tokens ?? usage.completion_tokens);
-  const cacheRead = num(usage.cache_read_input_tokens ?? usage.cache_read);
+  const input = normalizeToken(
+    usage.input_tokens ?? usage.prompt_tokens,
+    "input_tokens",
+  );
+  const cached = normalizeToken(
+    usage.cache_read_input_tokens ?? usage.cache_read,
+    "cache_read_input_tokens",
+  );
+  const output = normalizeToken(
+    usage.output_tokens ?? usage.completion_tokens,
+    "output_tokens",
+  );
   const writes = claudeCacheWrites(usage);
-  if (tokensIn + tokensOut + cacheRead + writes.cacheWrite5mTokens + writes.cacheWrite1hTokens <= 0) return null;
+  const anomalies: UsageAnomaly[] = [...input.anomalies, ...cached.anomalies, ...output.anomalies, ...writes.anomalies];
+  const tokensIn = input.value;
+  const tokensOut = output.value;
+  const cacheRead = cached.value;
+  if (
+    tokensIn + tokensOut + cacheRead + writes.cacheWrite5mTokens + writes.cacheWrite1hTokens <= 0
+    && anomalies.length === 0
+  ) return null;
 
   const ts = parseTs(obj.timestamp ?? obj.ts) ?? Date.now();
   const id = String(obj.requestId ?? msg.id ?? obj.uuid ?? `${meta.sessionId}:${ts}`);
@@ -127,6 +138,7 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
     cacheWrite1h: writes.cacheWrite1hTokens,
     cacheWriteUnsplit: writes.splitUnknown || undefined,
     reasoningMin: 0,
+    anomalies: anomalies.length ? anomalies : undefined,
   };
 }
 

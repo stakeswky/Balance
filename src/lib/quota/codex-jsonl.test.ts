@@ -149,6 +149,34 @@ test("Codex per-file cursor keeps a late parallel event older than global since"
   assert.equal(second.events[0]?.ts, Date.parse("2026-08-20T01:00:00.000Z"));
 });
 
+test("Codex parser propagates token anomalies from last_token_usage", () => {
+  const { event } = parseCodexJsonlLine(
+    tokenCount({
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 100,
+            cached_input_tokens: 250,
+            cache_write_input_tokens: 0,
+            output_tokens: -807,
+            reasoning_output_tokens: 0,
+          },
+        },
+      },
+    }),
+    { ...meta },
+  );
+  assert.ok(event);
+  assert.equal(event.tokensIn, 0);
+  assert.equal(event.cacheRead, 100);
+  assert.equal(event.tokensOut, 0);
+  assert.deepEqual(
+    event.anomalies?.map((anomaly) => anomaly.code).sort(),
+    ["cached-input-exceeds-input", "negative-token"],
+  );
+});
+
 test("Codex reports parallel sessions and deduplicates rollouts for one session", () => {
   const home = mkdtempSync(join(tmpdir(), "balance-codex-active-"));
   const codexHome = join(home, ".codex");
