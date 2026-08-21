@@ -17,6 +17,8 @@ export interface ModelPricing {
   longContextInputMultiplier: number;
   longContextOutputMultiplier: number;
   creditsPerUsd: number | null;
+  fastApiMultiplier: number | null;
+  fastCreditMultiplier: number | null;
 }
 
 /** Frozen snapshot so offline preview is reproducible. Prices are USD per token. */
@@ -36,6 +38,8 @@ function perM(
     longIn?: number;
     longOut?: number;
     creditsPerUsd?: number;
+    fastApiMultiplier?: number;
+    fastCreditMultiplier?: number;
   },
 ): ModelPricing {
   const inputPerToken = input / 1_000_000;
@@ -62,6 +66,8 @@ function perM(
     longContextInputMultiplier: opts?.longIn ?? 1,
     longContextOutputMultiplier: opts?.longOut ?? 1,
     creditsPerUsd: opts?.creditsPerUsd ?? null,
+    fastApiMultiplier: opts?.fastApiMultiplier ?? null,
+    fastCreditMultiplier: opts?.fastCreditMultiplier ?? null,
   };
 }
 
@@ -71,6 +77,12 @@ function named(model: string, base: ModelPricing): ModelPricing {
 
 const fable = perM(10, 50, { cacheRead: 1, cacheWrite5m: 12.5, cacheWrite1h: 20 });
 const opus = perM(5, 25, { cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10 });
+const opusFast6 = perM(5, 25, {
+  cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10, fastApiMultiplier: 6,
+});
+const opusFast2 = perM(5, 25, {
+  cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10, fastApiMultiplier: 2,
+});
 const sonnet5 = perM(2, 10, { cacheRead: 0.2, cacheWrite5m: 2.5, cacheWrite1h: 4 });
 const sonnet46 = perM(3, 15, { cacheRead: 0.3, cacheWrite5m: 3.75, cacheWrite1h: 6 });
 const haiku = perM(1, 5, { cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2 });
@@ -80,10 +92,10 @@ const codexLongContext = {
   longIn: 2,
   longOut: 1.5,
 } as const;
-const sol = perM(5, 30, codexLongContext);
-const terra = perM(2, 12, { cacheRead: 0.2, ...codexLongContext });
-const luna = perM(0.2, 1.2, { cacheRead: 0.02, ...codexLongContext });
-const gpt54 = perM(2.5, 15, { cacheRead: 0.25, ...codexLongContext });
+const sol = perM(5, 30, { ...codexLongContext, fastCreditMultiplier: 2.5 });
+const terra = perM(2, 12, { cacheRead: 0.2, ...codexLongContext, fastCreditMultiplier: 2.5 });
+const luna = perM(0.2, 1.2, { cacheRead: 0.02, ...codexLongContext, fastCreditMultiplier: 2.5 });
+const gpt54 = perM(2.5, 15, { cacheRead: 0.25, ...codexLongContext, fastCreditMultiplier: 2 });
 const grok46 = perM(2, 6, { cacheRead: 0.5, longCtx: 200_000, longIn: 2, longOut: 2 });
 const grok45 = perM(2, 6, { cacheRead: 0.3, longCtx: 200_000, longIn: 2, longOut: 2 });
 const grokBuild01 = perM(1, 2, { cacheRead: 0.2, longCtx: 200_000, longIn: 2, longOut: 2 });
@@ -92,9 +104,9 @@ export const PRICING_TABLE: ModelPricing[] = [
   named("claude-fable-5", fable),
   named("claude-mythos-5", fable),
   named("claude-opus-5", opus),
-  named("claude-opus-4-8", opus),
-  named("claude-opus-4-7", opus),
-  named("claude-opus-4-6", opus),
+  named("claude-opus-4-8", opusFast2),
+  named("claude-opus-4-7", opusFast6),
+  named("claude-opus-4-6", opusFast6),
   named("claude-sonnet-5", sonnet5),
   named("claude-sonnet-4-6", sonnet46),
   named("claude-haiku-4-5", haiku),

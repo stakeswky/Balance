@@ -205,7 +205,8 @@ export function observeWindow(events: UsageEvent[]): {
       observedUsd += cost.totalUsd;
       pricedTokens += cost.pricedTokens;
       if (cost.fullyPriced) pricedEvents += 1;
-      const key = cost.pricingModel ?? e.model;
+      const speedKey = e.speed === "fast" ? "fast" : "standard";
+      const key = `${cost.pricingModel ?? e.model}:${speedKey}`;
       mix[key] = (mix[key] ?? 0) + cost.totalUsd;
     }
   }
@@ -485,10 +486,11 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   const currentMix = [...rawSlopes]
     .reverse()
     .find((slope) => !slope.external && slope.value > 0 && hasModelMix(slope.modelMix))?.modelMix ?? {};
-  const compatible =
-    agent === "codex" || !hasModelMix(currentMix)
-      ? usable
-      : usable.filter((slope) => hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35);
+  const compatible = !hasModelMix(currentMix)
+    ? usable
+    : usable.filter((slope) =>
+        hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35,
+      );
   if (!compatible.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
   const provisionalCenter = weightedMedian(compatible);
@@ -525,12 +527,14 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   // OpenAI's current Codex rate card prices all supported models at the same
   // 25 credits per API-equivalent USD, so Codex model mix does not change the
   // calibration unit. Other providers retain the conservative drift gate.
-  const drift =
-    agent === "codex" || !hasModelMix(currentMix)
-      ? 0
-      : weightedMedian(
-          kept.map((slope) => ({ value: modelMixDrift(slope.modelMix, currentMix), weight: slope.weight })),
-        );
+  const drift = !hasModelMix(currentMix)
+    ? 0
+    : weightedMedian(
+        kept.map((slope) => ({
+          value: modelMixDrift(slope.modelMix, currentMix),
+          weight: slope.weight,
+        })),
+      );
 
   const cheap = cheapSlopes.size > 0;
   const sumPct = kept.reduce((s, r) => s + r.weight, 0);

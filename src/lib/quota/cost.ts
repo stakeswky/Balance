@@ -76,6 +76,12 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
     cacheWriteUsd *= p.longContextInputMultiplier;
     outputUsd *= p.longContextOutputMultiplier;
   }
+  const fast = event.speed === "fast";
+  const apiMultiplier = fast ? p.fastApiMultiplier ?? 1 : 1;
+  inputUsd *= apiMultiplier;
+  outputUsd *= apiMultiplier;
+  cacheReadUsd *= apiMultiplier;
+  cacheWriteUsd *= apiMultiplier;
   const imageInput = finiteNonNeg(event.imageInputTokens ?? 0);
   const imageOutput = finiteNonNeg(event.imageOutputTokens ?? 0);
   const imageInputPriced = imageInput === 0 || p.imageInputPerToken != null;
@@ -90,8 +96,11 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
     (imageOutputPriced ? imageOutput : 0);
   let fullyPriced = imageInputPriced && imageOutputPriced && uncertainWriteTokens === 0;
   const totalUsd = inputUsd + outputUsd + cacheReadUsd + cacheWriteUsd + imageUsd;
+  const creditMultiplier = fast ? p.fastCreditMultiplier ?? 1 : 1;
   const openAiCredits =
-    event.agent === "codex" && p.creditsPerUsd != null ? totalUsd * p.creditsPerUsd : null;
+    event.agent === "codex" && p.creditsPerUsd != null
+      ? totalUsd * p.creditsPerUsd * creditMultiplier
+      : null;
   return {
     inputUsd,
     outputUsd,

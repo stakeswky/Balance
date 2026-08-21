@@ -43,6 +43,7 @@ function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
     imageOutputTokens: partial.imageOutputTokens,
     reasoningMin: 0,
     anomalies: partial.anomalies,
+    speed: partial.speed,
   };
 }
 
@@ -55,7 +56,7 @@ function sample(partial: Partial<QuotaSample> & Pick<QuotaSample, "usedPercent" 
     usedPercent: partial.usedPercent,
     cumulativeObservedUsd: partial.cumulativeObservedUsd,
     pricedTokenCoverage: partial.pricedTokenCoverage ?? 1,
-    modelMix: partial.modelMix ?? { "gpt-5.4": 1 },
+    modelMix: partial.modelMix ?? { "gpt-5.4:standard": 1 },
     pricingVersion: partial.pricingVersion ?? PRICING_VERSION,
     planLabel: partial.planLabel ?? null,
   };
@@ -445,7 +446,7 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       timestampMs: 1,
       usedPercent: 10,
       cumulativeObservedUsd: 1,
-      modelMix: { opus: 1 },
+      modelMix: { "opus:standard": 1 },
     }),
   );
   rows = mergeSamples(
@@ -456,7 +457,7 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       timestampMs: 2,
       usedPercent: 12,
       cumulativeObservedUsd: 2,
-      modelMix: { opus: 1 },
+      modelMix: { "opus:standard": 1 },
     }),
   );
   assert.equal(rows.length, 2);
@@ -500,7 +501,7 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       timestampMs: 1,
       usedPercent: 8,
       cumulativeObservedUsd: 1,
-      modelMix: { "grok-4.6": 1 },
+      modelMix: { "grok-4.6:standard": 1 },
     }),
   );
   grokRows = mergeSamples(
@@ -511,7 +512,7 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       timestampMs: 2,
       usedPercent: 10,
       cumulativeObservedUsd: 2,
-      modelMix: { "grok-4.6": 1 },
+      modelMix: { "grok-4.6:standard": 1 },
     }),
   );
   assert.equal(grokRows.length, 2);
@@ -537,7 +538,7 @@ test("quotaValueFor reuses legacy jittered samples immediately", () => {
         timestampMs: 1,
         usedPercent: 10,
         cumulativeObservedUsd: 1,
-        modelMix: { opus: 1 },
+        modelMix: { "opus:standard": 1 },
       }),
       sample({
         agent: "claude",
@@ -545,7 +546,7 @@ test("quotaValueFor reuses legacy jittered samples immediately", () => {
         timestampMs: 2,
         usedPercent: 12,
         cumulativeObservedUsd: 2,
-        modelMix: { opus: 1 },
+        modelMix: { "opus:standard": 1 },
       }),
     ],
   );
@@ -759,16 +760,17 @@ test("official history backfills same-window cumulative observations", () => {
 
 test("calibration ignores partial first and current percent plateaus", () => {
   const rows = [
-    sample({ timestampMs: 1, usedPercent: 54, cumulativeObservedUsd: 0.48, modelMix: { "gpt-5.6-sol": 1 } }),
-    sample({ timestampMs: 2, usedPercent: 56, cumulativeObservedUsd: 0.72, modelMix: { "gpt-5.6-sol": 1 } }),
-    sample({ timestampMs: 3, usedPercent: 57, cumulativeObservedUsd: 5.56, modelMix: { "gpt-5.6-sol": 0.51, "gpt-5.4": 0.49 } }),
-    sample({ timestampMs: 4, usedPercent: 58, cumulativeObservedUsd: 13.52, modelMix: { "gpt-5.6-sol": 0.53, "gpt-5.4": 0.47 } }),
-    sample({ timestampMs: 5, usedPercent: 59, cumulativeObservedUsd: 21.99, modelMix: { "gpt-5.6-sol": 0.63, "gpt-5.4": 0.37 } }),
-    sample({ timestampMs: 6, usedPercent: 60, cumulativeObservedUsd: 31.22, modelMix: { "gpt-5.6-sol": 0.61, "gpt-5.4": 0.39 } }),
-    sample({ timestampMs: 7, usedPercent: 61, cumulativeObservedUsd: 35.82, modelMix: { "gpt-5.6-sol": 0.65, "gpt-5.4": 0.35 } }),
+    sample({ timestampMs: 1, usedPercent: 54, cumulativeObservedUsd: 0.48, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 2, usedPercent: 56, cumulativeObservedUsd: 0.72, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 3, usedPercent: 57, cumulativeObservedUsd: 5.56, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 4, usedPercent: 58, cumulativeObservedUsd: 13.52, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 5, usedPercent: 59, cumulativeObservedUsd: 21.99, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 6, usedPercent: 60, cumulativeObservedUsd: 31.22, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 7, usedPercent: 61, cumulativeObservedUsd: 35.82, modelMix: { "gpt-5.6-sol:standard": 1 } }),
   ];
   const cal = calibrateFromSamples(rows, 61, false);
   assert.equal(cal.confidence, "low");
+  assert.ok(cal.totalPointUsd != null && Math.abs(cal.totalPointUsd - 847) < 1e-9);
   assert.ok(cal.totalLowUsd != null && cal.totalLowUsd > 500);
   assert.ok(cal.totalHighUsd != null && cal.totalHighUsd < 1_200);
   assert.ok(cal.remainingLowUsd != null && cal.remainingLowUsd > 200);
@@ -790,11 +792,11 @@ test("external use in the first censored interval is still detected", () => {
 test("calibration ignores an empty bootstrap model mix", () => {
   const rows = [
     sample({ agent: "grok", timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0, modelMix: {} }),
-    sample({ agent: "grok", timestampMs: 2, usedPercent: 2, cumulativeObservedUsd: 6, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 3, usedPercent: 4, cumulativeObservedUsd: 12, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 4, usedPercent: 6, cumulativeObservedUsd: 18, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 5, usedPercent: 8, cumulativeObservedUsd: 24, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 6, usedPercent: 10, cumulativeObservedUsd: 30, modelMix: { "grok-4.6": 1 } }),
+    sample({ agent: "grok", timestampMs: 2, usedPercent: 2, cumulativeObservedUsd: 6, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 3, usedPercent: 4, cumulativeObservedUsd: 12, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 4, usedPercent: 6, cumulativeObservedUsd: 18, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 5, usedPercent: 8, cumulativeObservedUsd: 24, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 6, usedPercent: 10, cumulativeObservedUsd: 30, modelMix: { "grok-4.6:standard": 1 } }),
   ];
   const cal = calibrateFromSamples(rows, 10, false);
   assert.equal(cal.confidence, "medium");
@@ -1032,7 +1034,7 @@ test("a comparable cheap interval is excluded from the point estimate", () => {
 });
 
 test("a cheap interval with a changed model mix is not labeled external", () => {
-  const cheapMix = { "claude-haiku-4-5": 1 };
+  const cheapMix = { "claude-haiku-4-5:standard": 1 };
   const rows = [
     sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
     sample({ timestampMs: 2, usedPercent: 10, cumulativeObservedUsd: 10 }),
@@ -1077,7 +1079,7 @@ test("a stable previous window supplies only a low-confidence prior", () => {
     timestampMs: index + 1,
     usedPercent,
     cumulativeObservedUsd: usedPercent * 0.5,
-    modelMix: { "gpt-5.6-sol": 1 },
+    modelMix: { "gpt-5.6-sol:standard": 1 },
     planLabel: "ChatGPT Plus",
   }));
   const now = Date.parse("2026-08-21T10:00:00Z");
@@ -1111,7 +1113,7 @@ test("historical prior selects the three newest windows regardless of input orde
       timestampMs: at + index,
       usedPercent,
       cumulativeObservedUsd: usedPercent * usdPerPct,
-      modelMix: { "gpt-5.6-sol": 1 },
+      modelMix: { "gpt-5.6-sol:standard": 1 },
       planLabel: "ChatGPT Plus",
     }));
   const samples = [
@@ -1129,7 +1131,7 @@ test("historical prior selects the three newest windows regardless of input orde
     "five_hour",
     "ChatGPT Plus",
     1,
-    { "gpt-5.6-sol": 1 },
+    { "gpt-5.6-sol:standard": 1 },
   );
   assert.equal(result!.totalPointUsd, 50);
 });
@@ -1146,7 +1148,7 @@ test("historical prior rejects open windows and incompatible model mix", () => {
       modelMix: mix,
       planLabel: "Claude Max",
     }));
-  const compatible = { "claude-sonnet-5": 1 };
+  const compatible = { "claude-sonnet-5:standard": 1 };
   // Open window: resetsAt (90000) > currentWindowStartMs (70000) → rejected
   assert.equal(historicalWindowPrior(
     rows("claude:five_hour:_:10000:90000", compatible),
@@ -1160,7 +1162,7 @@ test("historical prior rejects open windows and incompatible model mix", () => {
   ), null);
   // Incompatible model mix → rejected
   assert.equal(historicalWindowPrior(
-    rows("claude:five_hour:_:10000:60000", { "claude-haiku-4-5": 1 }),
+    rows("claude:five_hour:_:10000:60000", { "claude-haiku-4-5:standard": 1 }),
     "claude:five_hour:_:70000:100000",
     70000,
     "claude",
@@ -1178,7 +1180,7 @@ test("external usage in the current window blocks historical priors", () => {
     timestampMs: index + 1,
     usedPercent,
     cumulativeObservedUsd: usedPercent * 0.5,
-    modelMix: { "gpt-5.6-sol": 1 },
+    modelMix: { "gpt-5.6-sol:standard": 1 },
     planLabel: "ChatGPT Plus",
   }));
   const currentId = officialWindowId("codex", "five_hour", null, now, now + WINDOW_MS);
@@ -1188,7 +1190,7 @@ test("external usage in the current window blocks historical priors", () => {
       timestampMs: now + 1_000,
       usedPercent: 0,
       cumulativeObservedUsd: 0,
-      modelMix: { "gpt-5.6-sol": 1 },
+      modelMix: { "gpt-5.6-sol:standard": 1 },
       planLabel: "ChatGPT Plus",
     }),
     sample({
@@ -1239,4 +1241,20 @@ test("unknown image prices reduce coverage without discarding text cost", () => 
   });
   const observed = observeWindow([event]);
   assert.equal(observed.pricedTokenCoverage, 0.5);
+});
+
+/**
+ * Evidence-URL: https://help.openai.com/en/articles/20001106-codex-rate-card；https://github.com/ryoppippi/ccusage（fast-multiplier-overrides.json）
+ * Evidence-Checked: 2026-08-21
+ * Evidence-Fields: Codex/Claude fast 倍率
+ * Sanitized-Fixture: {"codex":{"gpt-5.6":2.5,"gpt-5.5":2.5,"gpt-5.4":2},"claude":{"opus-4-6":6,"opus-4-7":6,"opus-4-8":2}}
+ */
+test("fast model mix separates fast and standard usage of one model", () => {
+  const observed = observeWindow([
+    ev({ id: "std", ts: 1, tokensIn: 1_000_000, speed: "standard" }),
+    ev({ id: "fast", ts: 2, tokensIn: 1_000_000, speed: "fast" }),
+    ev({ id: "missing", ts: 3, tokensIn: 1_000_000 }),
+  ]);
+  assert.ok(Math.abs((observed.modelMix["gpt-5.4:standard"] ?? 0) - 2 / 3) < 1e-9);
+  assert.ok(Math.abs((observed.modelMix["gpt-5.4:fast"] ?? 0) - 1 / 3) < 1e-9);
 });

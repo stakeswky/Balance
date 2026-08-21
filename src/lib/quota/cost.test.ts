@@ -181,6 +181,45 @@ test("missing raw model stays unpriced", () => {
   assert.equal(cost.totalUsd, 0);
 });
 
+/**
+ * Evidence-URL: https://help.openai.com/en/articles/20001106-codex-rate-card；https://github.com/ryoppippi/ccusage（fast-multiplier-overrides.json）
+ * Evidence-Checked: 2026-08-21
+ * Evidence-Fields: Codex/Claude fast 倍率
+ * Sanitized-Fixture: {"codex":{"gpt-5.6":2.5,"gpt-5.5":2.5,"gpt-5.4":2},"claude":{"opus-4-6":6,"opus-4-7":6,"opus-4-8":2}}
+ */
+test("fast model mix applies the Claude API multiplier only to fast events", () => {
+  const standard = costBreakdown(
+    ev({ agent: "claude", model: "opus", modelRaw: "claude-opus-4-6", speed: "standard", tokensIn: 1_000_000 }),
+  );
+  const fast = costBreakdown(
+    ev({ agent: "claude", model: "opus", modelRaw: "claude-opus-4-6", speed: "fast", tokensIn: 1_000_000 }),
+  );
+  const unknownSpeed = costBreakdown(
+    ev({ agent: "claude", model: "opus", modelRaw: "claude-opus-4-6", tokensIn: 1_000_000 }),
+  );
+  assert.ok(Math.abs(fast.totalUsd - standard.totalUsd * 6) < 1e-9);
+  assert.equal(unknownSpeed.totalUsd, standard.totalUsd);
+});
+
+test("Codex fast changes credits and calibration mix without changing model id", () => {
+  const standard = costBreakdown(ev({
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    modelRaw: "gpt-5.6-sol",
+    speed: "standard",
+    tokensIn: 1_000_000,
+  }));
+  const fast = costBreakdown(ev({
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    modelRaw: "gpt-5.6-sol",
+    speed: "fast",
+    tokensIn: 1_000_000,
+  }));
+  assert.equal(fast.totalUsd, standard.totalUsd);
+  assert.equal(fast.openAiCredits, standard.openAiCredits! * 2.5);
+});
+
 test("unknown image prices reduce coverage without discarding text cost", () => {
   const event = ev({
     agent: "claude",

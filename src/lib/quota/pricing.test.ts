@@ -100,3 +100,22 @@ test("Codex and Grok cache writes are free while Claude retains explicit rates",
 test("cache write repricing bumps the pricing version", () => {
   assert.notEqual(PRICING_VERSION, "2026-08-21-balance-1");
 });
+
+/**
+ * Evidence-URL: https://help.openai.com/en/articles/20001106-codex-rate-card；https://github.com/ryoppippi/ccusage（fast-multiplier-overrides.json）
+ * Evidence-Checked: 2026-08-21
+ * Evidence-Fields: Codex/Claude fast 倍率
+ * Sanitized-Fixture: {"codex":{"gpt-5.6":2.5,"gpt-5.5":2.5,"gpt-5.4":2},"claude":{"opus-4-6":6,"opus-4-7":6,"opus-4-8":2}}
+ */
+test("fast model mix pricing multipliers match the verified per-model fixtures", () => {
+  assert.equal(lookupPricing("claude-opus-4-6").pricing!.fastApiMultiplier, 6);
+  assert.equal(lookupPricing("claude-opus-4-7").pricing!.fastApiMultiplier, 6);
+  assert.equal(lookupPricing("claude-opus-4-8").pricing!.fastApiMultiplier, 2);
+  assert.equal(lookupPricing("claude-opus-5").pricing!.fastApiMultiplier, null);
+  assert.equal(lookupPricing("gpt-5.6-sol").pricing!.fastCreditMultiplier, 2.5);
+  assert.equal(lookupPricing("gpt-5.6-terra").pricing!.fastCreditMultiplier, 2.5);
+  assert.equal(lookupPricing("gpt-5.6-luna").pricing!.fastCreditMultiplier, 2.5);
+  assert.equal(lookupPricing("gpt-5.4").pricing!.fastCreditMultiplier, 2);
+  assert.equal(lookupPricing("grok-4.6").pricing!.fastApiMultiplier, null);
+  assert.equal(lookupPricing("grok-4.6").pricing!.fastCreditMultiplier, null);
+});
