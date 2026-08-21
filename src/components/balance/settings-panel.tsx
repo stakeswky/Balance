@@ -2,6 +2,7 @@ import { Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PlansPanel } from "@/components/balance/plans-panel";
+import { UpdateCard } from "@/components/balance/update-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -76,6 +77,7 @@ export function SettingsPanel() {
 
   return (
     <div className="space-y-5">
+      <UpdateCard />
       <Card>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
