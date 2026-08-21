@@ -69,6 +69,10 @@ Claude、Grok、Codex 分别读取本机 `~/.claude`、`~/.grok`（或 `$GROK_HO
 - 远端部署无法读取访问者电脑上的本地 Agent 文件。
 - 仓库自带的 Claude 演示数据已经匿名化。
 
+## 社区
+
+讨论和反馈可以去 [LINUX DO](https://linux.do)。
+
 ## 许可证
 
 [MIT](./LICENSE)
