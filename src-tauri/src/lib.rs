@@ -13,7 +13,10 @@ use std::{
 
 use tauri::menu::{MenuBuilder, MenuEvent, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, RunEvent, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
+};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -32,6 +35,11 @@ const SIDECAR_ENV_ALLOWLIST: [&str; 6] = [
     "LANG",
     "LC_ALL",
 ];
+const TRAY_WINDOW: &str = "tray";
+const TRAY_SHOW_MAIN_PATH: &str = "/__desktop/show-main";
+const TRAY_WIDTH: f64 = 360.0;
+const TRAY_HEIGHT: f64 = 468.0;
+const TRAY_CLICK_DEBOUNCE: Duration = Duration::from_millis(280);
 
 fn filtered_sidecar_environment(
     environment: impl IntoIterator<Item = (OsString, OsString)>,
@@ -101,6 +109,15 @@ impl Default for SidecarState {
 #[derive(Clone, Default)]
 struct BootstrapState(Arc<AtomicBool>);
 
+#[derive(Clone, Default)]
+struct TrayPopupState(Arc<Mutex<TrayPopupInner>>);
+
+#[derive(Default)]
+struct TrayPopupInner {
+    last_hide: Option<Instant>,
+    last_show: Option<Instant>,
+}
+
 fn sidecar_url() -> String {
     format!("http://{SIDECAR_HOST}:{SIDECAR_PORT}")
 }
@@ -125,12 +142,196 @@ fn clear_sidecar(state: &SidecarState) {
     clear_lifecycle_child(&state.0);
 }
 
+fn remember_tray_hide(state: &TrayPopupState) {
+    state
+        .0
+        .lock()
+        .expect("tray popup mutex poisoned")
+        .last_hide = Some(Instant::now());
+}
+
+fn remember_tray_show(state: &TrayPopupState) {
+    state
+        .0
+        .lock()
+        .expect("tray popup mutex poisoned")
+        .last_show = Some(Instant::now());
+}
+
+fn should_ignore_tray_show(last_hide: Option<Instant>, now: Instant) -> bool {
+    last_hide
+        .map(|hidden_at| now.saturating_duration_since(hidden_at) < TRAY_CLICK_DEBOUNCE)
+        .unwrap_or(false)
+}
+
+fn should_ignore_tray_blur(last_show: Option<Instant>, now: Instant) -> bool {
+    last_show
+        .map(|shown_at| now.saturating_duration_since(shown_at) < TRAY_CLICK_DEBOUNCE)
+        .unwrap_or(false)
+}
+
+fn tray_show_is_echo(state: &TrayPopupState) -> bool {
+    let last_hide = state.0.lock().expect("tray popup mutex poisoned").last_hide;
+    should_ignore_tray_show(last_hide, Instant::now())
+}
+
+fn tray_blur_is_echo(state: &TrayPopupState) -> bool {
+    let last_show = state.0.lock().expect("tray popup mutex poisoned").last_show;
+    should_ignore_tray_blur(last_show, Instant::now())
+}
+
+fn tray_popup_origin(
+    icon_x: f64,
+    icon_y: f64,
+    icon_w: f64,
+    icon_h: f64,
+    win_w: f64,
+    win_h: f64,
+    mon_x: f64,
+    mon_y: f64,
+    mon_w: f64,
+    mon_h: f64,
+) -> (f64, f64) {
+    let mut x = icon_x + icon_w / 2.0 - win_w / 2.0;
+    let mut y = icon_y + icon_h + 6.0;
+    let min_x = mon_x + 8.0;
+    let max_x = (mon_x + mon_w - win_w - 8.0).max(min_x);
+    x = x.clamp(min_x, max_x);
+    let min_y = mon_y + 8.0;
+    let max_y = (mon_y + mon_h - win_h - 8.0).max(min_y);
+    if y + win_h > mon_y + mon_h - 8.0 {
+        y = icon_y - win_h - 6.0;
+    }
+    y = y.clamp(min_y, max_y);
+    (x, y)
+}
+
+fn is_show_main_path(path: &str) -> bool {
+    path == TRAY_SHOW_MAIN_PATH
+}
+
+fn current_scale(app: &AppHandle) -> f64 {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| monitor.scale_factor())
+        .unwrap_or(1.0)
+}
+
+fn hide_tray_dashboard(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(TRAY_WINDOW) {
+        let _ = window.hide();
+    }
+    if let Some(state) = app.try_state::<TrayPopupState>() {
+        remember_tray_hide(&state);
+    }
+}
+
 fn show_main_window(app: &AppHandle) {
+    hide_tray_dashboard(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+fn position_tray_dashboard(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    icon_x: f64,
+    icon_y: f64,
+    icon_w: f64,
+    icon_h: f64,
+) {
+    let scale = window.scale_factor().unwrap_or_else(|_| current_scale(app));
+    let win_size = window
+        .outer_size()
+        .ok()
+        .map(|size| size.to_logical::<f64>(scale))
+        .unwrap_or(LogicalSize::new(TRAY_WIDTH, TRAY_HEIGHT));
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let (mon_x, mon_y, mon_w, mon_h) = if let Some(monitor) = monitor {
+        let factor = monitor.scale_factor();
+        let pos = monitor.position().to_logical::<f64>(factor);
+        let size = monitor.size().to_logical::<f64>(factor);
+        (pos.x, pos.y, size.width, size.height)
+    } else {
+        (0.0, 0.0, 1440.0, 900.0)
+    };
+    let (x, y) = tray_popup_origin(
+        icon_x,
+        icon_y,
+        icon_w,
+        icon_h,
+        win_size.width,
+        win_size.height,
+        mon_x,
+        mon_y,
+        mon_w,
+        mon_h,
+    );
+    let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
+fn ensure_tray_dashboard(app: &AppHandle) -> Option<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(TRAY_WINDOW) {
+        return Some(window);
+    }
+    if !request_health().unwrap_or(false) {
+        return None;
+    }
+    let url = format!("{}/tray", sidecar_url()).parse().ok()?;
+    let handle = app.clone();
+    WebviewWindowBuilder::new(app, TRAY_WINDOW, WebviewUrl::External(url))
+        .title("余量周限额")
+        .inner_size(TRAY_WIDTH, TRAY_HEIGHT)
+        .min_inner_size(TRAY_WIDTH, TRAY_HEIGHT)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .focused(false)
+        .shadow(true)
+        .on_navigation(move |url| {
+            if is_show_main_path(url.path()) {
+                show_main_window(&handle);
+                return false;
+            }
+            true
+        })
+        .build()
+        .ok()
+}
+
+fn toggle_tray_dashboard(app: &AppHandle, icon_x: f64, icon_y: f64, icon_w: f64, icon_h: f64) {
+    if let Some(window) = app.get_webview_window(TRAY_WINDOW) {
+        if window.is_visible().unwrap_or(false) {
+            hide_tray_dashboard(app);
+            return;
+        }
+    }
+    if let Some(state) = app.try_state::<TrayPopupState>() {
+        if tray_show_is_echo(&state) {
+            return;
+        }
+    }
+    let Some(window) = ensure_tray_dashboard(app) else {
+        return;
+    };
+    if let Some(state) = app.try_state::<TrayPopupState>() {
+        remember_tray_show(&state);
+    }
+    position_tray_dashboard(app, &window, icon_x, icon_y, icon_w, icon_h);
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 fn quit_app(app: &AppHandle) {
@@ -198,10 +399,15 @@ fn install_desktop_shell(app: &AppHandle) -> tauri::Result<()> {
                 if let TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
+                    rect,
                     ..
                 } = event
                 {
-                    show_main_window(tray.app_handle());
+                    let app = tray.app_handle();
+                    let scale = current_scale(app);
+                    let pos = rect.position.to_logical::<f64>(scale);
+                    let size = rect.size.to_logical::<f64>(scale);
+                    toggle_tray_dashboard(app, pos.x, pos.y, size.width, size.height);
                 }
             })
             .build(app)?;
@@ -653,14 +859,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar_state.clone())
+        .manage(TrayPopupState::default())
         .setup(|app| {
             install_desktop_shell(app.handle())?;
             Ok(())
         })
         .on_window_event({
             let state = sidecar_state.clone();
-            move |window, event| {
-                if let WindowEvent::CloseRequested { api, .. } = event {
+            move |window, event| match event {
+                WindowEvent::CloseRequested { api, .. } => {
                     if window.label() == "startup-error" {
                         stop_sidecar(&state);
                         window.app_handle().exit(0);
@@ -668,7 +875,22 @@ pub fn run() {
                     }
                     api.prevent_close();
                     let _ = window.hide();
+                    if window.label() == TRAY_WINDOW {
+                        hide_tray_dashboard(window.app_handle());
+                    }
                 }
+                WindowEvent::Focused(false) if window.label() == TRAY_WINDOW => {
+                    if !window.is_visible().unwrap_or(false) {
+                        return;
+                    }
+                    if let Some(state) = window.app_handle().try_state::<TrayPopupState>() {
+                        if tray_blur_is_echo(&state) {
+                            return;
+                        }
+                    }
+                    hide_tray_dashboard(window.app_handle());
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())
@@ -686,14 +908,7 @@ pub fn run() {
                     }
                 }
                 #[cfg(target_os = "macos")]
-                RunEvent::Reopen {
-                    has_visible_windows,
-                    ..
-                } => {
-                    if !has_visible_windows {
-                        show_main_window(app);
-                    }
-                }
+                RunEvent::Reopen { .. } => show_main_window(app),
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => stop_sidecar(&state),
                 _ => {}
             }
@@ -938,5 +1153,39 @@ mod tests {
         let state = lifecycle.lock().expect("lifecycle mutex poisoned");
         assert!(!state.stopping);
         assert_eq!(state.child, Some(9));
+    }
+
+    #[test]
+    fn tray_popup_stays_on_the_monitor() {
+        let (x, y) = tray_popup_origin(
+            1400.0, 4.0, 22.0, 22.0, 360.0, 468.0, 0.0, 0.0, 1440.0, 900.0,
+        );
+        assert!(x >= 8.0);
+        assert!(x + 360.0 <= 1432.0);
+        assert_eq!(y, 32.0);
+        assert_eq!(is_show_main_path("/__desktop/show-main"), true);
+        assert_eq!(is_show_main_path("/tray"), false);
+    }
+
+    #[test]
+    fn tray_click_echo_is_debounced() {
+        let hidden_at = Instant::now();
+        assert!(should_ignore_tray_show(
+            Some(hidden_at),
+            hidden_at + Duration::from_millis(100)
+        ));
+        assert!(!should_ignore_tray_show(
+            Some(hidden_at),
+            hidden_at + Duration::from_millis(400)
+        ));
+        assert!(!should_ignore_tray_show(None, Instant::now()));
+        assert!(should_ignore_tray_blur(
+            Some(hidden_at),
+            hidden_at + Duration::from_millis(50)
+        ));
+        assert!(!should_ignore_tray_blur(
+            Some(hidden_at),
+            hidden_at + Duration::from_millis(400)
+        ));
     }
 }

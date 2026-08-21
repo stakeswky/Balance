@@ -14,7 +14,7 @@
 
 ## macOS 应用
 
-打包版目前只提供 **Apple Silicon**。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.1_aarch64.dmg`，把「余量」拖进「应用程序」。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。已经安装的 0.1.0 没有检查更新代码，必须先装 0.1.1 的 DMG；之后 sidecar 更新才能热更新。在桌面版「设置」里检查更新：只改界面和采集逻辑时直接更新，然后从菜单栏「退出余量」再打开；改了桌面壳则仍需重新下载安装包。
+打包版目前只提供 **Apple Silicon**。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.1_aarch64.dmg`，把「余量」拖进「应用程序」。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。已经安装的 0.1.0 没有检查更新代码，必须先装 0.1.1 的 DMG；之后 sidecar 更新才能热更新。在桌面版「设置」里检查更新：只改界面和采集逻辑时直接更新，然后从菜单栏「退出余量」再打开；改了桌面壳则仍需重新下载安装包。应用常驻菜单栏：左键点击图标查看已监控订阅的周限额，Dock 或菜单「打开余量」打开主窗口。
 
 当前构建使用 macOS ad-hoc 签名，尚未经过 Apple 公证。从网络下载后，Gatekeeper 可能提示「无法打开，因为无法确认开发者」，或「已损坏，无法打开」。这是隔离属性导致的，应用本身没有损坏。
 

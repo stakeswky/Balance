@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as TrayRouteImport } from './routes/tray'
 import { Route as ApiDesktopHealthRouteImport } from './routes/api/desktop-health'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TrayRoute = TrayRouteImport.update({
+  id: '/tray',
+  path: '/tray',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiDesktopHealthRoute = ApiDesktopHealthRouteImport.update({
@@ -38,12 +44,14 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/tray': typeof TrayRoute
   '/api/desktop-health': typeof ApiDesktopHealthRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/tray': typeof TrayRoute
   '/api/desktop-health': typeof ApiDesktopHealthRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/tray': typeof TrayRoute
   '/api/desktop-health': typeof ApiDesktopHealthRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/api/desktop-health' | '/api/auth/$'
+  fullPaths: '/' | '/login' | '/tray' | '/api/desktop-health' | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/api/desktop-health' | '/api/auth/$'
-  id: '__root__' | '/' | '/login' | '/api/desktop-health' | '/api/auth/$'
+  to: '/' | '/login' | '/tray' | '/api/desktop-health' | '/api/auth/$'
+  id: '__root__' | '/' | '/login' | '/tray' | '/api/desktop-health' | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
+  TrayRoute: typeof TrayRoute
   ApiDesktopHealthRoute: typeof ApiDesktopHealthRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tray': {
+      id: '/tray'
+      path: '/tray'
+      fullPath: '/tray'
+      preLoaderRoute: typeof TrayRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/desktop-health': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
+  TrayRoute: TrayRoute,
   ApiDesktopHealthRoute: ApiDesktopHealthRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }

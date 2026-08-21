@@ -6,7 +6,7 @@
 
 当前构建使用 macOS ad-hoc 签名，不是 Apple Developer ID 签名或公证。从网络下载的构建因此可能在首次启动时出现 macOS 安全提示。
 
-应用会在菜单栏常驻。关闭主窗口只是隐藏到菜单栏，sidecar 继续读取本机配额；从「余量 → 退出余量」或菜单栏「退出」才会停止本地服务。点击 Dock 图标或菜单栏图标会重新打开窗口。
+应用会在菜单栏常驻。关闭主窗口只是隐藏到菜单栏，sidecar 继续读取本机配额；从「余量 → 退出余量」或菜单栏「退出」才会停止本地服务。点击菜单栏图标打开已监控订阅的周限额仪表盘；从 Dock 图标或菜单「打开余量」重新打开主窗口。
 
 内部标识已经全部使用 Balance：bundle id `com.balance.desktop`、sidecar `balance-node`、健康检查 `{"app":"balance","mode":"desktop"}`、快照目录 `~/Library/Application Support/Balance`。如果本机还留着旧的 Synq 快照或 `synq-quota-v8`，第一次启动会自动迁到新位置，不覆盖已经存在的 Balance 数据。
 
