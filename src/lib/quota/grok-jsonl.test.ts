@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { asGrokModel, parseGrokUpdateLine } from "./grok-jsonl.ts";
+import { asGrokModel, parseGrokUpdateLine, type GrokSessionMeta } from "./grok-jsonl.ts";
 import { createGrokScanState, scanGrokUsage } from "./grok-log.server.ts";
+import { observeWindow } from "./quota-value.ts";
 
 const meta = {
   sessionId: "sess-g",
@@ -217,4 +218,22 @@ test("Grok reports two concurrently writing sessions", () => {
   assert.deepEqual(result.active.map((task) => task.sessionId).sort(), ["sess-a", "sess-b"]);
   assert.equal(result.live?.sessionId, "sess-a");
   assert.equal(result.live?.lastTs, now - 1_000);
+});
+
+test("Grok missing raw model keeps the event but stays unpriced", () => {
+  const line = JSON.stringify({
+    timestamp: 1787153666,
+    params: {
+      sessionId: "sess-g",
+      update: {
+        sessionUpdate: "turn_completed",
+        prompt_id: "p-nomodel",
+        usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 0, cacheCreationTokens: 0 },
+      },
+    },
+  });
+  const ev = parseGrokUpdateLine(line, { sessionId: "sess-g", cwd: "", title: "" } as GrokSessionMeta);
+  assert.ok(ev);
+  assert.equal(ev.modelRaw, undefined);
+  assert.equal(observeWindow([ev]).pricedTokenCoverage, 0);
 });

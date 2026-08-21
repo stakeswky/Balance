@@ -1,12 +1,12 @@
 import type { GrokModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
-import { exclusiveCachedInput, normalizeToken } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeToken, optionalModel } from "./tokens.ts";
 
 export interface GrokSessionMeta {
   sessionId: string;
   cwd: string;
   title: string;
-  model: string;
+  model?: string;
 }
 
 export function asGrokModel(raw: string): GrokModelId {
@@ -56,7 +56,7 @@ function usageFrom(u: Record<string, unknown>): {
   };
 }
 
-function modelFromUsage(usage: Record<string, unknown>, fallback: string): string {
+function modelFromUsage(usage: Record<string, unknown>, fallback: string | undefined): string | undefined {
   const models = usage.modelUsage;
   if (models && typeof models === "object") {
     const keys = Object.keys(models as Record<string, unknown>);
@@ -96,7 +96,7 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
     parseGrokTs(metaBlock?.agentTimestampMs) ?? parseGrokTs(obj.timestamp) ?? parseGrokTs(update.timestamp) ?? Date.now();
   const sessionId = String(params.sessionId ?? meta.sessionId);
   const promptId = String(update.prompt_id ?? metaBlock?.eventId ?? `${sessionId}:${ts}`);
-  const modelRaw = modelFromUsage(usage, meta.model);
+  const modelRaw = modelFromUsage(usage, optionalModel(meta.model));
   const ticks = typeof usage.costUsdTicks === "number" ? usage.costUsdTicks : null;
   const byModel: Record<string, number> = {};
   const models = usage.modelUsage;
@@ -110,7 +110,7 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
   return {
     id: promptId,
     agent: "grok",
-    model: asGrokModel(modelRaw),
+    model: asGrokModel(modelRaw ?? ""),
     modelRaw,
     ts,
     sessionId,

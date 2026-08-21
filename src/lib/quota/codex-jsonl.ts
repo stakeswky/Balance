@@ -1,13 +1,13 @@
 import type { CodexModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
 import { parseCodexRateLimits, type OfficialSlice } from "./official.ts";
-import { exclusiveCachedInput, normalizeToken } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeToken, optionalModel } from "./tokens.ts";
 
 export interface CodexSessionMeta {
   sessionId: string;
   cwd: string;
   title: string;
-  model: string;
+  model?: string;
 }
 
 export function asCodexModel(raw: string): CodexModelId {
@@ -107,11 +107,12 @@ export function parseCodexJsonlLine(
     return { event: null, official };
   }
 
+  const modelRaw = optionalModel(meta.model);
   const event: UsageEvent = {
     id: `${sessionId}:${ts}`,
     agent: "codex",
-    model: asCodexModel(meta.model),
-    modelRaw: meta.model,
+    model: asCodexModel(modelRaw ?? ""),
+    modelRaw,
     ts,
     sessionId,
     task: clipTask(meta.title || meta.cwd || sessionId),

@@ -1,5 +1,5 @@
 import type { ActorKind, ClaudeModelId, UsageAnomaly, UsageEvent } from "./types.ts";
-import { claudeCacheWrites, normalizeToken } from "./tokens.ts";
+import { claudeCacheWrites, normalizeToken, optionalModel } from "./tokens.ts";
 
 export interface SessionMeta {
   sessionId: string;
@@ -117,8 +117,8 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
   const ts = parseTs(obj.timestamp ?? obj.ts) ?? Date.now();
   const id = String(obj.requestId ?? msg.id ?? obj.uuid ?? `${meta.sessionId}:${ts}`);
   const sessionId = String(obj.sessionId ?? meta.sessionId);
-  const modelRaw = String(msg.model ?? obj.model ?? "claude-sonnet-5");
-  const model = asClaudeModel(modelRaw);
+  const modelRaw = optionalModel(msg.model ?? obj.model);
+  const model = asClaudeModel(modelRaw ?? "");
   const task = clipTask(meta.title || meta.lastUser || meta.cwd || sessionId);
 
   return {

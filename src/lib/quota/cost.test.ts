@@ -173,3 +173,10 @@ test("Spark remains unpriced instead of inheriting Luna price", () => {
   assert.equal(cost.priced, false);
   assert.equal(cost.openAiCredits, null);
 });
+
+test("missing raw model stays unpriced", () => {
+  const event = ev({ model: "sonnet", modelRaw: undefined, tokensIn: 1_000_000 });
+  const cost = costBreakdown(event);
+  assert.equal(cost.priced, false);
+  assert.equal(cost.totalUsd, 0);
+});

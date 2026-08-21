@@ -1,4 +1,4 @@
-import { exclusiveCachedInput, normalizeToken } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeToken, optionalModel } from "./tokens.ts";
 import type { AgentId, ModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 
 function asModel(raw: string, agent: AgentId): ModelId {
@@ -39,9 +39,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
       ? "codex"
       : "claude";
 
-  const modelRaw = String(
-    o.model ?? msg.model ?? (agent === "claude" ? "sonnet" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol"),
-  );
+  const modelRaw = optionalModel(o.model ?? msg.model);
   const tsRaw = o.timestamp ?? o.ts ?? o.created_at ?? Date.now();
   const tsNum = typeof tsRaw === "number" ? tsRaw : Date.parse(String(tsRaw));
   const ts = Number.isFinite(tsNum) ? (tsNum > 0 && tsNum < 1e12 ? tsNum * 1000 : tsNum) : NaN;
@@ -84,7 +82,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   return {
     id: String(o.id ?? `imp_${ts}_${index}`),
     agent,
-    model: asModel(modelRaw, agent),
+    model: asModel(modelRaw ?? "", agent),
     modelRaw,
     ts,
     sessionId: String(o.session_id ?? o.sessionId ?? o.conversation_id ?? `imp_sess_${index}`),

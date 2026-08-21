@@ -154,7 +154,7 @@ export function scanCodexUsage(
     const sid = sessionIdFromPath(path);
     const meta =
       state.meta.get(path) ??
-      ({ sessionId: sid, cwd: "", title: "", model: "gpt-5.6-sol" } satisfies CodexSessionMeta);
+      ({ sessionId: sid, cwd: "", title: "" } satisfies CodexSessionMeta);
     for (const line of lines) {
       const parsed = parseCodexJsonlLine(line, meta);
       if (parsed.event) fresh.push(parsed.event);

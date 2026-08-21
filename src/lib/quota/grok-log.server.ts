@@ -172,7 +172,7 @@ export function scanGrokUsage(
     const dir = path.slice(0, path.lastIndexOf(sep));
     const meta =
       state.meta.get(sid) ??
-      ({ sessionId: sid, cwd: cwdFromEncoded(path, sessionsRoot), title: "", model: "grok-4.6" } satisfies GrokSessionMeta);
+      ({ sessionId: sid, cwd: cwdFromEncoded(path, sessionsRoot), title: "" } satisfies GrokSessionMeta);
     loadSummary(dir, meta);
     for (const line of lines) {
       const ev = parseGrokUpdateLine(line, meta);

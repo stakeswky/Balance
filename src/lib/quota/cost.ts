@@ -37,7 +37,10 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
   const cacheRead = finiteNonNeg(event.cacheRead);
   const w5 = finiteNonNeg(event.cacheWrite);
   const w1 = finiteNonNeg(event.cacheWrite1h ?? 0);
-  const hit = lookupPricing(event.modelRaw, event.model);
+  const rawModel = event.modelRaw?.trim();
+  const hit = rawModel
+    ? lookupPricing(rawModel, event.model)
+    : { pricing: null, quality: "unknown" as const, resolvedModel: null };
   if (!hit.pricing || hit.quality === "unknown") {
     return {
       inputUsd: 0,

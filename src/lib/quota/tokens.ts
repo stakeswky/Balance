@@ -97,6 +97,12 @@ export function claudeCacheWrites(usage: Record<string, unknown>): {
   };
 }
 
+export function optionalModel(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  return value || undefined;
+}
+
 export function rawExclusiveTokens(e: {
   tokensIn: number;
   tokensOut: number;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { asCodexModel, parseCodexJsonlLine, type CodexSessionMeta } from "./codex-jsonl.ts";
 import { createCodexScanState, scanCodexUsage } from "./codex-log.server.ts";
+import { observeWindow } from "./quota-value.ts";
 
 const meta: CodexSessionMeta = {
   sessionId: "sess-c",
@@ -202,4 +203,12 @@ test("Codex reports parallel sessions and deduplicates rollouts for one session"
   assert.equal(result.live?.startedAt, now - 2_000);
   assert.equal(result.live?.lastTs, now - 1_000);
   assert.equal(result.live?.turns, 2);
+});
+
+test("Codex missing raw model keeps the event but stays unpriced", () => {
+  const bare: CodexSessionMeta = { sessionId: "sess-nomodel", cwd: "", title: "", model: "" };
+  const { event } = parseCodexJsonlLine(tokenCount(), bare);
+  assert.ok(event);
+  assert.equal(event.modelRaw, undefined);
+  assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });

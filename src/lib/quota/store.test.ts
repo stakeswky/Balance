@@ -14,6 +14,7 @@ function event(agent: AgentId, id: string, ts = 1): UsageEvent {
     id,
     agent,
     model: agent === "claude" ? "sonnet" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol",
+    modelRaw: agent === "claude" ? "claude-sonnet-5" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol",
     ts,
     sessionId: `session-${id}`,
     task: `task-${id}`,

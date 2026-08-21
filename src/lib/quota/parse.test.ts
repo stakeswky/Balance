@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseUsagePayload } from "./parse.ts";
+import { observeWindow } from "./quota-value.ts";
 
 test("propagates token anomalies for imported OpenAI-style rows", () => {
   const events = parseUsagePayload(
@@ -22,4 +23,16 @@ test("propagates token anomalies for imported OpenAI-style rows", () => {
   assert.equal(events[0]!.tokensIn, 0);
   assert.equal(events[0]!.cacheRead, 100);
   assert.equal(events[0]!.tokensOut, 0);
+});
+
+test("imported rows with missing raw model stay unpriced", () => {
+  const events = parseUsagePayload(
+    JSON.stringify([
+      { agent: "codex", timestamp: 1_725_000_100_000, usage: { input_tokens: 10, output_tokens: 5 } },
+    ]),
+    "codex",
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.modelRaw, undefined);
+  assert.equal(observeWindow([events[0]!]).pricedTokenCoverage, 0);
 });

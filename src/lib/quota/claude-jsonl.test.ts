@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { foldByRequestId, parseJsonlLine, type SessionMeta } from "./claude-jsonl.ts";
 import { createScanState, scanClaudeUsage } from "./claude-log.server.ts";
+import { observeWindow } from "./quota-value.ts";
 
 function assistant(partial: Record<string, unknown>) {
   return JSON.stringify({
@@ -277,4 +278,19 @@ test("Claude parser propagates token anomalies without inventing cached-exceeds"
   assert.ok(exclusiveFields);
   assert.equal(exclusiveFields.cacheRead, 5_000);
   assert.equal(exclusiveFields.anomalies, undefined);
+});
+
+test("Claude missing raw model keeps the event but stays unpriced", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-08-19T15:12:29.612Z",
+    sessionId: "sess-1",
+    requestId: "req_nomodel",
+    message: { role: "assistant", usage: { input_tokens: 10, output_tokens: 20 } },
+  });
+  const event = parseJsonlLine(line, { sessionId: "sess-1", cwd: "", title: "", lastUser: "" });
+  assert.ok(event);
+  assert.equal(event.modelRaw, undefined);
+  assert.equal(event.model, "sonnet");
+  assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });
