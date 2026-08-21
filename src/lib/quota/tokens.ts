@@ -1,22 +1,63 @@
+import type { UsageAnomaly } from "./types.ts";
+
 export function finiteNonNeg(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   return n;
 }
 
+export interface NormalizedToken {
+  value: number;
+  anomalies: UsageAnomaly[];
+}
+
+export function normalizeToken(raw: unknown, field: string): NormalizedToken {
+  if (raw == null || raw === "") return { value: 0, anomalies: [] };
+  const value = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(value)) {
+    return {
+      value: 0,
+      anomalies: [{ code: "non-finite-token", field, rawValue: String(raw) }],
+    };
+  }
+  if (value < 0) {
+    return {
+      value: 0,
+      anomalies: [{ code: "negative-token", field, rawValue: String(raw) }],
+    };
+  }
+  if (!Number.isInteger(value)) {
+    return {
+      value: 0,
+      anomalies: [{ code: "fractional-token", field, rawValue: String(raw) }],
+    };
+  }
+  return { value, anomalies: [] };
+}
+
 /** OpenAI / Grok Responses: input_tokens includes cached_input_tokens. */
-export function exclusiveCachedInput(inputTokens: number, cachedInputTokens: number): {
+export function exclusiveCachedInput(inputRaw: unknown, cachedRaw: unknown): {
   uncachedInputTokens: number;
   cacheReadTokens: number;
   cachedExceedsInput: boolean;
+  anomalies: UsageAnomaly[];
 } {
-  const input = finiteNonNeg(inputTokens);
-  const cached = finiteNonNeg(cachedInputTokens);
-  const cachedExceedsInput = cached > input && input > 0;
-  const cacheReadTokens = Math.min(cached, input);
+  const input = normalizeToken(inputRaw, "input_tokens");
+  const cached = normalizeToken(cachedRaw, "cached_input_tokens");
+  const cachedExceedsInput = cached.value > input.value;
+  const cacheReadTokens = Math.min(cached.value, input.value);
+  const anomalies = [...input.anomalies, ...cached.anomalies];
+  if (cachedExceedsInput) {
+    anomalies.push({
+      code: "cached-input-exceeds-input",
+      field: "cached_input_tokens",
+      rawValue: String(cachedRaw),
+    });
+  }
   return {
-    uncachedInputTokens: Math.max(0, input - cacheReadTokens),
+    uncachedInputTokens: Math.max(0, input.value - cacheReadTokens),
     cacheReadTokens,
     cachedExceedsInput,
+    anomalies,
   };
 }
 

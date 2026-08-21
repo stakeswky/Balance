@@ -1,3 +1,15 @@
+export type UsageAnomalyCode =
+  | "negative-token"
+  | "non-finite-token"
+  | "fractional-token"
+  | "cached-input-exceeds-input";
+
+export interface UsageAnomaly {
+  code: UsageAnomalyCode;
+  field: string;
+  rawValue: string;
+}
+
 export type AgentId = "claude" | "codex" | "grok";
 
 export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
@@ -29,6 +41,7 @@ export interface UsageEvent {
   reasoningMin: number;
   reportedCostTicks?: number | null;
   reportedCostByModel?: Record<string, number>;
+  anomalies?: UsageAnomaly[];
 }
 
 export interface SessionState {
