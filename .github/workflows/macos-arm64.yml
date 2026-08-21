@@ -78,6 +78,9 @@ jobs:
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" artifacts/Balance-macos-arm64.app.zip
 
+      - name: Package sidecar hot-update assets
+        run: node scripts/publish-desktop-update-artifacts.mjs
+
       - name: Upload macOS bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -85,6 +88,8 @@ jobs:
           if-no-files-found: error
           path: |
             artifacts/Balance-macos-arm64.app.zip
+            artifacts/balance-server.zip
+            artifacts/update-manifest.json
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Publish GitHub Release
@@ -99,8 +104,12 @@ jobs:
           test -f "$DMG"
           ZIP="artifacts/Balance-macos-arm64.app.zip"
           test -f "$ZIP"
+          HOT_ZIP="artifacts/balance-server.zip"
+          test -f "$HOT_ZIP"
+          MANIFEST="artifacts/update-manifest.json"
+          test -f "$MANIFEST"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            gh release create "${GITHUB_REF_NAME}" "$DMG" "$ZIP" \
+            gh release create "${GITHUB_REF_NAME}" "$DMG" "$ZIP" "$HOT_ZIP" "$MANIFEST" \
               --title "Balance ${GITHUB_REF_NAME}" \
               --notes "Apple Silicon installer: $(basename "$DMG")" \
               --verify-tag
@@ -108,7 +117,7 @@ jobs:
             if gh release view latest >/dev/null 2>&1; then
               gh release delete latest --cleanup-tag --yes
             fi
-            gh release create latest "$DMG" "$ZIP" \
+            gh release create latest "$DMG" "$ZIP" "$HOT_ZIP" "$MANIFEST" \
               --title "Balance macOS Apple Silicon" \
               --notes "Latest Apple Silicon build. Download $(basename "$DMG")." \
               --target "${GITHUB_SHA}" \

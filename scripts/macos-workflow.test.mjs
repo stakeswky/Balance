@@ -28,9 +28,16 @@ test("macOS workflow builds, verifies, and uploads both bundles", async () => {
   assert.match(yaml, /Balance_\*\.dmg/);
   assert.match(yaml, /GITHUB_TOKEN/);
   assert.match(yaml, /release create latest/);
+  assert.match(yaml, /node scripts\/publish-desktop-update-artifacts\.mjs/);
+  assert.match(yaml, /artifacts\/balance-server\.zip/);
+  assert.match(yaml, /artifacts\/update-manifest\.json/);
   assert.ok(
     yaml.indexOf("npm run desktop:prepare") < yaml.indexOf("npm run desktop:test"),
     "clean CI must generate externalBin and resources before cargo test",
+  );
+  assert.ok(
+    yaml.indexOf("Package sidecar hot-update assets") < yaml.indexOf("Upload macOS bundles"),
+    "hot-update assets must exist before upload-artifact",
   );
 });
 
