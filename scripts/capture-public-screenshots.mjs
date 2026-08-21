@@ -31,15 +31,31 @@ const OUTPUT_DIR = checkedOutputPath(
 const EXPECTED_TITLE_PREFIX = "余量 / Balance";
 const SPECS = [
   {
-    name: "desktop",
+    name: "desktop-light",
+    theme: "light",
     viewport: { width: 1280, height: 900 },
     file: "claude-grok-quota-desktop.png",
     maxHeight: 5000,
   },
   {
-    name: "mobile",
+    name: "desktop-dark",
+    theme: "dark",
+    viewport: { width: 1280, height: 900 },
+    file: "claude-grok-quota-desktop-dark.png",
+    maxHeight: 5000,
+  },
+  {
+    name: "mobile-light",
+    theme: "light",
     viewport: { width: 390, height: 844 },
     file: "claude-grok-quota-mobile.png",
+    maxHeight: 12000,
+  },
+  {
+    name: "mobile-dark",
+    theme: "dark",
+    viewport: { width: 390, height: 844 },
+    file: "claude-grok-quota-mobile-dark.png",
     maxHeight: 12000,
   },
 ];
@@ -153,7 +169,8 @@ function isAvailabilityRequest(request) {
     const encoded = pathname.slice(prefix.length).split("/")[0];
     const id = decodeURIComponent(encoded);
     if (AVAILABILITY_IDS.has(id)) return true;
-    return Buffer.from(id, "base64url").toString("utf8") === "pullAgentAvailability";
+    const decoded = Buffer.from(id, "base64url").toString("utf8");
+    return decoded === "pullAgentAvailability" || decoded.includes("pullAgentAvailability");
   } catch {
     return false;
   }
@@ -166,11 +183,28 @@ function cardAround(page, heading) {
 }
 
 async function capture(browser, spec) {
-  const context = await browser.newContext({ viewport: spec.viewport, locale: "zh-CN" });
-  await context.addInitScript((persistedState) => {
-    localStorage.setItem("synq-quota-v8", JSON.stringify(persistedState));
-    sessionStorage.clear();
-  }, publicPersistedState);
+  const context = await browser.newContext({
+    viewport: spec.viewport,
+    locale: "zh-CN",
+    colorScheme: spec.theme,
+  });
+  await context.addInitScript(
+    ({ persistedState, theme }) => {
+      try {
+        localStorage.setItem("synq-quota-v8", JSON.stringify(persistedState));
+        localStorage.setItem("remain-theme", theme);
+        const root = document.documentElement;
+        if (root) {
+          root.dataset.theme = theme;
+          root.style.colorScheme = theme;
+        }
+        sessionStorage.clear();
+      } catch {
+        /* about:blank may not have a documentElement yet */
+      }
+    },
+    { persistedState: publicPersistedState, theme: spec.theme },
+  );
   await context.route(/https:\/\/(grok\.com|fonts\.(gstatic|googleapis)\.com)\//, async (route) => {
     const type = route.request().resourceType();
     await route.fulfill({
@@ -248,6 +282,12 @@ async function capture(browser, spec) {
     }
     await page.getByRole("button", { name: "重置演示" }).waitFor();
     await page.getByText("当前是演示数据。", { exact: false }).waitFor();
+    const themeToggleName = spec.theme === "dark" ? "切换亮色" : "切换暗色";
+    await page.getByRole("button", { name: themeToggleName }).waitFor();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.dataset.theme),
+      spec.theme,
+    );
     const pause = page.getByRole("button", { name: "全部暂停" });
     await pause.click();
     await page.getByRole("button", { name: "开始协同" }).waitFor();
@@ -275,7 +315,11 @@ async function capture(browser, spec) {
     await cardAround(page, "Codex").getByText("32%", { exact: true }).first().waitFor();
     const surface = await page.evaluate(() => {
       const attributes = [...document.querySelectorAll("*")]
-        .flatMap((element) => [...element.attributes].map((attribute) => attribute.value))
+        .flatMap((element) =>
+          [...element.attributes]
+            .filter((attribute) => !/\/(?:src|node_modules)\//.test(attribute.value))
+            .map((attribute) => attribute.value),
+        )
         .join("\n");
       return (
         document.body.innerText +

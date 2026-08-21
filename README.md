@@ -6,9 +6,15 @@
 
 ## 界面预览
 
-<img src="./screenshots/claude-grok-quota-desktop.png" alt="Balance desktop quota dashboard" width="900">
+亮色与暗色可在应用内切换。
 
-<img src="./screenshots/claude-grok-quota-mobile.png" alt="Balance mobile quota dashboard" width="360">
+<img src="./screenshots/claude-grok-quota-desktop.png" alt="Balance desktop quota dashboard (light)" width="900">
+
+<img src="./screenshots/claude-grok-quota-desktop-dark.png" alt="Balance desktop quota dashboard (dark)" width="900">
+
+<img src="./screenshots/claude-grok-quota-mobile.png" alt="Balance mobile quota dashboard (light)" width="360">
+
+<img src="./screenshots/claude-grok-quota-mobile-dark.png" alt="Balance mobile quota dashboard (dark)" width="360">
 
 ## 本地运行
 

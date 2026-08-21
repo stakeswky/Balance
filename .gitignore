@@ -24,4 +24,6 @@ playwright-onboarding-snapshot.md
 screenshots/*
 !screenshots/.gitkeep
 !screenshots/claude-grok-quota-desktop.png
+!screenshots/claude-grok-quota-desktop-dark.png
 !screenshots/claude-grok-quota-mobile.png
+!screenshots/claude-grok-quota-mobile-dark.png

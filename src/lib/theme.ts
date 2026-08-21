@@ -5,7 +5,7 @@ export type Theme = "light" | "dark";
 const KEY = "remain-theme";
 
 function readTheme(): Theme {
-  if (typeof document === "undefined") return "light";
+  if (typeof document === "undefined" || !document.documentElement) return "light";
   const fromDom = document.documentElement.dataset.theme;
   if (fromDom === "dark" || fromDom === "light") return fromDom;
   try {
@@ -18,7 +18,7 @@ function readTheme(): Theme {
 }
 
 function applyTheme(theme: Theme) {
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined" || !document.documentElement) return;
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
   const meta = document.querySelector('meta[name="theme-color"]');
@@ -50,4 +50,4 @@ export const useTheme = create<{
 }));
 
 export const THEME_BOOT =
-  "(function(){try{var t=localStorage.getItem('remain-theme');if(t!=='dark'&&t!=='light')t='light';document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;}catch(e){document.documentElement.dataset.theme='light'}})();";
+  "(function(){try{var t=localStorage.getItem('remain-theme');if(t!=='dark'&&t!=='light')t='light';var r=document.documentElement;if(!r)return;r.dataset.theme=t;r.style.colorScheme=t;}catch(e){}})();";
