@@ -1,3 +1,4 @@
+import { formatDuration } from "./engine.ts";
 import type { QuotaValue } from "./quota-value.ts";
 import type { AgentId, MeterSnapshot } from "./types.ts";
 
@@ -23,6 +24,37 @@ export function apiEquivalentSections(
   }
   if (primary === "five_hour") return [{ key: "five_hour", label: "5h", value: fiveHour }];
   return [{ key: "weekly", label: "本周", value: weekly }];
+}
+
+function datePart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  return parts.find((part) => part.type === type)?.value ?? "";
+}
+
+export function formatResetClock(ts: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ts));
+  const hour = datePart(parts, "hour").padStart(2, "0");
+  const minute = datePart(parts, "minute").padStart(2, "0");
+  return `${Number(datePart(parts, "month"))}月${Number(datePart(parts, "day"))}日 ${hour}:${minute}`;
+}
+
+export function formatWeekResetLabel(
+  resetsAt: number | null | undefined,
+  now: number,
+  opts?: { timeZone?: string; prefix?: string },
+): string | null {
+  if (resetsAt == null || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  const clock = formatResetClock(resetsAt, opts?.timeZone);
+  const prefix = opts?.prefix ?? "周限额刷新";
+  const remain = resetsAt - now;
+  if (remain <= 0) return `${prefix} ${clock} · 已过`;
+  return `${prefix} ${clock} · ${formatDuration(remain)}`;
 }
 
 export function formatCredits(value: number): string {

@@ -7,6 +7,7 @@ import {
   effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
+  formatWeekResetLabel,
   primaryUsagePercent,
   primaryWindowLabel,
   primaryWindowResetsAt,
@@ -202,6 +203,39 @@ test("tightest quota includes a stricter Fable sub-limit", () => {
     { label: "Claude Fable 5", pct: 80, resetsAt: 20 },
   ]);
   assert.deepEqual(result, { label: "Claude Fable 5", pct: 80, resetsAt: 20 });
+});
+
+const WEEK_RESET = Date.parse("2026-08-26T20:59:00Z");
+const FOUR_DAYS_BEFORE = Date.parse("2026-08-22T20:59:00Z");
+
+test("week reset label uses the official clock in Asia/Shanghai", () => {
+  assert.equal(
+    formatWeekResetLabel(WEEK_RESET, FOUR_DAYS_BEFORE, { timeZone: "Asia/Shanghai" }),
+    "周限额刷新 8月27日 04:59 · 4 天 0 小时",
+  );
+});
+
+test("week reset label stays null without an official timestamp", () => {
+  assert.equal(formatWeekResetLabel(null, FOUR_DAYS_BEFORE), null);
+  assert.equal(formatWeekResetLabel(0, FOUR_DAYS_BEFORE), null);
+  assert.equal(formatWeekResetLabel(Number.NaN, FOUR_DAYS_BEFORE), null);
+});
+
+test("past official week reset is marked elapsed instead of a dash", () => {
+  assert.equal(
+    formatWeekResetLabel(WEEK_RESET, WEEK_RESET + 60_000, { timeZone: "Asia/Shanghai" }),
+    "周限额刷新 8月27日 04:59 · 已过",
+  );
+});
+
+test("Fable prefix does not reuse the generic weekly copy", () => {
+  assert.equal(
+    formatWeekResetLabel(WEEK_RESET, FOUR_DAYS_BEFORE, {
+      timeZone: "Asia/Shanghai",
+      prefix: "Fable 5 周限额刷新",
+    }),
+    "Fable 5 周限额刷新 8月27日 04:59 · 4 天 0 小时",
+  );
 });
 
 test("Fable alert latch triggers once and unlocks after a 12 point drop", () => {
