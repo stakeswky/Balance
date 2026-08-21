@@ -47,6 +47,11 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   for (const key of ["HOME", "GROK_HOME", "CODEX_HOME", "TMPDIR", "LANG", "LC_ALL"]) {
     assert.match(rust, new RegExp(`"${key}"`));
   }
+  assert.match(rust, /BALANCE_NATIVE_VERSION/);
+  assert.match(rust, /hot-update\/current/);
+  assert.match(rust, /failed-/);
+  assert.match(rust, /kill_sidecar_for_retry|take_child_for_retry/);
+  assert.match(rust, /force_bundled/);
   assert.match(watchdog, /process\.stdin/);
   assert.match(watchdog, /process\.ppid/);
   assert.match(verifier, /Mach-O 64-bit executable arm64/);
