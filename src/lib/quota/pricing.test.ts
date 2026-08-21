@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lookupPricing } from "./pricing.ts";
+import { lookupPricing, PRICING_VERSION } from "./pricing.ts";
 
 test("exact model beats alias and family fallback", () => {
   const hit = lookupPricing("claude-opus-5", "sonnet");
@@ -82,4 +82,21 @@ test("Grok models keep provider-specific cached input prices", () => {
   assert.equal(lookupPricing("grok-4.5", "grok-4.5").pricing?.cacheReadPerToken, 0.3 / 1_000_000);
   assert.equal(lookupPricing("grok-build-0.1", "grok-4.6").pricing?.cacheReadPerToken, 0.2 / 1_000_000);
   assert.equal(lookupPricing("grok-4.6-build", "grok-4.6").resolvedModel, "grok-4.6");
+});
+
+/**
+ * Evidence-URL: https://help.openai.com/en/articles/20001106-codex-rate-card
+ * Evidence-Checked: 2026-08-21
+ * Evidence-Fields: Codex cache write 免费
+ * Sanitized-Fixture: {"agent":"codex","cache_write_5m":0,"cache_write_1h":0}
+ */
+test("Codex and Grok cache writes are free while Claude retains explicit rates", () => {
+  assert.equal(lookupPricing("gpt-5.6-sol").pricing!.cacheWrite5mPerToken, 0);
+  assert.equal(lookupPricing("grok-4.6").pricing!.cacheWrite1hPerToken, 0);
+  assert.equal(lookupPricing("claude-sonnet-5").pricing!.cacheWrite5mPerToken * 1_000_000, 2.5);
+  assert.equal(lookupPricing("claude-sonnet-5").pricing!.cacheWrite1hPerToken * 1_000_000, 4);
+});
+
+test("cache write repricing bumps the pricing version", () => {
+  assert.notEqual(PRICING_VERSION, "2026-08-21-balance-1");
 });

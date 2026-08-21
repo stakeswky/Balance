@@ -22,6 +22,7 @@ import { costBreakdown } from "./cost.ts";
 import type { OfficialSlice } from "./official.ts";
 import type { UsageEvent } from "./types.ts";
 import { WINDOW_MS } from "./types.ts";
+import { PRICING_VERSION } from "./pricing.ts";
 
 function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
   return {
@@ -53,7 +54,7 @@ function sample(partial: Partial<QuotaSample> & Pick<QuotaSample, "usedPercent" 
     cumulativeObservedUsd: partial.cumulativeObservedUsd,
     pricedTokenCoverage: partial.pricedTokenCoverage ?? 1,
     modelMix: partial.modelMix ?? { "gpt-5.4": 1 },
-    pricingVersion: partial.pricingVersion ?? "2026-08-21-balance-1",
+    pricingVersion: partial.pricingVersion ?? PRICING_VERSION,
     planLabel: partial.planLabel ?? null,
   };
 }
