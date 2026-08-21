@@ -489,14 +489,29 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
       : usable.filter((slope) => hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35);
   if (!compatible.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
-  const unweightedCenter = median(compatible.map((slope) => slope.value));
-  const weightedCenter = weightedMedian(compatible);
-  const mad = weightedMad(compatible, weightedCenter);
+  const provisionalCenter = weightedMedian(compatible);
+  const modelMixUnknown = !hasModelMix(currentMix)
+    || compatible.some((slope) => !hasModelMix(slope.modelMix));
+  const cheapSlopes = new Set(
+    compatible.filter((slope) => {
+      if (slope.value >= provisionalCenter * 0.4) return false;
+      if (!hasModelMix(currentMix) || !hasModelMix(slope.modelMix)) return false;
+      return modelMixDrift(slope.modelMix, currentMix) < 0.15;
+    }),
+  );
+  const candidates = compatible.filter((slope) => !cheapSlopes.has(slope));
+  if (!candidates.length) {
+    return { ...empty, externalUsageDetected: externalUsageDetected || cheapSlopes.size > 0, anomalousPairs };
+  }
+
+  const unweightedCenter = median(candidates.map((slope) => slope.value));
+  const weightedCenter = weightedMedian(candidates);
+  const mad = weightedMad(candidates, weightedCenter);
   const threshold = Math.max(3 * mad, 0.25 * weightedCenter);
-  const kept = compatible.filter((slope) =>
+  const kept = candidates.filter((slope) =>
     Math.abs(slope.value - weightedCenter) <= threshold,
   );
-  if (!kept.length) return { ...empty, externalUsageDetected, anomalousPairs };
+  if (!kept.length) return { ...empty, externalUsageDetected: externalUsageDetected || cheapSlopes.size > 0, anomalousPairs };
   const centerConflict = relativeCenterDistance(unweightedCenter, weightedCenter) > 0.35;
 
   const point = weightedMedian(kept);
@@ -515,8 +530,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
           kept.map((slope) => ({ value: modelMixDrift(slope.modelMix, currentMix), weight: slope.weight })),
         );
 
-  const cheapThreshold = weightedCenter * 0.4;
-  const cheap = compatible.some((s) => s.value < cheapThreshold - Number.EPSILON * Math.max(1, cheapThreshold) * 8);
+  const cheap = cheapSlopes.size > 0;
   const sumPct = kept.reduce((s, r) => s + r.weight, 0);
   const coverage = last?.pricedTokenCoverage ?? 0;
   let confidence: ValueConfidence = "none";
@@ -530,11 +544,13 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   if (centerConflict && (confidence === "high" || confidence === "medium")) {
     confidence = "low";
   }
+  if (modelMixUnknown && (confidence === "high" || confidence === "medium")) {
+    confidence = "low";
+  }
   const downgrade = (c: ValueConfidence): ValueConfidence =>
     c === "high" ? "medium" : c === "medium" ? "low" : "none";
   if (externalUsageDetected && confidence !== "none") confidence = downgrade(confidence);
-  if (cheap && confidence !== "none") confidence = downgrade(confidence);
-  if (confidence === "none") return { ...empty, externalUsageDetected, anomalousPairs };
+  if (confidence === "none") return { ...empty, externalUsageDetected: externalUsageDetected || cheap, anomalousPairs };
 
   let band = drift >= 0.15 ? 0.25 : 0.15;
   if (confidence === "high" && usedPct % 1 !== 0) band = Math.min(band, 0.1);
@@ -550,7 +566,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     remainingPointUsd: point * (100 - u),
     remainingHighUsd: high * (100 - u),
     confidence,
-    externalUsageDetected,
+    externalUsageDetected: externalUsageDetected || cheap,
     anomalousPairs,
   };
 }

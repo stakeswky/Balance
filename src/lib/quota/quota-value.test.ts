@@ -1000,3 +1000,44 @@ test("weighted MAD keeps high-weight accurate slopes", () => {
   assert.equal(result.totalPointUsd, 50);
   assert.equal(result.confidence, "low");
 });
+
+test("a comparable cheap interval is excluded from the point estimate", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 10, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 3, usedPercent: 20, cumulativeObservedUsd: 20 }),
+    sample({ timestampMs: 4, usedPercent: 30, cumulativeObservedUsd: 23.5 }),
+    sample({ timestampMs: 5, usedPercent: 40, cumulativeObservedUsd: 33.5 }),
+    sample({ timestampMs: 6, usedPercent: 50, cumulativeObservedUsd: 43.5 }),
+  ];
+  const result = calibrateFromSamples(rows, 50, false);
+  assert.equal(result.totalPointUsd, 100);
+  assert.notEqual(result.confidence, "high");
+});
+
+test("a cheap interval with a changed model mix is not labeled external", () => {
+  const cheapMix = { "claude-haiku-4-5": 1 };
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 10, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 3, usedPercent: 20, cumulativeObservedUsd: 13.5, modelMix: cheapMix }),
+    sample({ timestampMs: 4, usedPercent: 30, cumulativeObservedUsd: 23.5, modelMix: cheapMix }),
+  ];
+  const result = calibrateFromSamples(rows, 30, false);
+  assert.equal(result.externalUsageDetected, false);
+});
+
+test("a cheap interval with unknown model mix is retained but capped low", () => {
+  const cumulative = [0, 10, 20, 23.5, 33.5, 43.5, 53.5];
+  const rows = [0, 10, 20, 30, 40, 50, 60].map((usedPercent, index) =>
+    sample({
+      timestampMs: index + 1,
+      usedPercent,
+      cumulativeObservedUsd: cumulative[index]!,
+      modelMix: {},
+    }),
+  );
+  const result = calibrateFromSamples(rows, 60, false);
+  assert.equal(result.externalUsageDetected, false);
+  assert.equal(result.confidence, "low");
+});
