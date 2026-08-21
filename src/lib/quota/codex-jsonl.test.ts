@@ -237,3 +237,38 @@ test("Codex missing raw model keeps the event but stays unpriced", () => {
   assert.equal(event.modelRaw, undefined);
   assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });
+
+const SPEED_CASES = [
+  { raw: "fast", expected: "fast" },
+  { raw: "FAST", expected: "fast" },
+  { raw: "standard", expected: "standard" },
+  { raw: undefined, expected: "unknown" },
+  { raw: "turbo", expected: "unknown" },
+] as const;
+
+test("Codex explicit usage speed is recorded and never guessed", () => {
+  const lastWith = (extra: Record<string, unknown>) =>
+    tokenCount({
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 5,
+            reasoning_output_tokens: 0,
+            ...extra,
+          },
+        },
+      },
+    });
+  for (const { raw, expected } of SPEED_CASES) {
+    const { event } = parseCodexJsonlLine(lastWith(raw === undefined ? {} : { speed: raw }), { ...meta });
+    assert.ok(event);
+    assert.equal(event.speed, expected);
+  }
+  const { event: priorityOnly } = parseCodexJsonlLine(lastWith({ priority: "high" }), { ...meta });
+  assert.ok(priorityOnly);
+  assert.equal(priorityOnly.speed, "unknown");
+});

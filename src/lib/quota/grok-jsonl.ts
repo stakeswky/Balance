@@ -1,6 +1,6 @@
 import type { GrokModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
-import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
 
 export interface GrokSessionMeta {
   sessionId: string;
@@ -91,6 +91,7 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
   const usageRaw = update.usage;
   if (!usageRaw || typeof usageRaw !== "object") return null;
   const usage = usageRaw as Record<string, unknown>;
+  const speed = usageSpeed(usage.speed);
   const counts = usageFrom(usage);
   if (
     counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite
@@ -133,6 +134,7 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
     reasoningMin: 0,
     reportedCostTicks: ticks,
     reportedCostByModel: Object.keys(byModel).length ? byModel : undefined,
+    speed,
     anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };
 }

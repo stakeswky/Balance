@@ -53,3 +53,29 @@ test("imported rows with missing raw model stay unpriced", () => {
   assert.equal(events[0]!.modelRaw, undefined);
   assert.equal(observeWindow([events[0]!]).pricedTokenCoverage, 0);
 });
+
+const SPEED_CASES = [
+  { raw: "fast", expected: "fast" },
+  { raw: "FAST", expected: "fast" },
+  { raw: "standard", expected: "standard" },
+  { raw: undefined, expected: "unknown" },
+  { raw: "turbo", expected: "unknown" },
+] as const;
+
+test("imported rows record explicit usage speed only", () => {
+  for (const { raw, expected } of SPEED_CASES) {
+    const events = parseUsagePayload(
+      JSON.stringify([
+        {
+          agent: "codex",
+          model: "gpt-5.4",
+          timestamp: 1_725_000_100_000,
+          usage: { input_tokens: 10, output_tokens: 5, ...(raw === undefined ? {} : { speed: raw }) },
+        },
+      ]),
+      "codex",
+    );
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.speed, expected);
+  }
+});

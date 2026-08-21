@@ -1,7 +1,7 @@
 import type { CodexModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
 import { parseCodexRateLimits, type OfficialSlice } from "./official.ts";
-import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
 
 export interface CodexSessionMeta {
   sessionId: string;
@@ -113,6 +113,7 @@ export function parseCodexJsonlLine(
     });
   }
   if (!last) return { event: null, official };
+  const speed = usageSpeed(last.speed ?? info.speed ?? payload.speed);
   const counts = usageFromLast(last);
   if (
     counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite
@@ -138,6 +139,7 @@ export function parseCodexJsonlLine(
     imageInputTokens: counts.imageInputTokens,
     imageOutputTokens: counts.imageOutputTokens,
     reasoningMin: counts.reasoningMin,
+    speed,
     anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };
   return { event, official };

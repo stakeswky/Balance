@@ -1,4 +1,12 @@
-import type { UsageAnomaly } from "./types.ts";
+import type { UsageAnomaly, UsageSpeed } from "./types.ts";
+
+export function usageSpeed(raw: unknown): UsageSpeed {
+  if (typeof raw !== "string") return "unknown";
+  const value = raw.trim().toLowerCase();
+  if (value === "fast") return "fast";
+  if (value === "standard") return "standard";
+  return "unknown";
+}
 
 export function finiteNonNeg(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;

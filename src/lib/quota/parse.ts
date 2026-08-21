@@ -1,4 +1,4 @@
-import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
 import type { AgentId, ModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 
 function asModel(raw: string, agent: AgentId): ModelId {
@@ -84,6 +84,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   const cacheRead = split.cacheReadTokens;
   const cacheWrite = write.value;
   const reasoningMin = num(usage.reasoning_minutes ?? o.reasoningMin ?? o.reasoning_minutes);
+  const speed = usageSpeed(usage.speed ?? o.speed);
 
   if (
     tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin
@@ -106,6 +107,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
     imageInputTokens: images.imageInputTokens,
     imageOutputTokens: images.imageOutputTokens,
     reasoningMin,
+    speed,
     anomalies: anomalies.length ? anomalies : undefined,
   };
 }

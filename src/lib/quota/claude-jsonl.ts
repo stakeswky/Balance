@@ -1,5 +1,5 @@
 import type { ActorKind, ClaudeModelId, UsageAnomaly, UsageEvent } from "./types.ts";
-import { claudeCacheWrites, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
+import { claudeCacheWrites, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
 
 export interface SessionMeta {
   sessionId: string;
@@ -125,6 +125,7 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
     && anomalies.length === 0
   ) return null;
 
+  const speed = usageSpeed(usage.speed);
   const ts = parseTs(obj.timestamp ?? obj.ts) ?? Date.now();
   const id = String(obj.requestId ?? msg.id ?? obj.uuid ?? `${meta.sessionId}:${ts}`);
   const sessionId = String(obj.sessionId ?? meta.sessionId);
@@ -151,6 +152,7 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
     imageInputTokens: images.imageInputTokens,
     imageOutputTokens: images.imageOutputTokens,
     reasoningMin: 0,
+    speed,
     anomalies: anomalies.length ? anomalies : undefined,
   };
 }

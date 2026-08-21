@@ -264,3 +264,34 @@ test("Grok missing raw model keeps the event but stays unpriced", () => {
   assert.equal(ev.modelRaw, undefined);
   assert.equal(observeWindow([ev]).pricedTokenCoverage, 0);
 });
+
+const SPEED_CASES = [
+  { raw: "fast", expected: "fast" },
+  { raw: "FAST", expected: "fast" },
+  { raw: "standard", expected: "standard" },
+  { raw: undefined, expected: "unknown" },
+  { raw: "turbo", expected: "unknown" },
+] as const;
+
+test("Grok explicit usage speed is recorded and never guessed", () => {
+  const usageWith = (extra: Record<string, unknown>) =>
+    JSON.stringify({
+      timestamp: 1787153666,
+      params: {
+        sessionId: "sess-g",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "p-speed",
+          usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 0, cacheCreationTokens: 0, ...extra },
+        },
+      },
+    });
+  for (const { raw, expected } of SPEED_CASES) {
+    const ev = parseGrokUpdateLine(usageWith(raw === undefined ? {} : { speed: raw }), meta);
+    assert.ok(ev);
+    assert.equal(ev.speed, expected);
+  }
+  const priorityOnly = parseGrokUpdateLine(usageWith({ priority: "high" }), meta);
+  assert.ok(priorityOnly);
+  assert.equal(priorityOnly.speed, "unknown");
+});

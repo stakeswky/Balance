@@ -10,6 +10,8 @@ export interface UsageAnomaly {
   rawValue: string;
 }
 
+export type UsageSpeed = "standard" | "fast" | "unknown";
+
 export type AgentId = "claude" | "codex" | "grok";
 
 export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
@@ -43,6 +45,7 @@ export interface UsageEvent {
   reasoningMin: number;
   reportedCostTicks?: number | null;
   reportedCostByModel?: Record<string, number>;
+  speed?: UsageSpeed;
   anomalies?: UsageAnomaly[];
 }
 

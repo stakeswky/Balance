@@ -328,3 +328,43 @@ test("Claude missing raw model keeps the event but stays unpriced", () => {
   assert.equal(event.model, "sonnet");
   assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });
+
+const SPEED_CASES = [
+  { raw: "fast", expected: "fast" },
+  { raw: "FAST", expected: "fast" },
+  { raw: "standard", expected: "standard" },
+  { raw: undefined, expected: "unknown" },
+  { raw: "turbo", expected: "unknown" },
+] as const;
+
+test("Claude explicit usage speed is recorded and never guessed", () => {
+  const meta = { sessionId: "sess-1", cwd: "", title: "", lastUser: "" };
+  for (const { raw, expected } of SPEED_CASES) {
+    const event = parseJsonlLine(
+      assistant({
+        requestId: `req_speed_${String(raw)}`,
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-5",
+          usage: { input_tokens: 10, output_tokens: 20, ...(raw === undefined ? {} : { speed: raw }) },
+        },
+      }),
+      meta,
+    );
+    assert.ok(event);
+    assert.equal(event.speed, expected);
+  }
+  const priorityOnly = parseJsonlLine(
+    assistant({
+      requestId: "req_priority",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-5",
+        usage: { input_tokens: 10, output_tokens: 20, priority: "high" },
+      },
+    }),
+    meta,
+  );
+  assert.ok(priorityOnly);
+  assert.equal(priorityOnly.speed, "unknown");
+});
