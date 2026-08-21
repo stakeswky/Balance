@@ -17,6 +17,21 @@ export interface CostBreakdown {
 }
 
 export function costBreakdown(event: UsageEvent): CostBreakdown {
+  if (event.anomalies?.length) {
+    return {
+      inputUsd: 0,
+      outputUsd: 0,
+      cacheReadUsd: 0,
+      cacheWriteUsd: 0,
+      imageUsd: 0,
+      totalUsd: 0,
+      pricingModel: null,
+      pricingVersion: PRICING_VERSION,
+      pricingQuality: "unknown",
+      priced: false,
+      openAiCredits: null,
+    };
+  }
   const uncached = finiteNonNeg(event.tokensIn);
   const output = finiteNonNeg(event.tokensOut);
   const cacheRead = finiteNonNeg(event.cacheRead);

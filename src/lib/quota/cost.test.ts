@@ -151,6 +151,17 @@ test("Codex long context and credits use the public multipliers", () => {
   assert.ok(Math.abs((cost.openAiCredits ?? 0) - expectedUsd * 25) < 1e-12);
 });
 
+test("anomalous token events remain observable and are not priced", () => {
+  const event = ev({
+    tokensIn: 10,
+    anomalies: [{ code: "negative-token", field: "output_tokens", rawValue: "-1" }],
+  });
+  assert.equal(costBreakdown(event).priced, false);
+  assert.equal(costBreakdown(event).totalUsd, 0);
+  assert.equal(costBreakdown(event).pricingQuality, "unknown");
+  assert.equal(costBreakdown(event).openAiCredits, null);
+});
+
 test("Spark remains unpriced instead of inheriting Luna price", () => {
   const cost = costBreakdown(
     ev({

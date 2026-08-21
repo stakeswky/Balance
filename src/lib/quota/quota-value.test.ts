@@ -39,6 +39,7 @@ function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
     cacheWrite1h: partial.cacheWrite1h,
     cacheWriteUnsplit: partial.cacheWriteUnsplit,
     reasoningMin: 0,
+    anomalies: partial.anomalies,
   };
 }
 
@@ -93,6 +94,16 @@ test("unsplit Claude cache writes lower priced token coverage", () => {
   assert.equal(observed.observedTokens, 1000);
   assert.equal(observed.pricedTokens, 100);
   assert.equal(observed.pricedTokenCoverage, 0.1);
+});
+
+test("anomalous token events remain observable and are not priced", () => {
+  const event = ev({
+    ts: 1,
+    tokensIn: 10,
+    anomalies: [{ code: "negative-token", field: "output_tokens", rawValue: "-1" }],
+  });
+  assert.equal(costBreakdown(event).priced, false);
+  assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });
 
 test("same-window differential yields usdPerPct", () => {
