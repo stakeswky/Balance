@@ -230,16 +230,23 @@ function median(values: number[]): number {
   return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }
 
-function weightedMedian(rows: { value: number; weight: number }[]): number {
-  const total = rows.reduce((s, r) => s + r.weight, 0);
-  if (total <= 0) return median(rows.map((r) => r.value));
-  const sorted = [...rows].sort((a, b) => a.value - b.value);
-  let acc = 0;
-  for (const row of sorted) {
-    acc += row.weight;
-    if (acc >= total / 2) return row.value;
+export function weightedMedian(rows: { value: number; weight: number }[]): number {
+  const total = rows.reduce((sum, row) => sum + row.weight, 0);
+  if (total <= 0) return median(rows.map((row) => row.value));
+  const sorted = [...rows].sort((left, right) => left.value - right.value);
+  const half = total / 2;
+  let accumulated = 0;
+  for (let index = 0; index < sorted.length; index += 1) {
+    const row = sorted[index]!;
+    accumulated += row.weight;
+    const tolerance = Number.EPSILON * Math.max(1, total) * 8;
+    if (Math.abs(accumulated - half) <= tolerance) {
+      const right = sorted[index + 1];
+      return right ? (row.value + right.value) / 2 : row.value;
+    }
+    if (accumulated > half) return row.value;
   }
-  return sorted[sorted.length - 1]!.value;
+  return sorted.at(-1)!.value;
 }
 
 function weightedPercentile(rows: { value: number; weight: number }[], p: number): number {

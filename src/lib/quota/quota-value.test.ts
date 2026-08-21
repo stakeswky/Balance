@@ -13,6 +13,7 @@ import {
   samplesFromOfficialHistory,
   samplesFromOfficial,
   validSlopes,
+  weightedMedian,
   windowBounds,
   type QuotaSample,
 } from "./quota-value.ts";
@@ -972,4 +973,11 @@ test("coverage failure breaks an anchor chain", () => {
   assert.equal(slopes[0]!.segmentId, 1);
   assert.ok(Math.abs(slopes[0]!.weight - 1.1) < 1e-9);
   assert.equal(slopes[0]!.value, 0.5);
+});
+
+test("weighted median interpolates an exact half-weight boundary", () => {
+  assert.equal(weightedMedian([
+    { value: 0.4, weight: 10 },
+    { value: 0.6, weight: 10 },
+  ]), 0.5);
 });
