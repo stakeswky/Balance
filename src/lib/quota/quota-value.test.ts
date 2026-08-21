@@ -15,6 +15,7 @@ import {
   windowBounds,
   type QuotaSample,
 } from "./quota-value.ts";
+import { costBreakdown } from "./cost.ts";
 import type { OfficialSlice } from "./official.ts";
 import type { UsageEvent } from "./types.ts";
 
@@ -750,4 +751,80 @@ test("non-Codex quota does not claim OpenAI credits", () => {
   assert.equal(value.l1Credits, null);
   assert.equal(value.totalLowCredits, null);
   assert.equal(value.remainingHighCredits, null);
+});
+
+test("official samples align cumulative cost to fetchedAt", () => {
+  const fetchedAt = Date.parse("2026-08-21T10:00:00Z");
+  const before = ev({
+    id: "before",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: fetchedAt - 1_000,
+    tokensIn: 1_000_000,
+  });
+  const after = ev({
+    id: "after",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: fetchedAt + 1_000,
+    tokensIn: 1_000_000,
+  });
+  const official = slice({
+    agent: "claude",
+    fetchedAt,
+    windowPct: 20,
+    weekPct: null,
+    windowResetsAt: fetchedAt + 60_000,
+    weekResetsAt: null,
+    weekStartedAt: null,
+  });
+  const rows = samplesFromOfficial(
+    [before, after],
+    { claude: official, grok: null, codex: null },
+    fetchedAt + 30_000,
+    [],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.timestampMs, fetchedAt);
+  assert.equal(rows[0]!.cumulativeObservedUsd, costBreakdown(before).totalUsd);
+});
+
+test("stale fields cannot create quota samples", () => {
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const official = slice({
+    agent: "claude",
+    fetchedAt: now - 40 * 60_000,
+    windowPct: 80,
+    weekPct: 30,
+    windowStale: true,
+    weekStale: true,
+  });
+  const rows = samplesFromOfficial(
+    [],
+    { claude: official, grok: null, codex: null },
+    now,
+    [],
+  );
+  assert.deepEqual(rows, []);
+});
+
+test("future official timestamps cannot pull future events into a sample", () => {
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const official = slice({
+    agent: "claude",
+    fetchedAt: now + 1,
+    windowPct: 20,
+    windowResetsAt: now + 60_000,
+  });
+  assert.deepEqual(
+    samplesFromOfficial(
+      [],
+      { claude: official, grok: null, codex: null },
+      now,
+      [],
+    ),
+    [],
+  );
 });

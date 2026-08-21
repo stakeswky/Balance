@@ -502,16 +502,27 @@ export function samplesFromOfficial(
   const consider = (slice: OfficialSlice | null, kind: "five_hour" | "weekly") => {
     if (!slice) return;
     const used = kind === "weekly" ? slice.weekPct : slice.windowPct;
-    if (used == null) return;
-    const bounds = windowBounds(slice, kind, now);
-    if (bounds.rolling) return;
+    const stale = kind === "weekly" ? slice.weekStale : slice.windowStale;
+    if (used == null || stale) return;
+
+    const sampledAt = slice.fetchedAt;
+    if (!Number.isFinite(sampledAt) || sampledAt <= 0) return;
+    if (sampledAt > now) return;
+    const bounds = windowBounds(slice, kind, sampledAt);
+    if (bounds.rolling || sampledAt < bounds.start || sampledAt > bounds.end) return;
+
     const windowId = officialWindowId(slice.agent, kind, null, bounds.start, bounds.resetsAt);
     const next = makeSample({
       windowId,
       agent: slice.agent,
-      timestampMs: slice.fetchedAt || now,
+      timestampMs: sampledAt,
       usedPercent: used,
-      events: eventsInWindow(events, slice.agent, bounds.start, bounds.end),
+      events: eventsInWindow(
+        events,
+        slice.agent,
+        bounds.start,
+        Math.min(bounds.end, sampledAt, now),
+      ),
     });
     if (next) samples = mergeSamples(samples, next);
   };
