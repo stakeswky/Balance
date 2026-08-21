@@ -757,6 +757,19 @@ test("calibration ignores partial first and current percent plateaus", () => {
   assert.ok(cal.remainingLowUsd != null && cal.remainingLowUsd > 250);
 });
 
+test("external use in the first censored interval is still detected", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 10, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 20, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 5 }),
+    sample({ timestampMs: 4, usedPercent: 40, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 5, usedPercent: 45, cumulativeObservedUsd: 12.5 }),
+  ];
+  const result = calibrateFromSamples(rows, 45, false);
+  assert.equal(result.externalUsageDetected, true);
+  assert.notEqual(result.confidence, "high");
+});
+
 test("calibration ignores an empty bootstrap model mix", () => {
   const rows = [
     sample({ agent: "grok", timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0, modelMix: {} }),

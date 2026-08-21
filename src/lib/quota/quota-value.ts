@@ -431,24 +431,24 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   const scan = scanValidSlopes(normalized);
   const rawSlopes = scan.slopes;
   const anomalousPairs = scan.cumulativeDropPairs;
+  // Anomaly diagnostics must see every slope, including the interval-censored
+  // first/last plateaus; only the point estimator censors them below.
+  const externalUsageDetected = rawSlopes.some((slope) => slope.external);
   const currentSegmentSlopes = scan.latestGroupKey == null
     ? []
     : rawSlopes.filter((slope) =>
         slope.groupKey === scan.latestGroupKey
         && slope.segmentId === scan.latestSegmentId,
       );
-  // The first and current percentage plateaus are interval-censored: their
-  // unseen beginning/end makes their USD-per-percent slope systematically
-  // unstable. Keep them only when there are too few interior transitions.
-  const slopes = rawSlopes.length >= 3 ? rawSlopes.slice(1, -1) : rawSlopes;
-  const externalUsageDetected = slopes.some((s) => s.external);
   // Point estimation only trusts the segment that is current when the scan
   // ends; a fresh post-reset segment without slopes yields an empty estimate
-  // instead of reusing an older segment.
+  // instead of reusing an older segment. The first and current percentage
+  // plateaus are interval-censored, so keep them out of the estimate unless
+  // there are too few interior transitions.
   const estimationSlopes = currentSegmentSlopes.length >= 3
     ? currentSegmentSlopes.slice(1, -1)
     : currentSegmentSlopes;
-  const usable = estimationSlopes.filter((s) => !s.external && s.value > 0);
+  const usable = estimationSlopes.filter((slope) => !slope.external && slope.value > 0);
   if (!usable.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
   const agent = normalized[0]?.agent;
