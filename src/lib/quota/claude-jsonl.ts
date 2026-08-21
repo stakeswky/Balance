@@ -1,5 +1,5 @@
 import type { ActorKind, ClaudeModelId, UsageAnomaly, UsageEvent } from "./types.ts";
-import { claudeCacheWrites, normalizeToken, optionalModel } from "./tokens.ts";
+import { claudeCacheWrites, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
 
 export interface SessionMeta {
   sessionId: string;
@@ -105,12 +105,23 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
     "output_tokens",
   );
   const writes = claudeCacheWrites(usage);
-  const anomalies: UsageAnomaly[] = [...input.anomalies, ...cached.anomalies, ...output.anomalies, ...writes.anomalies];
+  const images = normalizeImageTokens(
+    usage.image_input_tokens ?? usage.imageInputTokens,
+    usage.image_output_tokens ?? usage.imageOutputTokens,
+  );
+  const anomalies: UsageAnomaly[] = [
+    ...input.anomalies,
+    ...cached.anomalies,
+    ...output.anomalies,
+    ...writes.anomalies,
+    ...images.anomalies,
+  ];
   const tokensIn = input.value;
   const tokensOut = output.value;
   const cacheRead = cached.value;
   if (
-    tokensIn + tokensOut + cacheRead + writes.cacheWrite5mTokens + writes.cacheWrite1hTokens <= 0
+    tokensIn + tokensOut + cacheRead + writes.cacheWrite5mTokens + writes.cacheWrite1hTokens
+      + images.imageInputTokens + images.imageOutputTokens <= 0
     && anomalies.length === 0
   ) return null;
 
@@ -137,6 +148,8 @@ export function parseJsonlLine(line: string, meta: SessionMeta): UsageEvent | nu
     cacheWrite: writes.cacheWrite5mTokens,
     cacheWrite1h: writes.cacheWrite1hTokens,
     cacheWriteUnsplit: writes.splitUnknown || undefined,
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
     reasoningMin: 0,
     anomalies: anomalies.length ? anomalies : undefined,
   };

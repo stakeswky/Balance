@@ -1,4 +1,4 @@
-import { exclusiveCachedInput, normalizeToken, optionalModel } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
 import type { AgentId, ModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 
 function asModel(raw: string, agent: AgentId): ModelId {
@@ -67,7 +67,18 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
         cachedExceedsInput: false,
         anomalies: [...input.anomalies, ...cached.anomalies],
       };
-  const anomalies: UsageAnomaly[] = [...split.anomalies, ...output.anomalies, ...write.anomalies];
+  const images = normalizeImageTokens(
+    usage.image_input_tokens ?? usage.imageInputTokens
+      ?? o.image_input_tokens ?? o.imageInputTokens,
+    usage.image_output_tokens ?? usage.imageOutputTokens
+      ?? o.image_output_tokens ?? o.imageOutputTokens,
+  );
+  const anomalies: UsageAnomaly[] = [
+    ...split.anomalies,
+    ...output.anomalies,
+    ...write.anomalies,
+    ...images.anomalies,
+  ];
   const tokensIn = split.uncachedInputTokens;
   const tokensOut = output.value;
   const cacheRead = split.cacheReadTokens;
@@ -75,7 +86,8 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   const reasoningMin = num(usage.reasoning_minutes ?? o.reasoningMin ?? o.reasoning_minutes);
 
   if (
-    tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin <= 0
+    tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin
+      + images.imageInputTokens + images.imageOutputTokens <= 0
     && anomalies.length === 0
   ) return null;
 
@@ -91,6 +103,8 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
     tokensOut,
     cacheRead,
     cacheWrite,
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
     reasoningMin,
     anomalies: anomalies.length ? anomalies : undefined,
   };

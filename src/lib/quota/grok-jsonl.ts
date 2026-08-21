@@ -1,6 +1,6 @@
 import type { GrokModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
-import { exclusiveCachedInput, normalizeToken, optionalModel } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
 
 export interface GrokSessionMeta {
   sessionId: string;
@@ -33,6 +33,8 @@ function usageFrom(u: Record<string, unknown>): {
   tokensOut: number;
   cacheRead: number;
   cacheWrite: number;
+  imageInputTokens: number;
+  imageOutputTokens: number;
   anomalies: UsageAnomaly[];
 } {
   const split = exclusiveCachedInput(
@@ -47,12 +49,18 @@ function usageFrom(u: Record<string, unknown>): {
     u.cacheCreationTokens ?? u.cache_creation_input_tokens ?? u.cacheWrite,
     "cache_creation_input_tokens",
   );
+  const images = normalizeImageTokens(
+    u.image_input_tokens ?? u.imageInputTokens,
+    u.image_output_tokens ?? u.imageOutputTokens,
+  );
   return {
     tokensIn: split.uncachedInputTokens,
     tokensOut: output.value,
     cacheRead: split.cacheReadTokens,
     cacheWrite: write.value,
-    anomalies: [...split.anomalies, ...output.anomalies, ...write.anomalies],
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
+    anomalies: [...split.anomalies, ...output.anomalies, ...write.anomalies, ...images.anomalies],
   };
 }
 
@@ -85,7 +93,8 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
   const usage = usageRaw as Record<string, unknown>;
   const counts = usageFrom(usage);
   if (
-    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0
+    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite
+      + counts.imageInputTokens + counts.imageOutputTokens <= 0
     && counts.anomalies.length === 0
   ) return null;
 
@@ -119,6 +128,8 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
     tokensOut: counts.tokensOut,
     cacheRead: counts.cacheRead,
     cacheWrite: counts.cacheWrite,
+    imageInputTokens: counts.imageInputTokens,
+    imageOutputTokens: counts.imageOutputTokens,
     reasoningMin: 0,
     reportedCostTicks: ticks,
     reportedCostByModel: Object.keys(byModel).length ? byModel : undefined,

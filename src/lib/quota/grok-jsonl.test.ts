@@ -220,6 +220,33 @@ test("Grok reports two concurrently writing sessions", () => {
   assert.equal(result.live?.lastTs, now - 1_000);
 });
 
+test("Grok explicit image token fields propagate verbatim", () => {
+  const ev = parseGrokUpdateLine(
+    JSON.stringify({
+      timestamp: 1787153666,
+      params: {
+        sessionId: "sess-g",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "p-img",
+          usage: {
+            inputTokens: 100,
+            outputTokens: 10,
+            cachedReadTokens: 0,
+            cacheCreationTokens: 0,
+            image_input_tokens: 512,
+            image_output_tokens: 16,
+          },
+        },
+      },
+    }),
+    meta,
+  );
+  assert.ok(ev);
+  assert.equal(ev.imageInputTokens, 512);
+  assert.equal(ev.imageOutputTokens, 16);
+});
+
 test("Grok missing raw model keeps the event but stays unpriced", () => {
   const line = JSON.stringify({
     timestamp: 1787153666,

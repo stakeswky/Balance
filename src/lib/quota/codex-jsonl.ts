@@ -1,7 +1,7 @@
 import type { CodexModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
 import { parseCodexRateLimits, type OfficialSlice } from "./official.ts";
-import { exclusiveCachedInput, normalizeToken, optionalModel } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel } from "./tokens.ts";
 
 export interface CodexSessionMeta {
   sessionId: string;
@@ -52,19 +52,33 @@ function usageFromLast(last: Record<string, unknown>): {
   cacheRead: number;
   cacheWrite: number;
   reasoningMin: number;
+  imageInputTokens: number;
+  imageOutputTokens: number;
   anomalies: UsageAnomaly[];
 } {
   const split = exclusiveCachedInput(last.input_tokens, last.cached_input_tokens);
   const output = normalizeToken(last.output_tokens, "output_tokens");
   const cacheWrite = normalizeToken(last.cache_write_input_tokens, "cache_write_input_tokens");
   const reasoning = normalizeToken(last.reasoning_output_tokens, "reasoning_output_tokens");
+  const images = normalizeImageTokens(
+    last.image_input_tokens ?? last.imageInputTokens,
+    last.image_output_tokens ?? last.imageOutputTokens,
+  );
   return {
     tokensIn: split.uncachedInputTokens,
     tokensOut: output.value,
     cacheRead: split.cacheReadTokens,
     cacheWrite: cacheWrite.value,
     reasoningMin: reasoning.value > 0 ? reasoning.value / 800 : 0,
-    anomalies: [...split.anomalies, ...output.anomalies, ...cacheWrite.anomalies, ...reasoning.anomalies],
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
+    anomalies: [
+      ...split.anomalies,
+      ...output.anomalies,
+      ...cacheWrite.anomalies,
+      ...reasoning.anomalies,
+      ...images.anomalies,
+    ],
   };
 }
 
@@ -101,7 +115,8 @@ export function parseCodexJsonlLine(
   if (!last) return { event: null, official };
   const counts = usageFromLast(last);
   if (
-    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0
+    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite
+      + counts.imageInputTokens + counts.imageOutputTokens <= 0
     && counts.anomalies.length === 0
   ) {
     return { event: null, official };
@@ -120,6 +135,8 @@ export function parseCodexJsonlLine(
     tokensOut: counts.tokensOut,
     cacheRead: counts.cacheRead,
     cacheWrite: counts.cacheWrite,
+    imageInputTokens: counts.imageInputTokens,
+    imageOutputTokens: counts.imageOutputTokens,
     reasoningMin: counts.reasoningMin,
     anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };

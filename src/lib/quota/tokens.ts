@@ -103,6 +103,23 @@ export function optionalModel(raw: unknown): string | undefined {
   return value || undefined;
 }
 
+export function normalizeImageTokens(
+  inputRaw: unknown,
+  outputRaw: unknown,
+): {
+  imageInputTokens: number;
+  imageOutputTokens: number;
+  anomalies: UsageAnomaly[];
+} {
+  const input = normalizeToken(inputRaw, "image_input_tokens");
+  const output = normalizeToken(outputRaw, "image_output_tokens");
+  return {
+    imageInputTokens: input.value,
+    imageOutputTokens: output.value,
+    anomalies: [...input.anomalies, ...output.anomalies],
+  };
+}
+
 export function rawExclusiveTokens(e: {
   tokensIn: number;
   tokensOut: number;

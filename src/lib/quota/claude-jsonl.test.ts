@@ -280,6 +280,40 @@ test("Claude parser propagates token anomalies without inventing cached-exceeds"
   assert.equal(exclusiveFields.anomalies, undefined);
 });
 
+test("Claude explicit image token fields propagate verbatim", () => {
+  const meta = { sessionId: "sess-1", cwd: "", title: "", lastUser: "" };
+  const withImages = parseJsonlLine(
+    assistant({
+      requestId: "req_img",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-5",
+        usage: { input_tokens: 10, output_tokens: 20, image_input_tokens: 700, image_output_tokens: 30 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(withImages);
+  assert.equal(withImages.imageInputTokens, 700);
+  assert.equal(withImages.imageOutputTokens, 30);
+
+  const attachmentOnly = parseJsonlLine(
+    assistant({
+      requestId: "req_attach",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-5",
+        content: [{ type: "image", source: { type: "base64", media_type: "image/png" } }],
+        usage: { input_tokens: 10, output_tokens: 20 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(attachmentOnly);
+  assert.equal(attachmentOnly.imageInputTokens, 0);
+  assert.equal(attachmentOnly.imageOutputTokens, 0);
+});
+
 test("Claude missing raw model keeps the event but stays unpriced", () => {
   const line = JSON.stringify({
     type: "assistant",

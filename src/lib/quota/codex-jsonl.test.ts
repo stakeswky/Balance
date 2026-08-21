@@ -205,6 +205,31 @@ test("Codex reports parallel sessions and deduplicates rollouts for one session"
   assert.equal(result.live?.turns, 2);
 });
 
+test("Codex explicit image token fields propagate verbatim", () => {
+  const { event } = parseCodexJsonlLine(
+    tokenCount({
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 100,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            image_input_tokens: 640,
+            image_output_tokens: 0,
+          },
+        },
+      },
+    }),
+    { ...meta },
+  );
+  assert.ok(event);
+  assert.equal(event.imageInputTokens, 640);
+  assert.equal(event.imageOutputTokens, 0);
+});
+
 test("Codex missing raw model keeps the event but stays unpriced", () => {
   const bare: CodexSessionMeta = { sessionId: "sess-nomodel", cwd: "", title: "", model: "" };
   const { event } = parseCodexJsonlLine(tokenCount(), bare);

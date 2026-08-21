@@ -25,6 +25,23 @@ test("propagates token anomalies for imported OpenAI-style rows", () => {
   assert.equal(events[0]!.tokensOut, 0);
 });
 
+test("imported rows keep explicit image token fields", () => {
+  const events = parseUsagePayload(
+    JSON.stringify([
+      {
+        agent: "claude",
+        model: "claude-sonnet-5",
+        timestamp: 1_725_000_100_000,
+        usage: { input_tokens: 10, output_tokens: 5, image_input_tokens: 640, image_output_tokens: 8 },
+      },
+    ]),
+    "claude",
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.imageInputTokens, 640);
+  assert.equal(events[0]!.imageOutputTokens, 8);
+});
+
 test("imported rows with missing raw model stay unpriced", () => {
   const events = parseUsagePayload(
     JSON.stringify([
