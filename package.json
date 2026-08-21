@@ -28,7 +28,7 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview --host 0.0.0.0 --port 8080",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types scripts/**/*.test.mjs src/lib/quota/*.test.ts",
+    "test": "node --test --experimental-strip-types scripts/**/*.test.mjs src/lib/quota/*.test.ts src/lib/desktop-update/*.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
