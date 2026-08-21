@@ -53,7 +53,7 @@ test("claude plan-usage-history uses latest fh/sd percents", () => {
   assert.ok(s.burnPctPerHour > 3 && s.burnPctPerHour < 5);
 });
 
-test("claude history replay emits one slice per integer percent after reset", () => {
+test("claude history replay keeps fractional percents after reset", () => {
   const t0 = Date.parse("2026-08-19T15:52:00Z");
   const points = parseClaudeHistoryPoints({
     samples: [
@@ -66,12 +66,12 @@ test("claude history replay emits one slice per integer percent after reset", ()
     ],
   });
   const slices = slicesFromClaudeHistory(points);
-  assert.deepEqual(slices.map((s) => s.windowPct), [0, 1, 2, 3]);
+  assert.deepEqual(slices.map((s) => s.windowPct), [0, 1, 1.2, 2, 3]);
   assert.equal(slices[0]?.windowResetsAt, t0 + 5 * 60 * 60 * 1000);
   assert.equal(slices[0]?.windowKind, "five_hour");
 });
 
-test("claude history continues into later 5h windows without a fresh reset sample", () => {
+test("claude history keeps weekly cadence without inventing a five-hour reset", () => {
   const t0 = Date.parse("2026-08-19T15:52:00Z");
   const withReset = parseClaudeHistoryPoints({
     samples: [
@@ -83,10 +83,23 @@ test("claude history continues into later 5h windows without a fresh reset sampl
     ],
   });
   const slices = slicesFromClaudeHistory(withReset);
+  assert.equal(slices[0]?.windowResetsAt, t0 + 5 * 60 * 60 * 1000);
   const later = slices.filter((s) => (s.fetchedAt ?? 0) >= t0 + 6 * 60 * 60_000);
   assert.ok(later.length >= 2);
-  assert.notEqual(later[0]?.windowResetsAt, slices[0]?.windowResetsAt);
+  assert.ok(later.every((s) => s.windowResetsAt === null));
   assert.deepEqual(later.map((s) => s.windowPct), [2, 3]);
+});
+
+test("Claude history does not tile an expired five-hour anchor", () => {
+  const start = Date.parse("2026-08-21T00:00:00Z");
+  const rows = slicesFromClaudeHistory([
+    { t: start, fh: 20.75, sd: 30.25 },
+    { t: start + 60_000, fh: 0.5, sd: 30.5 },
+    { t: start + 6 * 60 * 60_000, fh: 12.25, sd: 31.25 },
+  ]);
+  assert.equal(rows.at(-1)!.windowResetsAt, null);
+  assert.equal(rows.at(-1)!.windowPct, 12.25);
+  assert.equal(rows.at(-1)!.weekPct, 31.25);
 });
 
 test("claude 5h reset is inferred when fh drops to 0", () => {

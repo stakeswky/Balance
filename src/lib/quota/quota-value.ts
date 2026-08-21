@@ -49,14 +49,6 @@ const WEEK = WEEK_MS;
 const WINDOW_ID_GRANULARITY_MS = 60_000;
 const MIN_REAL_WINDOW_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 
-function advanceWindow(start: number, span: number, now: number): { start: number; resetsAt: number } {
-  if (!(span > 0)) return { start, resetsAt: start + span };
-  if (now < start) return { start, resetsAt: start + span };
-  const n = Math.floor((now - start) / span);
-  const nextStart = start + n * span;
-  return { start: nextStart, resetsAt: nextStart + span };
-}
-
 export function officialWindowId(
   agent: AgentId,
   kind: "five_hour" | "weekly" | "product",
@@ -122,15 +114,13 @@ export function windowBounds(
     }
     return { start: now - WEEK, end: now, rolling: true, resetsAt: official?.weekResetsAt ?? null };
   }
-  if (official?.windowResetsAt) {
+  if (official?.windowResetsAt && official.windowResetsAt > now) {
     const span = official.windowDurationMs ?? FIVE_H;
-    const originStart = official.windowResetsAt - span;
-    const rolled = advanceWindow(originStart, span, now);
     return {
-      start: rolled.start,
-      end: Math.min(now, rolled.resetsAt),
+      start: official.windowResetsAt - span,
+      end: Math.min(now, official.windowResetsAt),
       rolling: false,
-      resetsAt: rolled.resetsAt,
+      resetsAt: official.windowResetsAt,
     };
   }
   return { start: now - FIVE_H, end: now, rolling: true, resetsAt: null };

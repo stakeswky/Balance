@@ -177,26 +177,24 @@ export function slicesFromClaudeHistory(points: ClaudeHistoryPoint[]): OfficialS
   const out: OfficialSlice[] = [];
   let fiveStartedAt: number | null = null;
   let weekStartedAt: number | null = null;
+  let anchored = false;
   for (let i = 0; i < points.length; i++) {
     const p = points[i]!;
     const prev = i > 0 ? points[i - 1]! : null;
     if (prev && p.fh <= 1 && p.fh < prev.fh) fiveStartedAt = p.t;
     if (prev && p.sd <= 1 && p.sd < prev.sd) weekStartedAt = p.t;
-    if (fiveStartedAt != null) {
-      while (p.t > fiveStartedAt + FIVE_HOUR_MS + 60_000) {
-        fiveStartedAt += FIVE_HOUR_MS;
-      }
+    if (fiveStartedAt != null && p.t > fiveStartedAt + FIVE_HOUR_MS + 60_000) {
+      fiveStartedAt = null;
     }
     if (weekStartedAt != null) {
-      while (p.t > weekStartedAt + WEEK_MS + 60_000) {
-        weekStartedAt += WEEK_MS;
-      }
+      while (p.t > weekStartedAt + WEEK_MS + 60_000) weekStartedAt += WEEK_MS;
     }
-    if (fiveStartedAt == null && weekStartedAt == null) continue;
+    if (fiveStartedAt != null || weekStartedAt != null) anchored = true;
+    if (!anchored) continue;
     const slice: OfficialSlice = {
       agent: "claude",
-      windowPct: Math.floor(p.fh),
-      weekPct: Math.floor(p.sd),
+      windowPct: p.fh,
+      weekPct: p.sd,
       windowResetsAt: fiveStartedAt == null ? null : fiveStartedAt + FIVE_HOUR_MS,
       weekResetsAt: weekStartedAt == null ? null : weekStartedAt + WEEK_MS,
       weekStartedAt,

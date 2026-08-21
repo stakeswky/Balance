@@ -18,6 +18,7 @@ import {
 import { costBreakdown } from "./cost.ts";
 import type { OfficialSlice } from "./official.ts";
 import type { UsageEvent } from "./types.ts";
+import { WINDOW_MS } from "./types.ts";
 
 function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
   return {
@@ -289,7 +290,7 @@ test("only resetsAt infers 5h start", () => {
   assert.equal(bounds.rolling, false);
 });
 
-test("expired 5h resetsAt rolls forward to the current window", () => {
+test("expired 5h resetsAt falls back to rolling instead of tiling forward", () => {
   const span = 5 * 60 * 60 * 1000;
   const firstReset = 2_000_000;
   const now = firstReset + span * 2 + 10_000;
@@ -298,10 +299,23 @@ test("expired 5h resetsAt rolls forward to the current window", () => {
     "five_hour",
     now,
   );
-  assert.equal(bounds.rolling, false);
-  assert.equal(bounds.start, firstReset + span * 2);
-  assert.equal(bounds.resetsAt, firstReset + span * 3);
-  assert.ok(bounds.start <= now && now < bounds.resetsAt!);
+  assert.equal(bounds.rolling, true);
+  assert.equal(bounds.resetsAt, null);
+  assert.equal(bounds.start, now - span);
+});
+
+test("expired five-hour reset becomes rolling instead of a tiled window", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const official = slice({
+    fetchedAt: now - 26 * 60 * 60_000,
+    windowPct: 63,
+    windowResetsAt: now - 24 * 60 * 60_000,
+    windowDurationMs: 5 * 60 * 60_000,
+  });
+  const bounds = windowBounds(official, "five_hour", now);
+  assert.equal(bounds.rolling, true);
+  assert.equal(bounds.resetsAt, null);
+  assert.equal(bounds.start, now - WINDOW_MS);
 });
 
 test("windowBounds uses the official duration", () => {
