@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   calibrateFromSamples,
   eventsInWindow,
+  historicalWindowPrior,
   makeSample,
   mergeSamples,
   normalizeWindowSamples,
@@ -52,6 +53,7 @@ function sample(partial: Partial<QuotaSample> & Pick<QuotaSample, "usedPercent" 
     pricedTokenCoverage: partial.pricedTokenCoverage ?? 1,
     modelMix: partial.modelMix ?? { "gpt-5.4": 1 },
     pricingVersion: partial.pricingVersion ?? "2026-08-21-balance-1",
+    planLabel: partial.planLabel ?? null,
   };
 }
 
@@ -1052,4 +1054,162 @@ test("low-confidence quantization band is at least one over cumulative percent",
   assert.equal(result.totalPointUsd, 50);
   assert.equal(result.totalLowUsd, 25);
   assert.equal(result.totalHighUsd, 75);
+});
+
+test("a stable previous window supplies only a low-confidence prior", () => {
+  const previousId = "codex:five_hour:_:1000000000000:1000018000000";
+  const previous = [0, 5, 10, 15].map((usedPercent, index) => sample({
+    windowId: previousId,
+    timestampMs: index + 1,
+    usedPercent,
+    cumulativeObservedUsd: usedPercent * 0.5,
+    modelMix: { "gpt-5.6-sol": 1 },
+    planLabel: "ChatGPT Plus",
+  }));
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const official = slice({
+    agent: "codex",
+    planLabel: "ChatGPT Plus",
+    fetchedAt: now,
+    windowPct: 1,
+    windowResetsAt: now + WINDOW_MS,
+    windowDurationMs: WINDOW_MS,
+  });
+  const current = ev({
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    modelRaw: "gpt-5.6-sol",
+    tokensIn: 1_000_000,
+    ts: now,
+  });
+  const result = quotaValueFor([current], "codex", official, "five_hour", now, previous);
+  assert.equal(result.calibrationSource, "historical-prior");
+  assert.equal(result.confidence, "low");
+  assert.equal(result.totalPointUsd, 50);
+});
+
+test("historical prior selects the three newest windows regardless of input order", () => {
+  // Window ID anchors must differ by more than WINDOW_ID_TOLERANCE_MS (2000)
+  // so sameOfficialWindowId treats them as distinct windows.
+  const rows = (windowId: string, at: number, usdPerPct: number) =>
+    [0, 5, 10, 15].map((usedPercent, index) => sample({
+      windowId,
+      timestampMs: at + index,
+      usedPercent,
+      cumulativeObservedUsd: usedPercent * usdPerPct,
+      modelMix: { "gpt-5.6-sol": 1 },
+      planLabel: "ChatGPT Plus",
+    }));
+  const samples = [
+    rows("codex:five_hour:_:50000:60000", 50000, 0.5),
+    rows("codex:five_hour:_:40000:49900", 40000, 0.5),
+    rows("codex:five_hour:_:30000:39900", 30000, 0.5),
+    rows("codex:five_hour:_:10000:19900", 10000, 0.1),
+    rows("codex:five_hour:_:20000:29900", 20000, 0.1),
+  ].flat();
+  const result = historicalWindowPrior(
+    samples,
+    "codex:five_hour:_:70000:80000",
+    70000,
+    "codex",
+    "five_hour",
+    "ChatGPT Plus",
+    1,
+    { "gpt-5.6-sol": 1 },
+  );
+  assert.equal(result!.totalPointUsd, 50);
+});
+
+test("historical prior rejects open windows and incompatible model mix", () => {
+  // Window ID anchors must differ by more than WINDOW_ID_TOLERANCE_MS (2000)
+  // so sameOfficialWindowId treats them as distinct windows.
+  const rows = (windowId: string, mix: Record<string, number>) =>
+    [0, 5, 10, 15].map((usedPercent, index) => sample({
+      windowId,
+      timestampMs: 10000 + index,
+      usedPercent,
+      cumulativeObservedUsd: usedPercent * 0.5,
+      modelMix: mix,
+      planLabel: "Claude Max",
+    }));
+  const compatible = { "claude-sonnet-5": 1 };
+  // Open window: resetsAt (90000) > currentWindowStartMs (70000) → rejected
+  assert.equal(historicalWindowPrior(
+    rows("claude:five_hour:_:10000:90000", compatible),
+    "claude:five_hour:_:70000:100000",
+    70000,
+    "claude",
+    "five_hour",
+    "Claude Max",
+    1,
+    compatible,
+  ), null);
+  // Incompatible model mix → rejected
+  assert.equal(historicalWindowPrior(
+    rows("claude:five_hour:_:10000:60000", { "claude-haiku-4-5": 1 }),
+    "claude:five_hour:_:70000:100000",
+    70000,
+    "claude",
+    "five_hour",
+    "Claude Max",
+    1,
+    compatible,
+  ), null);
+});
+
+test("external usage in the current window blocks historical priors", () => {
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const previous = [0, 5, 10, 15].map((usedPercent, index) => sample({
+    windowId: "codex:five_hour:_:1000000000000:1000018000000",
+    timestampMs: index + 1,
+    usedPercent,
+    cumulativeObservedUsd: usedPercent * 0.5,
+    modelMix: { "gpt-5.6-sol": 1 },
+    planLabel: "ChatGPT Plus",
+  }));
+  const currentId = officialWindowId("codex", "five_hour", null, now, now + WINDOW_MS);
+  const currentWindow = [
+    sample({
+      windowId: currentId,
+      timestampMs: now + 1_000,
+      usedPercent: 0,
+      cumulativeObservedUsd: 0,
+      modelMix: { "gpt-5.6-sol": 1 },
+      planLabel: "ChatGPT Plus",
+    }),
+    sample({
+      windowId: currentId,
+      timestampMs: now + 2_000,
+      usedPercent: 4,
+      cumulativeObservedUsd: 0,
+      modelMix: {},
+      planLabel: "ChatGPT Plus",
+    }),
+  ];
+  const official = slice({
+    agent: "codex",
+    planLabel: "ChatGPT Plus",
+    fetchedAt: now,
+    windowPct: 4,
+    windowResetsAt: now + WINDOW_MS,
+    windowDurationMs: WINDOW_MS,
+  });
+  const local = ev({
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    modelRaw: "gpt-5.6-sol",
+    tokensIn: 1_000_000,
+    ts: now,
+  });
+  const result = quotaValueFor(
+    [local],
+    "codex",
+    official,
+    "five_hour",
+    now,
+    [...previous, ...currentWindow],
+  );
+  assert.equal(result.externalUsageDetected, true);
+  assert.equal(result.calibrationSource, "none");
+  assert.equal(result.totalPointUsd, null);
 });

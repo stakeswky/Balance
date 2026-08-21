@@ -5,6 +5,7 @@ import type { AgentId, UsageEvent } from "./types.ts";
 import { WEEK_MS, WINDOW_MS } from "./types.ts";
 
 export type ValueConfidence = "none" | "low" | "medium" | "high";
+export type CalibrationSource = "none" | "current-window" | "historical-prior";
 
 export interface QuotaSample {
   windowId: string;
@@ -16,6 +17,7 @@ export interface QuotaSample {
   pricedTokenCoverage: number;
   modelMix: Record<string, number>;
   pricingVersion: string;
+  planLabel?: string | null;
 }
 
 export interface QuotaValue {
@@ -40,6 +42,7 @@ export interface QuotaValue {
   remainingPointCredits: number | null;
   remainingHighCredits: number | null;
   confidence: ValueConfidence;
+  calibrationSource: CalibrationSource;
   pricingVersion: string;
   externalUsageDetected: boolean;
   anomalousPairs: number;
@@ -579,6 +582,7 @@ export function makeSample(opts: {
   timestampMs: number;
   usedPercent: number;
   events: UsageEvent[];
+  planLabel?: string | null;
 }): QuotaSample | null {
   const obs = observeWindow(opts.events);
   return {
@@ -591,6 +595,7 @@ export function makeSample(opts: {
     pricedTokenCoverage: obs.pricedTokenCoverage,
     modelMix: obs.modelMix,
     pricingVersion: PRICING_VERSION,
+    planLabel: opts.planLabel ?? null,
   };
 }
 
@@ -693,6 +698,7 @@ export function samplesFromOfficial(
         bounds.start,
         Math.min(bounds.end, sampledAt, now),
       ),
+      planLabel: slice.planLabel,
     });
     if (next) samples = mergeSamples(samples, next);
   };
@@ -703,6 +709,71 @@ export function samplesFromOfficial(
   consider(official.codex, "five_hour");
   consider(official.codex, "weekly");
   return samples;
+}
+
+export function historicalWindowPrior(
+  samples: QuotaSample[],
+  currentWindowId: string,
+  currentWindowStartMs: number,
+  agent: AgentId,
+  kind: "five_hour" | "weekly",
+  planLabel: string | null,
+  usedPct: number,
+  currentModelMix: Record<string, number>,
+): ReturnType<typeof calibrateFromSamples> | null {
+  const groups = new Map<string, QuotaSample[]>();
+  for (const sample of samples) {
+    if (sample.agent !== agent || sample.pricingVersion !== PRICING_VERSION) continue;
+    if ((sample.planLabel ?? null) !== planLabel) continue;
+    if ((sample.windowId.split(":")[1] ?? "") !== kind) continue;
+    if (sameOfficialWindowId(sample.windowId, currentWindowId)) continue;
+    const rows = groups.get(sample.windowId) ?? [];
+    rows.push(sample);
+    groups.set(sample.windowId, rows);
+  }
+
+  const windowEstimates = [...groups.values()]
+    .map((rows) => {
+      const ordered = normalizeWindowSamples(rows);
+      const last = ordered.at(-1);
+      if (!last) return null;
+      const identity = parseOfficialWindowId(last.windowId);
+      if (
+        !identity
+        || identity.resetsAt == null
+        || identity.resetsAt > currentWindowStartMs
+      ) return null;
+      if (!hasModelMix(currentModelMix) || !hasModelMix(last.modelMix)) return null;
+      if (modelMixDrift(last.modelMix, currentModelMix) > 0.35) return null;
+      const result = calibrateFromSamples(ordered, last.usedPercent, false);
+      const span = last.usedPercent - (ordered[0]?.usedPercent ?? last.usedPercent);
+      if (result.totalPointUsd == null || result.confidence === "none" || span < 5) return null;
+      return { value: result.totalPointUsd / 100, weight: span, at: last.timestampMs };
+    })
+    .filter((row): row is { value: number; weight: number; at: number } => row != null)
+    .sort((left, right) => right.at - left.at)
+    .slice(0, 3);
+
+  if (!windowEstimates.length) return null;
+  const point = weightedMedian(windowEstimates);
+  const lowRaw = weightedPercentile(windowEstimates, 0.25);
+  const highRaw = weightedPercentile(windowEstimates, 0.75);
+  const spread = point > 0 ? (highRaw - lowRaw) / point : Number.POSITIVE_INFINITY;
+  if (windowEstimates.length > 1 && spread > 0.35) return null;
+  const low = Math.min(lowRaw, point * 0.75);
+  const high = Math.max(highRaw, point * 1.25);
+  const remaining = 100 - Math.max(0, Math.min(100, usedPct));
+  return {
+    totalLowUsd: low * 100,
+    totalPointUsd: point * 100,
+    totalHighUsd: high * 100,
+    remainingLowUsd: low * remaining,
+    remainingPointUsd: point * remaining,
+    remainingHighUsd: high * remaining,
+    confidence: "low",
+    externalUsageDetected: false,
+    anomalousPairs: 0,
+  };
 }
 
 export function quotaValueFor(
@@ -732,13 +803,37 @@ export function quotaValueFor(
   const compatibleSamples = (samples ?? []).filter((sample) =>
     sameOfficialWindowId(sample.windowId, windowId),
   );
-  const cal = official
-    ? calibrateFromSamples(
-        compatibleSamples,
-        usedPct,
-        bounds.rolling,
-      )
+  const currentCalibration = official
+    ? calibrateFromSamples(compatibleSamples, usedPct, bounds.rolling)
     : emptyCal;
+  // §12: any external-usage signal disqualifies borrowing a prior — either
+  // sample-derived (external slopes in the current window) or L1-derived
+  // (official percent moved while locally priced spend is zero).
+  const externallyConsumed =
+    currentCalibration.externalUsageDetected || (usedPct > 0 && obs.observedUsd === 0);
+  const prior = official
+    && !bounds.rolling
+    && currentCalibration.confidence === "none"
+    && !externallyConsumed
+    ? historicalWindowPrior(
+        samples ?? [],
+        windowId,
+        bounds.start,
+        agent,
+        kind,
+        official.planLabel,
+        usedPct,
+        obs.modelMix,
+      )
+    : null;
+  const cal = prior
+    ? { ...prior, anomalousPairs: currentCalibration.anomalousPairs }
+    : currentCalibration;
+  const calibrationSource: CalibrationSource = prior
+    ? "historical-prior"
+    : cal.confidence === "none"
+      ? "none"
+      : "current-window";
   const toCredits = (usd: number | null): number | null =>
     agent === "codex" && usd != null ? usd * OPENAI_CREDITS_PER_USD : null;
   return {
@@ -751,6 +846,7 @@ export function quotaValueFor(
     rolling: bounds.rolling,
     windowId,
     ...cal,
+    calibrationSource,
     totalLowCredits: toCredits(cal.totalLowUsd),
     totalPointCredits: toCredits(cal.totalPointUsd),
     totalHighCredits: toCredits(cal.totalHighUsd),

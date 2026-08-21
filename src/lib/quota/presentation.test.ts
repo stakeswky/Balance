@@ -86,6 +86,7 @@ function quotaValue(confidence: QuotaValue["confidence"] = "low"): QuotaValue {
     remainingPointCredits: null,
     remainingHighCredits: null,
     confidence,
+    calibrationSource: "current-window",
     pricingVersion: "test",
     externalUsageDetected: false,
     anomalousPairs: 0,
