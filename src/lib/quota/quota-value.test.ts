@@ -842,3 +842,50 @@ test("future official timestamps cannot pull future events into a sample", () =>
     [],
   );
 });
+
+test("a large same-window percentage drop starts a new calibration segment", () => {
+  const rows = normalizeWindowSamples([
+    sample({ timestampMs: 1, usedPercent: 55, cumulativeObservedUsd: 80 }),
+    sample({ timestampMs: 2, usedPercent: 60, cumulativeObservedUsd: 88 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 96 }),
+    sample({ timestampMs: 4, usedPercent: 45, cumulativeObservedUsd: 118 }),
+    sample({ timestampMs: 5, usedPercent: 62, cumulativeObservedUsd: 144 }),
+  ]);
+  assert.deepEqual(rows.map((row) => row.usedPercent), [55, 60, 30, 45, 62]);
+  assert.deepEqual(
+    validSlopes(rows).map((row) => [row.segmentId, Number(row.value.toFixed(2))]),
+    [[0, 1.6], [1, 1.47], [1, 1.53]],
+  );
+});
+
+test("drops up to two points are treated as concurrent snapshot jitter", () => {
+  const rows = normalizeWindowSamples([
+    sample({ timestampMs: 1, usedPercent: 57, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 2, usedPercent: 60, cumulativeObservedUsd: 18 }),
+    sample({ timestampMs: 3, usedPercent: 58, cumulativeObservedUsd: 19 }),
+    sample({ timestampMs: 4, usedPercent: 61, cumulativeObservedUsd: 28 }),
+  ]);
+  assert.deepEqual(rows.map((row) => row.usedPercent), [57, 60, 61]);
+});
+
+test("a reset followed by less than one point cannot reuse an older segment", () => {
+  const result = calibrateFromSamples([
+    sample({ timestampMs: 1, usedPercent: 55, cumulativeObservedUsd: 80 }),
+    sample({ timestampMs: 2, usedPercent: 60, cumulativeObservedUsd: 88 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 96 }),
+    sample({ timestampMs: 4, usedPercent: 30.2, cumulativeObservedUsd: 96.3 }),
+    sample({ timestampMs: 5, usedPercent: 30.8, cumulativeObservedUsd: 97.2 }),
+  ], 30.8, false);
+  assert.equal(result.confidence, "none");
+  assert.equal(result.totalPointUsd, null);
+});
+
+test("cumulative usd regressions are dropped but counted as anomalies", () => {
+  const result = calibrateFromSamples([
+    sample({ timestampMs: 1, usedPercent: 10, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 2, usedPercent: 20, cumulativeObservedUsd: 8 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 13 }),
+  ], 30, false);
+  assert.equal(result.anomalousPairs, 1);
+  assert.equal(result.confidence, "low");
+});

@@ -42,12 +42,14 @@ export interface QuotaValue {
   confidence: ValueConfidence;
   pricingVersion: string;
   externalUsageDetected: boolean;
+  anomalousPairs: number;
 }
 
 const FIVE_H = WINDOW_MS;
 const WEEK = WEEK_MS;
 const WINDOW_ID_GRANULARITY_MS = 60_000;
 const MIN_REAL_WINDOW_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
+const COMPENSATION_RESET_MIN_DROP_PCT = 2;
 
 export function officialWindowId(
   agent: AgentId,
@@ -246,34 +248,88 @@ interface QuotaSlope {
   weight: number;
   external: boolean;
   modelMix: Record<string, number>;
+  segmentId: number;
+  groupKey: string;
+}
+
+interface QuotaSlopeScan {
+  slopes: QuotaSlope[];
+  latestGroupKey: string | null;
+  latestSegmentId: number;
+  /** doc §14: cumulative-usd regressions are discarded but must be recorded. */
+  cumulativeDropPairs: number;
+}
+
+function scanValidSlopes(samples: QuotaSample[]): QuotaSlopeScan {
+  const slopes: QuotaSlope[] = [];
+  const groups = new Map<string, QuotaSample[]>();
+  for (const row of normalizeWindowSamples(samples)) {
+    const groupKey = `${row.windowId}\u0000${row.pricingVersion}`;
+    const group = groups.get(groupKey) ?? [];
+    group.push(row);
+    groups.set(groupKey, group);
+  }
+
+  let latestGroupKey: string | null = null;
+  let latestSegmentId = 0;
+  let latestTimestampMs = -Infinity;
+  let cumulativeDropPairs = 0;
+  for (const [groupKey, ordered] of groups) {
+    let segmentId = 0;
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1]!;
+      const current = ordered[index]!;
+      const dPct = current.usedPercent - previous.usedPercent;
+      const dUsd = current.cumulativeObservedUsd - previous.cumulativeObservedUsd;
+      if (dUsd < 0) {
+        cumulativeDropPairs += 1;
+        segmentId += 1;
+        continue;
+      }
+      if (dPct < 0) {
+        segmentId += 1;
+        continue;
+      }
+      if (previous.pricedTokenCoverage < 0.8 || current.pricedTokenCoverage < 0.8) {
+        segmentId += 1;
+        continue;
+      }
+      if (dPct > 0 && dUsd === 0) {
+        slopes.push({
+          value: 0,
+          weight: dPct,
+          external: true,
+          modelMix: {},
+          segmentId,
+          groupKey,
+        });
+        segmentId += 1;
+        continue;
+      }
+      if (dPct < 1) continue;
+      if (dUsd > 0) {
+        slopes.push({
+          value: dUsd / dPct,
+          weight: dPct,
+          external: false,
+          modelMix: intervalModelMix(previous, current),
+          segmentId,
+          groupKey,
+        });
+      }
+    }
+    const groupTimestampMs = ordered.at(-1)?.timestampMs ?? -Infinity;
+    if (groupTimestampMs > latestTimestampMs) {
+      latestTimestampMs = groupTimestampMs;
+      latestGroupKey = groupKey;
+      latestSegmentId = segmentId;
+    }
+  }
+  return { slopes, latestGroupKey, latestSegmentId, cumulativeDropPairs };
 }
 
 export function validSlopes(samples: QuotaSample[]): QuotaSlope[] {
-  const out: QuotaSlope[] = [];
-  const groups = new Map<string, QuotaSample[]>();
-  for (const row of normalizeWindowSamples(samples)) {
-    const key = `${row.windowId}\u0000${row.pricingVersion}`;
-    const group = groups.get(key) ?? [];
-    group.push(row);
-    groups.set(key, group);
-  }
-  for (const ordered of groups.values()) {
-    for (let i = 1; i < ordered.length; i++) {
-      const a = ordered[i - 1]!;
-      const b = ordered[i]!;
-      const dPct = b.usedPercent - a.usedPercent;
-      const dUsd = b.cumulativeObservedUsd - a.cumulativeObservedUsd;
-      if (dPct < 1) continue;
-      if (dUsd < 0) continue;
-      if (b.pricedTokenCoverage < 0.8 || a.pricedTokenCoverage < 0.8) continue;
-      if (dUsd === 0) {
-        out.push({ value: 0, weight: dPct, external: true, modelMix: {} });
-        continue;
-      }
-      out.push({ value: dUsd / dPct, weight: dPct, external: false, modelMix: intervalModelMix(a, b) });
-    }
-  }
-  return out;
+  return scanValidSlopes(samples).slopes;
 }
 
 export function normalizeWindowSamples(samples: QuotaSample[]): QuotaSample[] {
@@ -291,7 +347,12 @@ export function normalizeWindowSamples(samples: QuotaSample[]): QuotaSample[] {
     const out: QuotaSample[] = [];
     let maxPct = -Infinity;
     for (const row of ordered) {
-      if (row.usedPercent < maxPct) continue;
+      if (row.usedPercent < maxPct) {
+        if (maxPct - row.usedPercent <= COMPENSATION_RESET_MIN_DROP_PCT) continue;
+        out.push(row);
+        maxPct = row.usedPercent;
+        continue;
+      }
       if (row.usedPercent === maxPct) {
         out[out.length - 1] = row;
         continue;
@@ -313,6 +374,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   remainingHighUsd: number | null;
   confidence: ValueConfidence;
   externalUsageDetected: boolean;
+  anomalousPairs: number;
 } {
   const empty = {
     totalLowUsd: null,
@@ -323,17 +385,32 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     remainingHighUsd: null,
     confidence: "none" as const,
     externalUsageDetected: false,
+    anomalousPairs: 0,
   };
   if (rolling) return empty;
   const normalized = normalizeWindowSamples(samples);
-  const rawSlopes = validSlopes(normalized);
+  const scan = scanValidSlopes(normalized);
+  const rawSlopes = scan.slopes;
+  const anomalousPairs = scan.cumulativeDropPairs;
+  const currentSegmentSlopes = scan.latestGroupKey == null
+    ? []
+    : rawSlopes.filter((slope) =>
+        slope.groupKey === scan.latestGroupKey
+        && slope.segmentId === scan.latestSegmentId,
+      );
   // The first and current percentage plateaus are interval-censored: their
   // unseen beginning/end makes their USD-per-percent slope systematically
   // unstable. Keep them only when there are too few interior transitions.
   const slopes = rawSlopes.length >= 3 ? rawSlopes.slice(1, -1) : rawSlopes;
   const externalUsageDetected = slopes.some((s) => s.external);
-  const usable = slopes.filter((s) => !s.external && s.value > 0);
-  if (!usable.length) return { ...empty, externalUsageDetected };
+  // Point estimation only trusts the segment that is current when the scan
+  // ends; a fresh post-reset segment without slopes yields an empty estimate
+  // instead of reusing an older segment.
+  const estimationSlopes = currentSegmentSlopes.length >= 3
+    ? currentSegmentSlopes.slice(1, -1)
+    : currentSegmentSlopes;
+  const usable = estimationSlopes.filter((s) => !s.external && s.value > 0);
+  if (!usable.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
   const agent = normalized[0]?.agent;
   const currentMix = [...rawSlopes]
@@ -343,13 +420,13 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     agent === "codex" || !hasModelMix(currentMix)
       ? usable
       : usable.filter((slope) => hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35);
-  if (!compatible.length) return { ...empty, externalUsageDetected };
+  if (!compatible.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
   const values = compatible.map((s) => s.value);
   const m = median(values);
   const mad = median(values.map((v) => Math.abs(v - m)));
   const kept = compatible.filter((s) => Math.abs(s.value - m) <= Math.max(3 * mad, 0.25 * m));
-  if (!kept.length) return { ...empty, externalUsageDetected };
+  if (!kept.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
   const point = weightedMedian(kept);
   const lowRaw = weightedPercentile(kept, 0.25);
@@ -382,7 +459,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     c === "high" ? "medium" : c === "medium" ? "low" : "none";
   if (externalUsageDetected && confidence !== "none") confidence = downgrade(confidence);
   if (cheap && confidence !== "none") confidence = downgrade(confidence);
-  if (confidence === "none") return { ...empty, externalUsageDetected };
+  if (confidence === "none") return { ...empty, externalUsageDetected, anomalousPairs };
 
   let band = drift >= 0.15 ? 0.25 : 0.15;
   if (confidence === "high" && usedPct % 1 !== 0) band = Math.min(band, 0.1);
@@ -399,6 +476,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     remainingHighUsd: high * (100 - u),
     confidence,
     externalUsageDetected,
+    anomalousPairs,
   };
 }
 
@@ -547,6 +625,7 @@ export function quotaValueFor(
     remainingHighUsd: null,
     confidence: "none" as const,
     externalUsageDetected: false,
+    anomalousPairs: 0,
   };
   const compatibleSamples = (samples ?? []).filter(
     (sample) => normalizeOfficialWindowId(sample.windowId) === windowId,
