@@ -47,8 +47,7 @@ export interface QuotaValue {
 
 const FIVE_H = WINDOW_MS;
 const WEEK = WEEK_MS;
-const WINDOW_ID_GRANULARITY_MS = 60_000;
-const MIN_REAL_WINDOW_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
+const WINDOW_ID_TOLERANCE_MS = 2_000;
 const COMPENSATION_RESET_MIN_DROP_PCT = 2;
 
 export function officialWindowId(
@@ -63,8 +62,8 @@ export function officialWindowId(
 
 function canonicalWindowAnchor(value: number | null): string {
   if (value == null) return "na";
-  if (!Number.isFinite(value) || value < MIN_REAL_WINDOW_TIMESTAMP_MS) return String(value);
-  return String(Math.round(value / WINDOW_ID_GRANULARITY_MS) * WINDOW_ID_GRANULARITY_MS);
+  if (!Number.isFinite(value)) return String(value);
+  return String(Math.round(value));
 }
 
 function canonicalWindowAnchorToken(value: string): string | null {
@@ -94,6 +93,46 @@ function normalizeSampleWindowId(sample: QuotaSample): QuotaSample {
   const windowId = normalizeOfficialWindowId(sample.windowId);
   if (windowId === sample.windowId) return sample;
   return { ...sample, windowId };
+}
+
+interface ParsedOfficialWindowId {
+  agent: string;
+  kind: string;
+  product: string;
+  startsAt: number | null;
+  resetsAt: number | null;
+}
+
+function parseOfficialWindowId(windowId: string): ParsedOfficialWindowId | null {
+  const parts = windowId.split(":");
+  if (parts.length < 5) return null;
+  const startToken = parts.at(-2)!;
+  const resetToken = parts.at(-1)!;
+  const parseAnchor = (value: string): number | null | undefined => {
+    if (value === "na") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const startsAt = parseAnchor(startToken);
+  const resetsAt = parseAnchor(resetToken);
+  if (startsAt === undefined || resetsAt === undefined) return null;
+  return {
+    agent: parts[0]!,
+    kind: parts[1]!,
+    product: parts.slice(2, -2).join(":"),
+    startsAt,
+    resetsAt,
+  };
+}
+
+export function sameOfficialWindowId(left: string, right: string): boolean {
+  const a = parseOfficialWindowId(left);
+  const b = parseOfficialWindowId(right);
+  if (!a || !b) return normalizeOfficialWindowId(left) === normalizeOfficialWindowId(right);
+  if (a.agent !== b.agent || a.kind !== b.kind || a.product !== b.product) return false;
+  const sameAnchor = (x: number | null, y: number | null) =>
+    x == null || y == null ? x === y : Math.abs(x - y) <= WINDOW_ID_TOLERANCE_MS;
+  return sameAnchor(a.startsAt, b.startsAt) && sameAnchor(a.resetsAt, b.resetsAt);
 }
 
 export function windowBounds(
@@ -509,9 +548,19 @@ function retentionGroup(sample: QuotaSample): string {
 
 export function mergeSamples(existing: QuotaSample[], incoming: QuotaSample): QuotaSample[] {
   const canonicalExisting = existing.map(normalizeSampleWindowId);
-  const canonicalIncoming = normalizeSampleWindowId(incoming);
-  const same = canonicalExisting.filter((s) => s.windowId === canonicalIncoming.windowId);
-  const others = canonicalExisting.filter((s) => s.windowId !== canonicalIncoming.windowId);
+  const normalizedIncoming = normalizeSampleWindowId(incoming);
+  const matchedWindowId = canonicalExisting.find((row) =>
+    sameOfficialWindowId(row.windowId, normalizedIncoming.windowId),
+  )?.windowId;
+  const canonicalIncoming = matchedWindowId
+    ? { ...normalizedIncoming, windowId: matchedWindowId }
+    : normalizedIncoming;
+  const same = canonicalExisting.filter((row) =>
+    sameOfficialWindowId(row.windowId, canonicalIncoming.windowId),
+  );
+  const others = canonicalExisting.filter((row) =>
+    !sameOfficialWindowId(row.windowId, canonicalIncoming.windowId),
+  );
   const nextSame = normalizeWindowSamples([...same, canonicalIncoming]).slice(-128);
   const combined = others.concat(nextSame);
   const latestByWindow = new Map<string, { group: string; at: number }>();
@@ -627,8 +676,8 @@ export function quotaValueFor(
     externalUsageDetected: false,
     anomalousPairs: 0,
   };
-  const compatibleSamples = (samples ?? []).filter(
-    (sample) => normalizeOfficialWindowId(sample.windowId) === windowId,
+  const compatibleSamples = (samples ?? []).filter((sample) =>
+    sameOfficialWindowId(sample.windowId, windowId),
   );
   const cal = official
     ? calibrateFromSamples(

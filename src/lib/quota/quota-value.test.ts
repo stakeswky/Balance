@@ -9,6 +9,7 @@ import {
   observeWindow,
   officialWindowId,
   quotaValueFor,
+  sameOfficialWindowId,
   samplesFromOfficialHistory,
   samplesFromOfficial,
   validSlopes,
@@ -354,31 +355,37 @@ test("provider reset jitter keeps one quota window identity", () => {
     Date.parse("2026-08-17T21:00:00.416Z"),
     Date.parse("2026-08-24T21:00:00.416Z"),
   );
-  assert.equal(claudeA, claudeB);
+  assert.equal(sameOfficialWindowId(claudeA, claudeB), true);
 
   const codexResetA = 1_787_815_628_000;
   const codexResetB = 1_787_815_629_000;
   const week = 7 * 24 * 60 * 60 * 1000;
   assert.equal(
-    officialWindowId("codex", "weekly", null, codexResetA - week, codexResetA),
-    officialWindowId("codex", "weekly", null, codexResetB - week, codexResetB),
+    sameOfficialWindowId(
+      officialWindowId("codex", "weekly", null, codexResetA - week, codexResetA),
+      officialWindowId("codex", "weekly", null, codexResetB - week, codexResetB),
+    ),
+    true,
   );
 
   assert.equal(
-    officialWindowId(
-      "grok",
-      "weekly",
-      null,
-      Date.parse("2026-08-18T13:28:17.000Z"),
-      Date.parse("2026-08-25T13:28:17.000Z"),
+    sameOfficialWindowId(
+      officialWindowId(
+        "grok",
+        "weekly",
+        null,
+        Date.parse("2026-08-18T13:28:17.000Z"),
+        Date.parse("2026-08-25T13:28:17.000Z"),
+      ),
+      officialWindowId(
+        "grok",
+        "weekly",
+        null,
+        Date.parse("2026-08-18T13:28:17.911Z"),
+        Date.parse("2026-08-25T13:28:17.911Z"),
+      ),
     ),
-    officialWindowId(
-      "grok",
-      "weekly",
-      null,
-      Date.parse("2026-08-18T13:28:17.911Z"),
-      Date.parse("2026-08-25T13:28:17.911Z"),
-    ),
+    true,
   );
 });
 
@@ -391,10 +398,30 @@ test("real quota resets still create a new window identity", () => {
   );
 });
 
+test("window ids one second apart are equivalent", () => {
+  const left = officialWindowId("claude", "five_hour", null, 1_725_000_029_500, 1_725_018_029_500);
+  const right = officialWindowId("claude", "five_hour", null, 1_725_000_030_500, 1_725_018_030_500);
+  assert.equal(sameOfficialWindowId(left, right), true);
+});
+
+test("window ids outside tolerance remain isolated", () => {
+  const left = officialWindowId("claude", "five_hour", null, 1_725_000_000_000, 1_725_018_000_000);
+  const right = officialWindowId("claude", "five_hour", null, 1_725_000_003_000, 1_725_018_003_000);
+  assert.equal(sameOfficialWindowId(left, right), false);
+});
+
+test("nearby but distinct resets are never merged", () => {
+  const left = officialWindowId("claude", "five_hour", null, 1_725_000_000_000, 1_725_018_000_000);
+  const right = officialWindowId("claude", "five_hour", null, 1_725_000_089_000, 1_725_018_089_000);
+  assert.equal(sameOfficialWindowId(left, right), false);
+});
+
 test("legacy jittered sample ids coalesce without losing observations", () => {
   const firstId = "claude:weekly:_:1787000399901:1787605199901";
   const secondId = "claude:weekly:_:1787000400416:1787605200416";
-  const rows = normalizeWindowSamples([
+  let rows: QuotaSample[] = [];
+  rows = mergeSamples(
+    rows,
     sample({
       agent: "claude",
       windowId: firstId,
@@ -403,6 +430,9 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       cumulativeObservedUsd: 1,
       modelMix: { opus: 1 },
     }),
+  );
+  rows = mergeSamples(
+    rows,
     sample({
       agent: "claude",
       windowId: secondId,
@@ -411,15 +441,14 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       cumulativeObservedUsd: 2,
       modelMix: { opus: 1 },
     }),
-  ]);
+  );
   assert.equal(rows.length, 2);
   assert.equal(new Set(rows.map((row) => row.windowId)).size, 1);
-  assert.equal(
-    rows[0]?.windowId,
-    officialWindowId("claude", "weekly", null, 1_787_000_400_416, 1_787_605_200_416),
-  );
+  assert.equal(sameOfficialWindowId(rows[0]!.windowId, secondId), true);
 
-  const codexRows = normalizeWindowSamples([
+  let codexRows: QuotaSample[] = [];
+  codexRows = mergeSamples(
+    codexRows,
     sample({
       agent: "codex",
       windowId: "codex:weekly:_:1787210828000:1787815628000",
@@ -427,6 +456,9 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       usedPercent: 5,
       cumulativeObservedUsd: 1,
     }),
+  );
+  codexRows = mergeSamples(
+    codexRows,
     sample({
       agent: "codex",
       windowId: "codex:weekly:_:1787210829000:1787815629000",
@@ -434,14 +466,17 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       usedPercent: 7,
       cumulativeObservedUsd: 2,
     }),
-  ]);
+  );
+  assert.equal(codexRows.length, 2);
   assert.equal(new Set(codexRows.map((row) => row.windowId)).size, 1);
 
   const grokStartA = Date.parse("2026-08-18T13:28:17.000Z");
   const grokStartB = Date.parse("2026-08-18T13:28:17.911Z");
   const grokEndA = Date.parse("2026-08-25T13:28:17.000Z");
   const grokEndB = Date.parse("2026-08-25T13:28:17.911Z");
-  const grokRows = normalizeWindowSamples([
+  let grokRows: QuotaSample[] = [];
+  grokRows = mergeSamples(
+    grokRows,
     sample({
       agent: "grok",
       windowId: `grok:weekly:_:${grokStartA}:${grokEndA}`,
@@ -450,6 +485,9 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       cumulativeObservedUsd: 1,
       modelMix: { "grok-4.6": 1 },
     }),
+  );
+  grokRows = mergeSamples(
+    grokRows,
     sample({
       agent: "grok",
       windowId: `grok:weekly:_:${grokStartB}:${grokEndB}`,
@@ -458,7 +496,8 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       cumulativeObservedUsd: 2,
       modelMix: { "grok-4.6": 1 },
     }),
-  ]);
+  );
+  assert.equal(grokRows.length, 2);
   assert.equal(new Set(grokRows.map((row) => row.windowId)).size, 1);
 });
 
@@ -525,7 +564,7 @@ test("mergeSamples replaces same percent and caps windows per agent", () => {
     rows = mergeSamples(
       rows,
       sample({
-        windowId: `codex:weekly:_:${w}:${w + 1}`,
+        windowId: `codex:weekly:_:${w * 10_000}:${w * 10_000 + 5_000}`,
         timestampMs: w,
         usedPercent: 10,
         cumulativeObservedUsd: w,
@@ -565,7 +604,7 @@ test("Claude weekly window survives more than eight five-hour windows", () => {
       rows,
       sample({
         agent: "claude",
-        windowId: `claude:five_hour:_:${index}:${index + 1}`,
+        windowId: `claude:five_hour:_:${index * 10_000}:${index * 10_000 + 5_000}`,
         timestampMs: index + 2,
         usedPercent: 1,
         cumulativeObservedUsd: index + 2,
