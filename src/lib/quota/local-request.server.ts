@@ -14,7 +14,7 @@ const ALLOWED_DESKTOP_HOSTS = new Set([
 ]);
 
 export function shouldEnforceDesktopHost(
-  env: Readonly<{ SYNQ_DESKTOP?: string }>,
+  env: Readonly<{ BALANCE_DESKTOP?: string; SYNQ_DESKTOP?: string }>,
 ): boolean {
   return isDesktopRuntime(env);
 }

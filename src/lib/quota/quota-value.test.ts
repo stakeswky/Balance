@@ -47,7 +47,7 @@ function sample(partial: Partial<QuotaSample> & Pick<QuotaSample, "usedPercent" 
     cumulativeObservedUsd: partial.cumulativeObservedUsd,
     pricedTokenCoverage: partial.pricedTokenCoverage ?? 1,
     modelMix: partial.modelMix ?? { "gpt-5.4": 1 },
-    pricingVersion: partial.pricingVersion ?? "2026-08-20-synq-1",
+    pricingVersion: partial.pricingVersion ?? "2026-08-21-balance-1",
   };
 }
 

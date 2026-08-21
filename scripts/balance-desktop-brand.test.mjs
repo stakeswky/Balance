@@ -7,26 +7,27 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(resolve(root, relative), "utf8");
 
-test("Tauri publishes Balance without changing the bundle identity", () => {
+test("Tauri publishes Balance with the Balance bundle identity", () => {
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
   assert.equal(config.productName, "Balance");
-  assert.equal(config.identifier, "com.synq.desktop");
-  assert.deepEqual(config.bundle.externalBin, ["binaries/synq-node"]);
-  assert.equal(config.bundle.resources["../.output"], "synq-server");
+  assert.equal(config.identifier, "com.balance.desktop");
+  assert.deepEqual(config.bundle.externalBin, ["binaries/balance-node"]);
+  assert.equal(config.bundle.resources["../.output"], "balance-server");
 
   const cargo = read("src-tauri/Cargo.toml");
-  assert.match(cargo, /name = "synq-desktop"/);
-  assert.match(cargo, /name = "synq_desktop_lib"/);
+  assert.match(cargo, /name = "balance-desktop"/);
+  assert.match(cargo, /name = "balance_desktop_lib"/);
 });
 
-test("native UI and startup error use Balance while health stays compatible", () => {
+test("native UI, health, and startup error use the Balance identity", () => {
   const rust = read("src-tauri/src/lib.rs");
   assert.match(rust, /\.title\("Balance"\)/);
   assert.match(
     rust,
-    /const HEALTH_BODY: &str = "\{\\"app\\":\\"synq\\",\\"mode\\":\\"desktop\\"\}"/,
+    /const HEALTH_BODY: &str = "\{\\"app\\":\\"balance\\",\\"mode\\":\\"desktop\\"\}"/,
   );
-  assert.match(rust, /const SIDECAR_BIN: &str = "synq-node"/);
+  assert.match(rust, /const SIDECAR_BIN: &str = "balance-node"/);
+  assert.match(rust, /TrayIconBuilder/);
   assert.doesNotMatch(rust, /\.title\("Synq"\)/);
   assert.doesNotMatch(rust, /Synq/);
 
@@ -64,8 +65,8 @@ test("desktop verification and CI use Balance artifact paths", () => {
   assert.match(workflow, /bundle\/macos\/Balance\.app/);
   assert.match(workflow, /artifacts\/Balance-macos-arm64\.app\.zip/);
   assert.match(workflow, /name: Balance-macos-arm64/);
-  assert.match(workflow, /Contents\/MacOS\/synq-desktop/);
-  assert.match(workflow, /Contents\/MacOS\/synq-node/);
+  assert.match(workflow, /Contents\/MacOS\/balance-desktop/);
+  assert.match(workflow, /Contents\/MacOS\/balance-node/);
   assert.match(workflow, /gh release create/);
   assert.match(workflow, /Balance_\*\.dmg/);
   assert.doesNotMatch(workflow, /Synq-macos-arm64/);

@@ -3,8 +3,8 @@ set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
-APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
-SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
+APP_BINARY="$APP_PATH/Contents/MacOS/balance-desktop"
+SIDECAR_BINARY="$APP_PATH/Contents/MacOS/balance-node"
 OCCUPIER_PID=""
 STARTED_APP=0
 

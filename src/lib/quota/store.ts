@@ -531,19 +531,48 @@ export const useQuota = create<QuotaState>()(
       setHint: (on) => set({ adapterHint: on }),
     }),
     {
-      name: "synq-quota-v8",
+      name: "balance-quota-v8",
       storage: createJSONStorage(() => {
         const memory = new Map<string, string>();
+        const legacyNames = ["synq-quota-v8", "synq-quota-v7"];
         return {
           getItem: (name) => {
             try {
               if (typeof localStorage === "undefined") return memory.get(name) ?? null;
-              try {
-                localStorage.removeItem("synq-quota-v7");
-              } catch {
-                /* ignore */
+              const current = localStorage.getItem(name);
+              if (current != null) {
+                for (const legacy of legacyNames) {
+                  try {
+                    localStorage.removeItem(legacy);
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                return current;
               }
-              return localStorage.getItem(name);
+              for (const legacy of legacyNames) {
+                let value: string | null = null;
+                try {
+                  value = localStorage.getItem(legacy);
+                } catch {
+                  continue;
+                }
+                if (value == null) continue;
+                try {
+                  localStorage.setItem(name, value);
+                } catch {
+                  /* quota — keep serving the migrated payload from memory */
+                }
+                for (const oldName of legacyNames) {
+                  try {
+                    localStorage.removeItem(oldName);
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                return value;
+              }
+              return null;
             } catch {
               return memory.get(name) ?? null;
             }

@@ -3,13 +3,13 @@ set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
-APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
-SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
+APP_BINARY="$APP_PATH/Contents/MacOS/balance-desktop"
+SIDECAR_BINARY="$APP_PATH/Contents/MacOS/balance-node"
 HEALTH_URL="http://127.0.0.1:4780/api/desktop-health"
 AUTH_URL="http://127.0.0.1:4780/api/auth/get-session"
-EXPECTED_HEALTH='{"app":"synq","mode":"desktop"}'
+EXPECTED_HEALTH='{"app":"balance","mode":"desktop"}'
 SENTINEL_MODULE="$REPO_ROOT/scripts/node-options-sentinel.cjs"
-TMP_ROOT=$(mktemp -d /tmp/synq-macos-env.XXXXXX)
+TMP_ROOT=$(mktemp -d /tmp/balance-macos-env.XXXXXX)
 NODE_OPTIONS_MARKER="$TMP_ROOT/node-options-loaded"
 DATABASE_MARKER="$TMP_ROOT/database-connected"
 DATABASE_PORT=4799
@@ -85,7 +85,7 @@ until lsof -nP -a -p "$DATABASE_PID" -iTCP:"$DATABASE_PORT" -sTCP:LISTEN >/dev/n
   sleep 0.1
 done
 
-DATABASE_URL="postgresql://synq:sentinel@127.0.0.1:$DATABASE_PORT/synq" \
+DATABASE_URL="postgresql://balance:sentinel@127.0.0.1:$DATABASE_PORT/balance" \
 BETTER_AUTH_SECRET="must-not-reach-desktop" \
 GROK_AUTH_CLIENT_SECRET="must-not-reach-desktop" \
 NODE_OPTIONS="--require=$SENTINEL_MODULE" \

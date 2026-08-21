@@ -1,15 +1,15 @@
 [package]
-name = "synq-desktop"
+name = "balance-desktop"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "synq_desktop_lib"
+name = "balance_desktop_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.5", features = ["tray-icon"] }
 tauri-plugin-shell = "=2.3.5"

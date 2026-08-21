@@ -3,10 +3,10 @@ set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
-APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
-SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
+APP_BINARY="$APP_PATH/Contents/MacOS/balance-desktop"
+SIDECAR_BINARY="$APP_PATH/Contents/MacOS/balance-node"
 HEALTH_URL="http://127.0.0.1:4780/api/desktop-health"
-EXPECTED_HEALTH='{"app":"synq","mode":"desktop"}'
+EXPECTED_HEALTH='{"app":"balance","mode":"desktop"}'
 STARTED_APP=0
 
 exact_pids() {

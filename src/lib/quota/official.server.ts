@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -117,12 +118,43 @@ export function claudeSnapshotPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (platform === "darwin") {
+    return join(home, "Library", "Application Support", "Balance", "official-quota.json");
+  }
+  if (platform === "win32") {
+    return join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "Balance", "official-quota.json");
+  }
+  return join(env.XDG_STATE_HOME || join(home, ".local", "state"), "balance", "official-quota.json");
+}
+
+export function legacyClaudeSnapshotPath(
+  home = homedir(),
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (platform === "darwin") {
     return join(home, "Library", "Application Support", "Synq", "official-quota.json");
   }
   if (platform === "win32") {
     return join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "Synq", "official-quota.json");
   }
   return join(env.XDG_STATE_HOME || join(home, ".local", "state"), "synq", "official-quota.json");
+}
+
+export function resolveClaudeSnapshotPath(
+  home = homedir(),
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const current = claudeSnapshotPath(home, platform, env);
+  const legacy = legacyClaudeSnapshotPath(home, platform, env);
+  if (existsSync(current) || !existsSync(legacy)) return current;
+  mkdirSync(dirname(current), { recursive: true });
+  try {
+    copyFileSync(legacy, current);
+    return current;
+  } catch {
+    return legacy;
+  }
 }
 
 function nullableFiniteNumber(value: unknown): boolean {
@@ -691,7 +723,7 @@ export async function readOfficialQuota(opts?: {
   const codexLog = readCodexOfficialFromSessions(codexHome);
 
   const cacheMs = opts?.cacheMs ?? GROK_BILLING_CACHE_MS;
-  const snapshotPath = opts?.snapshotPath ?? claudeSnapshotPath(home);
+  const snapshotPath = opts?.snapshotPath ?? resolveClaudeSnapshotPath(home);
   const claudeHit = newestClaudeEntry(
     claudeCache.get(home),
     readClaudeSnapshot(snapshotPath),

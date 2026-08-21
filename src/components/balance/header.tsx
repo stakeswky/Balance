@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ThemeToggle } from "@/components/synq/theme-toggle";
+import { ThemeToggle } from "@/components/balance/theme-toggle";
 import type { AgentId } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 

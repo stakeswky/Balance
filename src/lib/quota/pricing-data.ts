@@ -20,7 +20,7 @@ export interface ModelPricing {
 }
 
 /** Frozen snapshot so offline preview is reproducible. Prices are USD per token. */
-export const PRICING_VERSION = "2026-08-20-synq-3";
+export const PRICING_VERSION = "2026-08-21-balance-1";
 export const OPENAI_CREDITS_PER_USD = 25;
 
 function perM(
@@ -43,7 +43,7 @@ function perM(
   const cacheWrite1h = (opts?.cacheWrite1h ?? input * 2) / 1_000_000;
   return {
     model: "",
-    source: "synq-snapshot",
+    source: "balance-snapshot",
     version: PRICING_VERSION,
     effectiveAt: Date.parse("2026-08-20T00:00:00Z"),
     inputPerToken,

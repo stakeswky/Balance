@@ -17,7 +17,7 @@ export const loadSettings = createServerFn({ method: "GET" })
       claude_plan: string;
       codex_plan: string;
       week_boost_pct: number;
-    }>`select claude_plan, codex_plan, week_boost_pct from synq_settings where user_id = ${context.userId}`;
+    }>`select claude_plan, codex_plan, week_boost_pct from balance_settings where user_id = ${context.userId}`;
     const row = rows[0];
     if (!row) return null;
     return {
@@ -33,7 +33,7 @@ export const saveSettings = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`
-      insert into synq_settings (user_id, claude_plan, codex_plan, week_boost_pct, updated_at)
+      insert into balance_settings (user_id, claude_plan, codex_plan, week_boost_pct, updated_at)
       values (${context.userId}, ${data.claudePlanId}, ${data.codexPlanId}, ${data.weekBoostPct}, now())
       on conflict (user_id) do update set
         claude_plan = excluded.claude_plan,

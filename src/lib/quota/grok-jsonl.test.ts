@@ -8,7 +8,7 @@ import { createGrokScanState, scanGrokUsage } from "./grok-log.server.ts";
 
 const meta = {
   sessionId: "sess-g",
-  cwd: "/tmp/synq-fixture/grok",
+  cwd: "/tmp/balance-fixture/grok",
   title: "接 Grok 日志",
   model: "grok-4.6",
 };
@@ -105,7 +105,7 @@ test("asGrokModel maps build ids", () => {
 });
 
 test("incremental scan only emits new prompt_ids", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-grok-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-grok-"));
   const grokHome = join(home, ".grok");
   const dir = join(grokHome, "sessions", encodeURIComponent("/tmp/demo"), "sess-g");
   mkdirSync(dir, { recursive: true });
@@ -141,7 +141,7 @@ test("incremental scan only emits new prompt_ids", () => {
 });
 
 test("Grok per-file cursor keeps a late parallel turn older than global since", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-grok-late-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-grok-late-"));
   const grokHome = join(home, ".grok");
   const dir = join(grokHome, "sessions", encodeURIComponent("/tmp/demo"), "sess-g");
   mkdirSync(dir, { recursive: true });
@@ -167,7 +167,7 @@ test("Grok per-file cursor keeps a late parallel turn older than global since", 
 });
 
 test("Grok reports two concurrently writing sessions", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-grok-active-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-grok-active-"));
   const grokHome = join(home, ".grok");
   const now = 1_787_153_700_000;
   for (const [sessionId, offset] of [["sess-a", 1_000], ["sess-b", 2_000]] as const) {

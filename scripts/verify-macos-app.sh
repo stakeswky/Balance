@@ -3,16 +3,16 @@ set -eu
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 APP_PATH="${1:-$REPO_ROOT/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app}"
-SCREENSHOT_PATH="${2:-$REPO_ROOT/screenshots/synq-macos-app.png}"
+SCREENSHOT_PATH="${2:-$REPO_ROOT/screenshots/balance-macos-app.png}"
 BROWSER_SCREENSHOT_PATH="${3:-$REPO_ROOT/screenshots/browser-smoke.png}"
-APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
-SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
-SERVER_ENTRY="$APP_PATH/Contents/Resources/synq-server/server/index.mjs"
+APP_BINARY="$APP_PATH/Contents/MacOS/balance-desktop"
+SIDECAR_BINARY="$APP_PATH/Contents/MacOS/balance-node"
+SERVER_ENTRY="$APP_PATH/Contents/Resources/balance-server/server/index.mjs"
 HEALTH_URL="http://127.0.0.1:4780/api/desktop-health"
-EXPECTED_HEALTH='{"app":"synq","mode":"desktop"}'
+EXPECTED_HEALTH='{"app":"balance","mode":"desktop"}'
 STARTED_APP=0
 APP_PID=""
-TMP_ROOT=$(mktemp -d /tmp/synq-macos-verify.XXXXXX)
+TMP_ROOT=$(mktemp -d /tmp/balance-macos-verify.XXXXXX)
 
 exact_pids() {
   ps -Ao pid=,command= | awk -v binary="$1" '$2 == binary { print $1 }'

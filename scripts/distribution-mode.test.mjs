@@ -13,13 +13,14 @@ test("web builds keep the Vercel preset", () => {
 });
 
 test("desktop builds select the node-server preset", () => {
+  assert.equal(resolveNitroPreset({ BALANCE_DISTRIBUTION: "desktop" }), "node-server");
   assert.equal(resolveNitroPreset({ SYNQ_DISTRIBUTION: "desktop" }), "node-server");
 });
 
 test("desktop runtime imports db without booting PGLite", () => {
   const dbUrl = pathToFileURL(resolve(root, "src/lib/db.ts")).href;
   const source = [
-    'process.env.SYNQ_DESKTOP = "1";',
+    'process.env.BALANCE_DESKTOP = "1";',
     `const db = await import(${JSON.stringify(dbUrl)});`,
     'if (db.dbSource !== "disabled") process.exit(21);',
     "await db.ensureDbReady();",
@@ -35,8 +36,8 @@ test("desktop runtime imports db without booting PGLite", () => {
 
 test("desktop health route has a mode-specific response", async () => {
   const source = await readFile(resolve(root, "src/routes/api/desktop-health.ts"), "utf8");
-  assert.match(source, /SYNQ_DESKTOP/);
-  assert.ok(source.includes('{"app":"synq","mode":"desktop"}'));
+  assert.match(source, /isDesktopRuntime\(process\.env\)/);
+  assert.ok(source.includes('{"app":"balance","mode":"desktop"}'));
 });
 
 test("desktop auth route rejects before dynamically importing the auth server", async () => {

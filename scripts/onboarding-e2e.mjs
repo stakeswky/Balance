@@ -138,7 +138,7 @@ async function newPage(browser, viewport) {
 async function clearOriginStorage(page) {
   await page.goto(BASE, { waitUntil: "commit" });
   await page.evaluate(() => {
-    localStorage.removeItem("synq-quota-v8");
+    localStorage.removeItem("balance-quota-v8");
     sessionStorage.clear();
   });
 }
@@ -146,10 +146,10 @@ async function clearOriginStorage(page) {
 async function seedPersist(page, patch) {
   await page.goto(BASE, { waitUntil: "commit" });
   await page.evaluate((next) => {
-    const raw = localStorage.getItem("synq-quota-v8");
+    const raw = localStorage.getItem("balance-quota-v8");
     const parsed = raw ? JSON.parse(raw) : { state: {}, version: 0 };
     parsed.state = { ...(parsed.state || {}), ...next };
-    localStorage.setItem("synq-quota-v8", JSON.stringify(parsed));
+    localStorage.setItem("balance-quota-v8", JSON.stringify(parsed));
   }, patch);
 }
 
@@ -227,7 +227,7 @@ async function overflow(page) {
 
 async function persistState(page) {
   return page.evaluate(() => {
-    const raw = localStorage.getItem("synq-quota-v8");
+    const raw = localStorage.getItem("balance-quota-v8");
     return raw ? JSON.parse(raw) : null;
   });
 }
@@ -711,7 +711,7 @@ report.httpErrors = unique(
   ),
 );
 
-const out = resolve("/tmp/synq-onboarding-e2e.json");
+const out = resolve("/tmp/balance-onboarding-e2e.json");
 writeFileSync(out, JSON.stringify(report, null, 2));
 console.log(
   JSON.stringify(

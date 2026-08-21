@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
-import { formatTokens } from "@/components/synq/format";
+import { formatTokens } from "@/components/balance/format";
 import { CLAUDE_PLANS, CODEX_PLANS, GROK_PLANS } from "@/lib/quota/plans";
 import type { AgentId, PlanDef } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";

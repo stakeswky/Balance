@@ -13,16 +13,16 @@ test("web surfaces use the Balance brand", () => {
   assert.match(rootRoute, /余量 \/ Balance — Claude × Grok × Codex 额度监控/);
   assert.doesNotMatch(rootRoute, /Synq — Claude/);
 
-  const header = read("src/components/synq/header.tsx");
+  const header = read("src/components/balance/header.tsx");
   assert.match(header, />余量<\/span>/);
   assert.doesNotMatch(header, />Synq<\/span>/);
 
-  const onboarding = read("src/components/synq/onboarding.tsx");
+  const onboarding = read("src/components/balance/onboarding.tsx");
   assert.match(onboarding, /余量初始设置/);
   assert.match(onboarding, /余量只检查本机数据目录/);
   assert.doesNotMatch(onboarding, /Synq 初始设置/);
 
-  const settings = read("src/components/synq/settings-panel.tsx");
+  const settings = read("src/components/balance/settings-panel.tsx");
   assert.match(settings, /余量只读本机 Agent\s+日志/);
   assert.doesNotMatch(settings, /Synq 只读本机 Agent\s+日志/);
 });

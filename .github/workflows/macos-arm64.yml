@@ -39,7 +39,7 @@ jobs:
       - name: Cache official Node runtime archive
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: .cache/synq-desktop
+          path: .cache/balance-desktop
           key: node-v22.23.2-darwin-arm64
 
       - name: Install JavaScript dependencies
@@ -66,8 +66,8 @@ jobs:
       - name: Verify and archive application
         run: |
           APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app"
-          APP_BINARY="$APP_PATH/Contents/MacOS/synq-desktop"
-          SIDECAR_BINARY="$APP_PATH/Contents/MacOS/synq-node"
+          APP_BINARY="$APP_PATH/Contents/MacOS/balance-desktop"
+          SIDECAR_BINARY="$APP_PATH/Contents/MacOS/balance-node"
           test -d "$APP_PATH"
           for binary in "$APP_BINARY" "$SIDECAR_BINARY"; do
             file_output=$(file "$binary")
