@@ -65,6 +65,18 @@ test("Claude Sonnet 5 and Sonnet 4.6 keep distinct public prices", () => {
   assert.equal(lookupPricing("claude-sonnet-4-6", "sonnet").pricing?.outputPerToken, 15 / 1_000_000);
 });
 
+test("known dated model ids resolve to their exact base price", () => {
+  const hit = lookupPricing("claude-sonnet-4-6-20251110", "sonnet");
+  assert.equal(hit.quality, "exact");
+  assert.equal(hit.resolvedModel, "claude-sonnet-4-6");
+  assert.equal(hit.pricing!.inputPerToken * 1_000_000, 3);
+});
+
+test("unknown dated ids remain unknown", () => {
+  const hit = lookupPricing("claude-sonnet-9-9-20990101", "sonnet");
+  assert.equal(hit.quality, "unknown");
+});
+
 test("Grok models keep provider-specific cached input prices", () => {
   assert.equal(lookupPricing("grok-4.6", "grok-4.6").pricing?.cacheReadPerToken, 0.5 / 1_000_000);
   assert.equal(lookupPricing("grok-4.5", "grok-4.5").pricing?.cacheReadPerToken, 0.3 / 1_000_000);
