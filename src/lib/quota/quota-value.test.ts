@@ -39,6 +39,8 @@ function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
     cacheWrite: partial.cacheWrite ?? 0,
     cacheWrite1h: partial.cacheWrite1h,
     cacheWriteUnsplit: partial.cacheWriteUnsplit,
+    imageInputTokens: partial.imageInputTokens,
+    imageOutputTokens: partial.imageOutputTokens,
     reasoningMin: 0,
     anomalies: partial.anomalies,
   };
@@ -1224,4 +1226,17 @@ test("external usage in the current window blocks historical priors", () => {
   assert.equal(result.externalUsageDetected, true);
   assert.equal(result.calibrationSource, "none");
   assert.equal(result.totalPointUsd, null);
+});
+
+test("unknown image prices reduce coverage without discarding text cost", () => {
+  const event = ev({
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: 1,
+    tokensIn: 1_000,
+    imageInputTokens: 1_000,
+  });
+  const observed = observeWindow([event]);
+  assert.equal(observed.pricedTokenCoverage, 0.5);
 });

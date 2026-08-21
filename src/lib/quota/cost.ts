@@ -9,6 +9,8 @@ export interface CostBreakdown {
   cacheWriteUsd: number;
   imageUsd: number;
   totalUsd: number;
+  pricedTokens: number;
+  fullyPriced: boolean;
   pricingModel: string | null;
   pricingVersion: string | null;
   pricingQuality: PricingQuality;
@@ -25,6 +27,8 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
       cacheWriteUsd: 0,
       imageUsd: 0,
       totalUsd: 0,
+      pricedTokens: 0,
+      fullyPriced: false,
       pricingModel: null,
       pricingVersion: PRICING_VERSION,
       pricingQuality: "unknown",
@@ -49,6 +53,8 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
       cacheWriteUsd: 0,
       imageUsd: 0,
       totalUsd: 0,
+      pricedTokens: 0,
+      fullyPriced: false,
       pricingModel: null,
       pricingVersion: PRICING_VERSION,
       pricingQuality: "unknown",
@@ -70,7 +76,19 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
     cacheWriteUsd *= p.longContextInputMultiplier;
     outputUsd *= p.longContextOutputMultiplier;
   }
-  const imageUsd = 0;
+  const imageInput = finiteNonNeg(event.imageInputTokens ?? 0);
+  const imageOutput = finiteNonNeg(event.imageOutputTokens ?? 0);
+  const imageInputPriced = imageInput === 0 || p.imageInputPerToken != null;
+  const imageOutputPriced = imageOutput === 0 || p.imageOutputPerToken != null;
+  const imageUsd =
+    imageInput * (p.imageInputPerToken ?? 0) +
+    imageOutput * (p.imageOutputPerToken ?? 0);
+  const uncertainWriteTokens = event.cacheWriteUnsplit ? w5 : 0;
+  const pricedTokens =
+    uncached + output + cacheRead + w5 + w1 - uncertainWriteTokens +
+    (imageInputPriced ? imageInput : 0) +
+    (imageOutputPriced ? imageOutput : 0);
+  let fullyPriced = imageInputPriced && imageOutputPriced && uncertainWriteTokens === 0;
   const totalUsd = inputUsd + outputUsd + cacheReadUsd + cacheWriteUsd + imageUsd;
   const openAiCredits =
     event.agent === "codex" && p.creditsPerUsd != null ? totalUsd * p.creditsPerUsd : null;
@@ -81,6 +99,8 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
     cacheWriteUsd,
     imageUsd,
     totalUsd,
+    pricedTokens,
+    fullyPriced,
     pricingModel: hit.resolvedModel,
     pricingVersion: p.version,
     pricingQuality: quality,

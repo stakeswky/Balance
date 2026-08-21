@@ -180,3 +180,17 @@ test("missing raw model stays unpriced", () => {
   assert.equal(cost.priced, false);
   assert.equal(cost.totalUsd, 0);
 });
+
+test("unknown image prices reduce coverage without discarding text cost", () => {
+  const event = ev({
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    tokensIn: 1_000,
+    imageInputTokens: 1_000,
+  });
+  const cost = costBreakdown(event);
+  assert.equal(cost.priced, true);
+  assert.equal(cost.imageUsd, 0);
+  assert.equal(cost.fullyPriced, false);
+});

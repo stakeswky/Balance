@@ -109,12 +109,16 @@ export function rawExclusiveTokens(e: {
   cacheRead: number;
   cacheWrite: number;
   cacheWrite1h?: number;
+  imageInputTokens?: number;
+  imageOutputTokens?: number;
 }): number {
   return (
     finiteNonNeg(e.tokensIn) +
     finiteNonNeg(e.tokensOut) +
     finiteNonNeg(e.cacheRead) +
     finiteNonNeg(e.cacheWrite) +
-    finiteNonNeg(e.cacheWrite1h ?? 0)
+    finiteNonNeg(e.cacheWrite1h ?? 0) +
+    finiteNonNeg(e.imageInputTokens ?? 0) +
+    finiteNonNeg(e.imageOutputTokens ?? 0)
   );
 }

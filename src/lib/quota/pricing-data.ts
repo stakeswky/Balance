@@ -8,8 +8,8 @@ export interface ModelPricing {
   cacheReadPerToken: number;
   cacheWrite5mPerToken: number;
   cacheWrite1hPerToken: number;
-  imageInputPerToken: number;
-  imageOutputPerToken: number;
+  imageInputPerToken: number | null;
+  imageOutputPerToken: number | null;
   priorityInputPerToken: number | null;
   priorityOutputPerToken: number | null;
   priorityCacheReadPerToken: number | null;
@@ -30,6 +30,8 @@ function perM(
     cacheRead?: number;
     cacheWrite5m?: number;
     cacheWrite1h?: number;
+    imageInput?: number;
+    imageOutput?: number;
     longCtx?: number;
     longIn?: number;
     longOut?: number;
@@ -51,8 +53,8 @@ function perM(
     cacheReadPerToken: cacheRead,
     cacheWrite5mPerToken: cacheWrite5m,
     cacheWrite1hPerToken: cacheWrite1h,
-    imageInputPerToken: 0,
-    imageOutputPerToken: 0,
+    imageInputPerToken: opts?.imageInput == null ? null : opts.imageInput / 1_000_000,
+    imageOutputPerToken: opts?.imageOutput == null ? null : opts.imageOutput / 1_000_000,
     priorityInputPerToken: null,
     priorityOutputPerToken: null,
     priorityCacheReadPerToken: null,

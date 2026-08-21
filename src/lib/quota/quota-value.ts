@@ -203,9 +203,8 @@ export function observeWindow(events: UsageEvent[]): {
     observedTokens += tokens;
     if (cost.priced && cost.pricingQuality !== "unknown") {
       observedUsd += cost.totalUsd;
-      const uncertainWriteTokens = e.cacheWriteUnsplit ? Math.max(0, e.cacheWrite) : 0;
-      pricedTokens += Math.max(0, tokens - uncertainWriteTokens);
-      pricedEvents += 1;
+      pricedTokens += cost.pricedTokens;
+      if (cost.fullyPriced) pricedEvents += 1;
       const key = cost.pricingModel ?? e.model;
       mix[key] = (mix[key] ?? 0) + cost.totalUsd;
     }

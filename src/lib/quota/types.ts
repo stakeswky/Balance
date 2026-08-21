@@ -38,6 +38,8 @@ export interface UsageEvent {
   cacheWrite1h?: number;
   /** True when Claude only had a combined cache-write total, billed as 5m. */
   cacheWriteUnsplit?: boolean;
+  imageInputTokens?: number;
+  imageOutputTokens?: number;
   reasoningMin: number;
   reportedCostTicks?: number | null;
   reportedCostByModel?: Record<string, number>;
