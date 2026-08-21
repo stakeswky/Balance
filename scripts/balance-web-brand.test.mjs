@@ -37,8 +37,10 @@ test("package and README publish the new product name", () => {
   const readme = read("README.md");
   assert.match(readme, /^# 余量 \/ Balance$/m);
   assert.match(readme, /余量（Balance）是一个本地优先/);
-  assert.match(readme, /alt="Balance desktop quota dashboard"/);
-  assert.match(readme, /alt="Balance mobile quota dashboard"/);
+  assert.match(readme, /alt="Balance desktop quota dashboard \(light\)"/);
+  assert.match(readme, /alt="Balance desktop quota dashboard \(dark\)"/);
+  assert.match(readme, /alt="Balance mobile quota dashboard \(light\)"/);
+  assert.match(readme, /alt="Balance mobile quota dashboard \(dark\)"/);
   assert.match(readme, /`Balance-macos-arm64`/);
   assert.match(readme, /`Balance-macos-arm64\.app\.zip`/);
   assert.doesNotMatch(readme, /`Synq-macos-arm64/);
