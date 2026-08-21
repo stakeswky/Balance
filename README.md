@@ -12,10 +12,6 @@
 
 <img src="./screenshots/claude-grok-quota-desktop-dark.png" alt="Balance desktop quota dashboard (dark)" width="900">
 
-<img src="./screenshots/claude-grok-quota-mobile.png" alt="Balance mobile quota dashboard (light)" width="360">
-
-<img src="./screenshots/claude-grok-quota-mobile-dark.png" alt="Balance mobile quota dashboard (dark)" width="360">
-
 ## 本地运行
 
 需要 Node.js 22 或更高版本。

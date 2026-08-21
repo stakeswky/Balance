@@ -44,20 +44,6 @@ const SPECS = [
     file: "claude-grok-quota-desktop-dark.png",
     maxHeight: 5000,
   },
-  {
-    name: "mobile-light",
-    theme: "light",
-    viewport: { width: 390, height: 844 },
-    file: "claude-grok-quota-mobile.png",
-    maxHeight: 12000,
-  },
-  {
-    name: "mobile-dark",
-    theme: "dark",
-    viewport: { width: 390, height: 844 },
-    file: "claude-grok-quota-mobile-dark.png",
-    maxHeight: 12000,
-  },
 ];
 const EXPECTED_README_IMAGES = SPECS.map((spec) => "screenshots/" + spec.file);
 const DEV_AVAILABILITY_ID = "cHVsbEFnZW50QXZhaWxhYmlsaXR5";

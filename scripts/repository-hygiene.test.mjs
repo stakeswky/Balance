@@ -36,17 +36,14 @@ test("README documents local usage, verification, and real screenshots", () => {
     "npm run build",
     "screenshots/claude-grok-quota-desktop.png",
     "screenshots/claude-grok-quota-desktop-dark.png",
-    "screenshots/claude-grok-quota-mobile.png",
-    "screenshots/claude-grok-quota-mobile-dark.png",
     "不是现金余额",
   ]) {
     assert.ok(readme.includes(required), `README missing: ${required}`);
   }
+  assert.ok(!readme.includes("claude-grok-quota-mobile"), "README should not include mobile screenshots");
   for (const file of [
     "screenshots/claude-grok-quota-desktop.png",
     "screenshots/claude-grok-quota-desktop-dark.png",
-    "screenshots/claude-grok-quota-mobile.png",
-    "screenshots/claude-grok-quota-mobile-dark.png",
   ]) {
     assert.ok(existsSync(join(root, file)), `missing ${file}`);
   }
@@ -138,8 +135,6 @@ test("gitignore keeps App Builder and local-only paths out of git", () => {
     "!screenshots/.gitkeep",
     "!screenshots/claude-grok-quota-desktop.png",
     "!screenshots/claude-grok-quota-desktop-dark.png",
-    "!screenshots/claude-grok-quota-mobile.png",
-    "!screenshots/claude-grok-quota-mobile-dark.png",
   ]) {
     assert.ok(ignore.includes(entry), `.gitignore missing: ${entry}`);
   }
@@ -167,22 +162,22 @@ test("git does not track App Builder, plans, or extra screenshots", () => {
     "screenshots/.gitkeep",
     "screenshots/claude-grok-quota-desktop-dark.png",
     "screenshots/claude-grok-quota-desktop.png",
-    "screenshots/claude-grok-quota-mobile-dark.png",
-    "screenshots/claude-grok-quota-mobile.png",
   ]);
 });
 
-test("public screenshot capture covers light and dark themes", () => {
+test("public screenshot capture covers desktop light and dark themes only", () => {
   const source = read("scripts/capture-public-screenshots.mjs");
   for (const required of [
     'theme: "light"',
     'theme: "dark"',
     "remain-theme",
+    "claude-grok-quota-desktop.png",
     "claude-grok-quota-desktop-dark.png",
-    "claude-grok-quota-mobile-dark.png",
   ]) {
     assert.ok(source.includes(required), `capture script missing: ${required}`);
   }
+  assert.ok(!source.includes("claude-grok-quota-mobile"), "capture script should not take mobile shots");
+  assert.ok(!source.includes("width: 390"), "capture script should not use a phone viewport");
 });
 
 test("repository is MIT licensed", () => {
