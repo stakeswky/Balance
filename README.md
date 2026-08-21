@@ -43,3 +43,7 @@ Claude、Grok、Codex 分别读取本机 `~/.claude`、`~/.grok`（或 `$GROK_HO
 - 不要提交 `~/.claude`、`~/.grok`、`~/.codex`、auth 文件或真实导出日志。
 - 远端部署无法读取访问者电脑上的本地 Agent 文件。
 - 仓库自带的 Claude 演示数据已经匿名化。
+
+## 许可证
+
+[MIT](./LICENSE)

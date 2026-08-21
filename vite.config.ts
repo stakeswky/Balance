@@ -6,8 +6,6 @@ import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 // @ts-expect-error JS helper alongside the TS vite config
 import { resolveNitroPreset } from "./scripts/distribution-mode.mjs";
-// @ts-expect-error JS plugin alongside the TS vite config
-import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
 
 /**
  * Finish PGLite bootstrap during dev-server setup (before traffic). Vite awaits
@@ -125,19 +123,14 @@ function authPopupPlugin(): Plugin {
   };
 }
 
-// `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // Keep `nitro` gated to `build` (the Vercel deploy target): enabled in dev it
-// opens a second dev-server port, which breaks the single-port preview.
-// The dev server starts once `src/router.tsx` and `src/routes/` exist — see
-// AGENTS.md § "First scaffold".
+// opens a second dev-server port, which breaks the single-port 8080 preview.
 export default defineConfig(({ command }) => {
   const nitroPreset = resolveNitroPreset(process.env);
   const plugins: Plugin[] = [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
     authPopupPlugin(),
-    // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
-    grokPwaPlugin(),
     tailwindcss(),
     tanstackStart(),
   ];
@@ -150,12 +143,8 @@ export default defineConfig(({ command }) => {
             // runtime. Full-trace the package so the no-DATABASE_URL fallback
             // remains runnable from the Vercel function bundle.
             traceDeps: ["@electric-sql/pglite*"],
-            // Auto-registers server/middleware/* (the PWA install page +
-            // manifest + head-tag middleware). Nitro v3 defaults serverDir to
-            // false, so removing this silently unwires /?install=1 on deploys.
-            serverDir: "./server",
           }
-        : { preset: nitroPreset, serverDir: "./server" };
+        : { preset: nitroPreset };
     plugins.push(nitro(nitroOptions));
   }
   plugins.push(viteReact());

@@ -159,3 +159,44 @@ test("git does not track App Builder, plans, or extra screenshots", () => {
     "screenshots/claude-grok-quota-mobile.png",
   ]);
 });
+
+test("repository is MIT licensed", () => {
+  const license = read("LICENSE");
+  assert.match(license, /^MIT License/m);
+  assert.match(license, /Permission is hereby granted, free of charge/);
+  assert.equal(JSON.parse(read("package.json")).license, "MIT");
+  assert.match(read("README.md"), /\[MIT\]\(\.\/LICENSE\)/);
+});
+
+test("App Builder PWA, preview bridge, and unused multiplayer are gone", () => {
+  const files = tracked();
+  for (const prefix of [
+    "public/__grok/",
+    "scripts/grok-pwa-plugin.mjs",
+    "scripts/grok-pwa-plugin.test.mjs",
+    "scripts/grok-pwa-shared.mjs",
+    "scripts/grok-pwa-shared.d.mts",
+    "scripts/install-page.html",
+    "server/",
+    "src/components/preview-host-bridge.tsx",
+    "src/lib/preview-host-bridge.ts",
+    "src/lib/preview-embedder-origin.ts",
+    "src/lib/multiplayer/",
+  ]) {
+    assert.equal(
+      files.filter((file) => file === prefix || file.startsWith(prefix)).length,
+      0,
+      `tracked App Builder path: ${prefix}`,
+    );
+    const diskPath = join(root, prefix.replace(/\/$/, ""));
+    assert.equal(existsSync(diskPath), false, `still on disk: ${prefix}`);
+  }
+
+  const rootRoute = read("src/routes/__root.tsx");
+  assert.doesNotMatch(rootRoute, /PreviewHostBridge/);
+  assert.doesNotMatch(rootRoute, /\/__grok\//);
+
+  const viteConfig = read("vite.config.ts");
+  assert.doesNotMatch(viteConfig, /grokPwaPlugin/);
+  assert.doesNotMatch(viteConfig, /serverDir/);
+});
