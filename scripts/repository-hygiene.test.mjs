@@ -74,7 +74,7 @@ test("macOS verification is one-command and documented", () => {
     assert.ok(verify.includes(`desktop:verify:${script}`), `desktop:verify omits ${script}`);
   }
 
-  const readme = read("README.md");
+  const macosDoc = read("docs/macos-desktop.md");
   for (const required of [
     "npm run desktop:verify",
     "Accessibility",
@@ -82,7 +82,23 @@ test("macOS verification is one-command and documented", () => {
     "startup-error",
     "hdiutil verify",
   ]) {
-    assert.ok(readme.includes(required), `README missing desktop verification detail: ${required}`);
+    assert.ok(macosDoc.includes(required), `macOS doc missing desktop verification detail: ${required}`);
+  }
+});
+
+test("README stays user-facing and omits maintainer verification", () => {
+  const readme = read("README.md");
+  for (const forbidden of [
+    "Accessibility",
+    "SIGKILL",
+    "startup-error",
+    "hdiutil verify",
+    "npm run desktop:verify",
+    "L1：",
+    "L2：",
+    "L3：",
+  ]) {
+    assert.ok(!readme.includes(forbidden), `README should not include: ${forbidden}`);
   }
 });
 
