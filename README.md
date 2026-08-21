@@ -14,7 +14,7 @@
 
 ## macOS 应用
 
-打包版目前只提供 **Apple Silicon**。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.0_aarch64.dmg`，把「余量」拖进「应用程序」。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。
+打包版目前只提供 **Apple Silicon**。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.1_aarch64.dmg`，把「余量」拖进「应用程序」。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。
 
 当前构建使用 macOS ad-hoc 签名，尚未经过 Apple 公证。从网络下载后，Gatekeeper 可能提示「无法打开，因为无法确认开发者」，或「已损坏，无法打开」。这是隔离属性导致的，应用本身没有损坏。
 
@@ -36,7 +36,7 @@ open /Applications/Balance.app
 如果还没拷到「应用程序」，对下载的 DMG 做同样处理：
 
 ```bash
-xattr -cr ~/Downloads/Balance_0.1.0_aarch64.dmg
+xattr -cr ~/Downloads/Balance_0.1.1_aarch64.dmg
 ```
 
 这是公证完成前的临时方案。之后会换成 Developer ID 签名 + notarization，首次打开就不会再被 Gatekeeper 拦截。
