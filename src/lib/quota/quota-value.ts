@@ -262,6 +262,18 @@ function weightedPercentile(rows: { value: number; weight: number }[], p: number
   return sorted[sorted.length - 1]!.value;
 }
 
+function weightedMad(rows: { value: number; weight: number }[], center: number): number {
+  return weightedMedian(rows.map((row) => ({
+    value: Math.abs(row.value - center),
+    weight: row.weight,
+  })));
+}
+
+function relativeCenterDistance(left: number, right: number): number {
+  const scale = Math.max(Math.abs(left), Math.abs(right), Number.EPSILON);
+  return Math.abs(left - right) / scale;
+}
+
 function modelMixDrift(a: Record<string, number>, b: Record<string, number>): number {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   let sum = 0;
@@ -477,11 +489,15 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
       : usable.filter((slope) => hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35);
   if (!compatible.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
-  const values = compatible.map((s) => s.value);
-  const m = median(values);
-  const mad = median(values.map((v) => Math.abs(v - m)));
-  const kept = compatible.filter((s) => Math.abs(s.value - m) <= Math.max(3 * mad, 0.25 * m));
+  const unweightedCenter = median(compatible.map((slope) => slope.value));
+  const weightedCenter = weightedMedian(compatible);
+  const mad = weightedMad(compatible, weightedCenter);
+  const threshold = Math.max(3 * mad, 0.25 * weightedCenter);
+  const kept = compatible.filter((slope) =>
+    Math.abs(slope.value - weightedCenter) <= threshold,
+  );
   if (!kept.length) return { ...empty, externalUsageDetected, anomalousPairs };
+  const centerConflict = relativeCenterDistance(unweightedCenter, weightedCenter) > 0.35;
 
   const point = weightedMedian(kept);
   const lowRaw = weightedPercentile(kept, 0.25);
@@ -499,7 +515,8 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
           kept.map((slope) => ({ value: modelMixDrift(slope.modelMix, currentMix), weight: slope.weight })),
         );
 
-  const cheap = compatible.some((s) => s.value < m * 0.4);
+  const cheapThreshold = weightedCenter * 0.4;
+  const cheap = compatible.some((s) => s.value < cheapThreshold - Number.EPSILON * Math.max(1, cheapThreshold) * 8);
   const sumPct = kept.reduce((s, r) => s + r.weight, 0);
   const coverage = last?.pricedTokenCoverage ?? 0;
   let confidence: ValueConfidence = "none";
@@ -508,6 +525,9 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   } else if (kept.length >= 3 && sumPct >= 5 && coverage >= 0.9 && drift <= 0.35) {
     confidence = "medium";
   } else if (kept.length >= 1 && sumPct >= 2 && coverage >= 0.8) {
+    confidence = "low";
+  }
+  if (centerConflict && (confidence === "high" || confidence === "medium")) {
     confidence = "low";
   }
   const downgrade = (c: ValueConfidence): ValueConfidence =>

@@ -981,3 +981,22 @@ test("weighted median interpolates an exact half-weight boundary", () => {
     { value: 0.6, weight: 10 },
   ]), 0.5);
 });
+
+test("weighted MAD keeps high-weight accurate slopes", () => {
+  const rows = [sample({ timestampMs: 0, usedPercent: 0, cumulativeObservedUsd: 0 })];
+  let pct = 0;
+  let usd = 0;
+  for (let index = 1; index <= 8; index += 1) {
+    pct += 1;
+    usd += 0.2;
+    rows.push(sample({ timestampMs: index, usedPercent: pct, cumulativeObservedUsd: usd }));
+  }
+  for (let index = 9; index <= 11; index += 1) {
+    pct += 10;
+    usd += 5;
+    rows.push(sample({ timestampMs: index, usedPercent: pct, cumulativeObservedUsd: usd }));
+  }
+  const result = calibrateFromSamples(rows, pct, false);
+  assert.equal(result.totalPointUsd, 50);
+  assert.equal(result.confidence, "low");
+});
