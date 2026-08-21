@@ -37,6 +37,10 @@ test("README documents local usage, verification, and real screenshots", () => {
     "screenshots/claude-grok-quota-desktop.png",
     "screenshots/claude-grok-quota-desktop-dark.png",
     "不是现金余额",
+    "xattr -cr",
+    "Gatekeeper",
+    "Linux",
+    "Windows",
   ]) {
     assert.ok(readme.includes(required), `README missing: ${required}`);
   }
