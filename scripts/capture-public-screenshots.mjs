@@ -125,7 +125,7 @@ function productionServerFnIds(name) {
   for (const directory of [
     resolve(ROOT, ".output/server/_ssr"),
     resolve(ROOT, ".vercel/output/functions/__server.func/_ssr"),
-    "/Applications/Balance.app/Contents/Resources/synq-server/server/_ssr",
+    "/Applications/Balance.app/Contents/Resources/balance-server/server/_ssr",
   ]) {
     if (!existsSync(directory)) continue;
     for (const file of readdirSync(directory).filter(
@@ -177,7 +177,7 @@ async function capture(browser, spec) {
   await context.addInitScript(
     ({ persistedState, theme }) => {
       try {
-        localStorage.setItem("synq-quota-v8", JSON.stringify(persistedState));
+        localStorage.setItem("balance-quota-v8", JSON.stringify(persistedState));
         localStorage.setItem("remain-theme", theme);
         const root = document.documentElement;
         if (root) {
@@ -280,7 +280,7 @@ async function capture(browser, spec) {
     await page.waitForTimeout(1500);
 
     const state = await page.evaluate(() => {
-      const raw = localStorage.getItem("synq-quota-v8");
+      const raw = localStorage.getItem("balance-quota-v8");
       return raw ? JSON.parse(raw)?.state : null;
     });
     assert.equal(state?.demoMode, true);
@@ -312,7 +312,7 @@ async function capture(browser, spec) {
         "\n" +
         attributes +
         "\n" +
-        (localStorage.getItem("synq-quota-v8") || "")
+        (localStorage.getItem("balance-quota-v8") || "")
       );
     });
     assertPrivateTextAbsent(surface + "\n" + networkSurface.join("\n"));
@@ -351,7 +351,7 @@ try {
   await browser.close();
 }
 writeFileSync(
-  "/tmp/synq-public-screenshots.json",
+  "/tmp/balance-public-screenshots.json",
   JSON.stringify({ base: BASE, results }, null, 2) + "\n",
 );
 console.log(JSON.stringify({ base: BASE, results }, null, 2));

@@ -12,14 +12,14 @@ import {
   shouldEnforceDesktopHost,
 } from "./local-request.server.ts";
 
-const originalDesktopFlag = process.env.SYNQ_DESKTOP;
+const originalDesktopFlag = process.env.BALANCE_DESKTOP;
 
 afterEach(() => {
   if (originalDesktopFlag === undefined) {
-    delete process.env.SYNQ_DESKTOP;
+    delete process.env.BALANCE_DESKTOP;
     return;
   }
-  process.env.SYNQ_DESKTOP = originalDesktopFlag;
+  process.env.BALANCE_DESKTOP = originalDesktopFlag;
 });
 
 type GuardResult = {
@@ -33,7 +33,7 @@ async function invokeGuard(opts: {
   host: string;
   secFetchSite?: string;
 }): Promise<GuardResult> {
-  process.env.SYNQ_DESKTOP = opts.desktop ? "1" : "0";
+  process.env.BALANCE_DESKTOP = opts.desktop ? "1" : "0";
 
   let error: unknown = null;
   let responseStatus = 200;
@@ -72,8 +72,9 @@ async function invokeGuard(opts: {
 }
 
 test("desktop host policy only activates in desktop runtime", () => {
+  assert.equal(shouldEnforceDesktopHost({ BALANCE_DESKTOP: "1" }), true);
   assert.equal(shouldEnforceDesktopHost({ SYNQ_DESKTOP: "1" }), true);
-  assert.equal(shouldEnforceDesktopHost({ SYNQ_DESKTOP: "0" }), false);
+  assert.equal(shouldEnforceDesktopHost({ BALANCE_DESKTOP: "0" }), false);
   assert.equal(shouldEnforceDesktopHost({}), false);
 });
 

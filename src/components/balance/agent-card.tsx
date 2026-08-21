@@ -8,8 +8,8 @@ import {
   formatUsd,
   formatUsdRange,
   modelLabel,
-} from "@/components/synq/format";
-import { MeterBar } from "@/components/synq/meter-bar";
+} from "@/components/balance/format";
+import { MeterBar } from "@/components/balance/meter-bar";
 import {
   inWindow,
   modelShares,

@@ -1,5 +1,8 @@
-export function isDesktopRuntime(
-  env: Readonly<{ SYNQ_DESKTOP?: string }> = process.env,
-): boolean {
-  return env.SYNQ_DESKTOP === "1";
+export type DesktopRuntimeEnv = Readonly<{
+  BALANCE_DESKTOP?: string;
+  SYNQ_DESKTOP?: string;
+}>;
+
+export function isDesktopRuntime(env: DesktopRuntimeEnv = process.env): boolean {
+  return env.BALANCE_DESKTOP === "1" || env.SYNQ_DESKTOP === "1";
 }

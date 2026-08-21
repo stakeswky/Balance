@@ -11,7 +11,7 @@ function assistant(partial: Record<string, unknown>) {
     type: "assistant",
     timestamp: "2026-08-19T15:12:29.612Z",
     sessionId: "sess-1",
-    cwd: "/tmp/synq-fixture/claude",
+    cwd: "/tmp/balance-fixture/claude",
     requestId: "req_aaa",
     message: {
       role: "assistant",
@@ -98,7 +98,7 @@ test("user / queue lines are ignored", () => {
 });
 
 test("incremental scan only returns new requestIds after the first pass", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-claude-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-claude-"));
   const dir = join(home, ".claude", "projects", "-Volumes-data-dev-demo");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
@@ -123,7 +123,7 @@ test("incremental scan only returns new requestIds after the first pass", () => 
 });
 
 test("Claude per-file cursor keeps a late parallel event older than global since", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-claude-late-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-claude-late-"));
   const dir = join(home, ".claude", "projects", "-demo");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "root-session.jsonl");
@@ -179,7 +179,7 @@ test("Claude keeps billing session and subagent actor identities separate", () =
 });
 
 test("Claude reports concurrently writing subagents as active", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-claude-active-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-claude-active-"));
   const root = join(home, ".claude", "projects", "-demo", "parent-session");
   const subagents = join(root, "subagents");
   mkdirSync(subagents, { recursive: true });
@@ -200,7 +200,7 @@ test("Claude reports concurrently writing subagents as active", () => {
 });
 
 test("Claude workflow subagent prefers the workflow label over its long prompt", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-claude-workflow-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-claude-workflow-"));
   const session = join(home, ".claude", "projects", "-demo", "parent-session");
   const workflowDir = join(session, "workflows");
   const logDir = join(session, "subagents", "workflows", "wf_demo");

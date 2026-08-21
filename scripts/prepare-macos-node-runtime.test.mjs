@@ -27,7 +27,7 @@ test("arm64 runtime metadata is immutable", () => {
     spec.sha256,
     "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6",
   );
-  assert.equal(spec.output, "synq-node-aarch64-apple-darwin");
+  assert.equal(spec.output, "balance-node-aarch64-apple-darwin");
   assert.equal(
     spec.url,
     "https://nodejs.org/dist/v22.23.2/node-v22.23.2-darwin-arm64.tar.gz",
@@ -42,18 +42,18 @@ test("unsupported targets fail closed", () => {
 });
 
 test("sha256File returns the digest used before extraction", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "synq-runtime-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "balance-runtime-test-"));
   const file = join(dir, "payload");
-  await writeFile(file, "synq");
+  await writeFile(file, "balance");
   assert.equal(
     await sha256File(file),
-    "174a0e7303fa76871b0600446cc53b7ab9cd612d1b074ceb90ae9831120e20fd",
+    "5751e048eb6fee3eb9bb4ea70f107f19c35863766bee5100044e52ab60d9edcf",
   );
 });
 
 test("prepareRuntime re-downloads a bad cached archive and refreshes outputs", async () => {
-  const root = await mkdtemp(join(tmpdir(), "synq-runtime-root-"));
-  const archiveDir = join(root, ".cache", "synq-desktop");
+  const root = await mkdtemp(join(tmpdir(), "balance-runtime-root-"));
+  const archiveDir = join(root, ".cache", "balance-desktop");
   const binariesDir = join(root, "src-tauri", "binaries");
   const resourcesDir = join(root, "src-tauri", "resources", "node");
   const spec = runtimeSpec("aarch64-apple-darwin");
@@ -103,9 +103,9 @@ test("prepareRuntime re-downloads a bad cached archive and refreshes outputs", a
 });
 
 test("prepareRuntime fails closed when the downloaded archive checksum mismatches", async () => {
-  const root = await mkdtemp(join(tmpdir(), "synq-runtime-root-"));
+  const root = await mkdtemp(join(tmpdir(), "balance-runtime-root-"));
   const spec = runtimeSpec("aarch64-apple-darwin");
-  const archivePath = join(root, ".cache", "synq-desktop", spec.archive);
+  const archivePath = join(root, ".cache", "balance-desktop", spec.archive);
   let downloads = 0;
   let extracts = 0;
 

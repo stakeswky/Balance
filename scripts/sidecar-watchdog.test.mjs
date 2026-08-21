@@ -20,7 +20,7 @@ test("sidecar watchdog exits when the Tauri stdin pipe closes", async () => {
     process.execPath,
     ["--require", watchdog, "--eval", "setInterval(() => {}, 1000)"],
     {
-      env: { ...process.env, SYNQ_PARENT_PID: String(process.pid) },
+      env: { ...process.env, BALANCE_PARENT_PID: String(process.pid) },
       stdio: ["pipe", "ignore", "pipe"],
     },
   );
@@ -35,7 +35,7 @@ test("sidecar watchdog fails closed for a mismatched parent pid", async () => {
     process.execPath,
     ["--require", watchdog, "--eval", "setInterval(() => {}, 1000)"],
     {
-      env: { ...process.env, SYNQ_PARENT_PID: "1" },
+      env: { ...process.env, BALANCE_PARENT_PID: "1" },
       stdio: ["pipe", "ignore", "pipe"],
     },
   );

@@ -65,7 +65,7 @@ private let pidArgument = startupErrorMode ? CommandLine.arguments[2] :
 guard (CommandLine.arguments.count == 2 || startupErrorMode),
       let rawPid = Int32(pidArgument),
       rawPid > 0 else {
-  fail("usage: macos-ui-smoke.swift [--startup-error] <synq-pid>")
+  fail("usage: macos-ui-smoke.swift [--startup-error] <balance-pid>")
 }
 
 guard AXIsProcessTrusted() else {

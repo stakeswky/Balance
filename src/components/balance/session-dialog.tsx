@@ -1,5 +1,5 @@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { formatDuration, formatTokens, formatUsd, modelLabel } from "@/components/synq/format";
+import { formatDuration, formatTokens, formatUsd, modelLabel } from "@/components/balance/format";
 import { AGENT_LABEL } from "@/lib/quota/agent";
 import { apiUsd, rawTokens } from "@/lib/quota/engine";
 import { eventsForActivity, type UsageEvent } from "@/lib/quota/types";

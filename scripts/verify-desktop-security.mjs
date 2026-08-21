@@ -121,7 +121,7 @@ const server = spawn(process.execPath, [".output/server/index.mjs"], {
     NITRO_HOST: "127.0.0.1",
     PORT: "4780",
     NITRO_PORT: "4780",
-    SYNQ_DESKTOP: "1",
+    BALANCE_DESKTOP: "1",
     VITE_AUTH_ENABLED: "false",
     NODE_ENV: "production",
   },

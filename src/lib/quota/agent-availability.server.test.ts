@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { detectAgentAvailability } from "./agent-availability.server.ts";
 
 test("detectAgentAvailability returns false when no monitorable home exists", (t) => {
-  const home = mkdtempSync(join(tmpdir(), "synq-presence-empty-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-presence-empty-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   assert.deepEqual(
     detectAgentAvailability({
@@ -19,8 +19,8 @@ test("detectAgentAvailability returns false when no monitorable home exists", (t
 });
 
 test("detectAgentAvailability recognizes Claude primary and config homes", (t) => {
-  const primary = mkdtempSync(join(tmpdir(), "synq-presence-claude-primary-"));
-  const config = mkdtempSync(join(tmpdir(), "synq-presence-claude-config-"));
+  const primary = mkdtempSync(join(tmpdir(), "balance-presence-claude-primary-"));
+  const config = mkdtempSync(join(tmpdir(), "balance-presence-claude-config-"));
   t.after(() => rmSync(primary, { recursive: true, force: true }));
   t.after(() => rmSync(config, { recursive: true, force: true }));
   mkdirSync(join(primary, ".claude"));
@@ -30,7 +30,7 @@ test("detectAgentAvailability recognizes Claude primary and config homes", (t) =
 });
 
 test("GROK_HOME and CODEX_HOME overrides are authoritative", (t) => {
-  const home = mkdtempSync(join(tmpdir(), "synq-presence-overrides-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-presence-overrides-"));
   const grokHome = join(home, "grok-data");
   const codexHome = join(home, "codex-data");
   mkdirSync(grokHome);
@@ -47,7 +47,7 @@ test("GROK_HOME and CODEX_HOME overrides are authoritative", (t) => {
 });
 
 test("a symlink to a directory counts as an available Agent home", (t) => {
-  const home = mkdtempSync(join(tmpdir(), "synq-presence-symlink-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-presence-symlink-"));
   const target = join(home, "codex-target");
   const link = join(home, "codex-link");
   mkdirSync(target);
@@ -67,7 +67,7 @@ function isolatedHome(t: { after: (fn: () => void) => void }, prefix: string) {
 }
 
 test("detectAgentAvailability reports Claude-only when Grok and Codex homes are missing", (t) => {
-  const { home, grokHome, codexHome } = isolatedHome(t, "synq-presence-only-claude-");
+  const { home, grokHome, codexHome } = isolatedHome(t, "balance-presence-only-claude-");
   mkdirSync(join(home, ".claude"));
   assert.deepEqual(detectAgentAvailability({ home, grokHome, codexHome }), {
     claude: true,
@@ -77,7 +77,7 @@ test("detectAgentAvailability reports Claude-only when Grok and Codex homes are 
 });
 
 test("detectAgentAvailability reports Grok-only when Claude and Codex homes are missing", (t) => {
-  const { home, grokHome, codexHome } = isolatedHome(t, "synq-presence-only-grok-");
+  const { home, grokHome, codexHome } = isolatedHome(t, "balance-presence-only-grok-");
   const grok = join(home, "only-grok");
   mkdirSync(grok);
   assert.deepEqual(
@@ -92,7 +92,7 @@ test("detectAgentAvailability reports Grok-only when Claude and Codex homes are 
 });
 
 test("detectAgentAvailability reports Codex-only when Claude and Grok homes are missing", (t) => {
-  const { home, grokHome, codexHome } = isolatedHome(t, "synq-presence-only-codex-");
+  const { home, grokHome, codexHome } = isolatedHome(t, "balance-presence-only-codex-");
   const codex = join(home, "only-codex");
   mkdirSync(codex);
   assert.deepEqual(
@@ -102,7 +102,7 @@ test("detectAgentAvailability reports Codex-only when Claude and Grok homes are 
 });
 
 test("detectAgentAvailability reports each two-agent pair", (t) => {
-  const { home, grokHome, codexHome } = isolatedHome(t, "synq-presence-pairs-");
+  const { home, grokHome, codexHome } = isolatedHome(t, "balance-presence-pairs-");
   mkdirSync(join(home, ".claude"));
   const grok = join(home, "pair-grok");
   const codex = join(home, "pair-codex");
@@ -126,7 +126,7 @@ test("detectAgentAvailability reports each two-agent pair", (t) => {
 });
 
 test("detectAgentAvailability reports all three agents when every home exists", (t) => {
-  const { home } = isolatedHome(t, "synq-presence-all-");
+  const { home } = isolatedHome(t, "balance-presence-all-");
   mkdirSync(join(home, ".claude"));
   const grokHome = join(home, "all-grok");
   const codexHome = join(home, "all-codex");
@@ -140,7 +140,7 @@ test("detectAgentAvailability reports all three agents when every home exists", 
 });
 
 test("GROK_HOME env overrides the default ~/.grok directory", (t) => {
-  const { home, codexHome } = isolatedHome(t, "synq-presence-grok-env-");
+  const { home, codexHome } = isolatedHome(t, "balance-presence-grok-env-");
   mkdirSync(join(home, ".grok"));
   const custom = join(home, "env-grok");
   mkdirSync(custom);
@@ -158,7 +158,7 @@ test("GROK_HOME env overrides the default ~/.grok directory", (t) => {
 });
 
 test("CODEX_HOME env overrides the default ~/.codex directory", (t) => {
-  const { home, grokHome } = isolatedHome(t, "synq-presence-codex-env-");
+  const { home, grokHome } = isolatedHome(t, "balance-presence-codex-env-");
   mkdirSync(join(home, ".codex"));
   const custom = join(home, "env-codex");
   mkdirSync(custom);

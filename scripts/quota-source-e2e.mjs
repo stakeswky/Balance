@@ -208,7 +208,7 @@ async function runScenario(browser, scenarioName, viewportName) {
   const serverFnRequests = [];
   await context.addInitScript(() => {
     localStorage.setItem(
-      "synq-quota-v8",
+      "balance-quota-v8",
       JSON.stringify({
         state: {
           onboardingComplete: true,
@@ -314,7 +314,7 @@ async function runScenario(browser, scenarioName, viewportName) {
     }
     if (scenario.expectNoAlerts) {
       const alertCount = await page.evaluate(() => {
-        const raw = localStorage.getItem("synq-quota-v8");
+        const raw = localStorage.getItem("balance-quota-v8");
         return raw ? (JSON.parse(raw)?.state?.alerts?.length ?? 0) : 0;
       });
       if (alertCount !== 0) throw new Error(`stale quota emitted ${alertCount} alerts`);
@@ -377,7 +377,7 @@ try {
   await browser.close();
 }
 
-const reportPath = "/tmp/synq-quota-source-e2e.json";
+const reportPath = "/tmp/balance-quota-source-e2e.json";
 writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(`report ${reportPath}`);
 if (report.failed) process.exit(1);

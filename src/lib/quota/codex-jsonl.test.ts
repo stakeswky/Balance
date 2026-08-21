@@ -8,7 +8,7 @@ import { createCodexScanState, scanCodexUsage } from "./codex-log.server.ts";
 
 const meta: CodexSessionMeta = {
   sessionId: "sess-c",
-  cwd: "/tmp/synq-fixture/codex",
+  cwd: "/tmp/balance-fixture/codex",
   title: "Codex 会话",
   model: "gpt-5.4",
 };
@@ -89,7 +89,7 @@ test("non token_count lines are ignored", () => {
 });
 
 test("incremental scan only emits new token_count ids", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-codex-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-codex-"));
   const codexHome = join(home, ".codex");
   const dir = join(codexHome, "sessions", "2026", "08", "20");
   mkdirSync(dir, { recursive: true });
@@ -134,7 +134,7 @@ test("incremental scan only emits new token_count ids", () => {
 });
 
 test("Codex per-file cursor keeps a late parallel event older than global since", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-codex-late-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-codex-late-"));
   const codexHome = join(home, ".codex");
   const dir = join(codexHome, "sessions", "2026", "08", "20");
   mkdirSync(dir, { recursive: true });
@@ -150,7 +150,7 @@ test("Codex per-file cursor keeps a late parallel event older than global since"
 });
 
 test("Codex reports parallel sessions and deduplicates rollouts for one session", () => {
-  const home = mkdtempSync(join(tmpdir(), "synq-codex-active-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-codex-active-"));
   const codexHome = join(home, ".codex");
   const dir = join(codexHome, "sessions", "2026", "08", "20");
   mkdirSync(dir, { recursive: true });

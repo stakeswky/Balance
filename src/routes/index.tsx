@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Dashboard } from "@/components/synq/dashboard";
-import { Onboarding } from "@/components/synq/onboarding";
+import { Dashboard } from "@/components/balance/dashboard";
+import { Onboarding } from "@/components/balance/onboarding";
 import { useQuota } from "@/lib/quota/store";
 import { pullAgentAvailability } from "@/lib/quota/watch";
 

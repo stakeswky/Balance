@@ -7,35 +7,38 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(resolve(root, relative), "utf8");
 
-test("Balance keeps the Synq persistence and desktop protocol identifiers", () => {
+test("Balance migrates Synq persistence identifiers instead of keeping them", () => {
   const store = read("src/lib/quota/store.ts");
-  assert.match(store, /name: "synq-quota-v8"/);
-  assert.match(store, /removeItem\("synq-quota-v7"\)/);
+  assert.match(store, /name: "balance-quota-v8"/);
+  assert.match(store, /"synq-quota-v8"/);
+  assert.match(store, /"synq-quota-v7"/);
 
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
-  assert.equal(config.identifier, "com.synq.desktop");
+  assert.equal(config.identifier, "com.balance.desktop");
 
   const rust = read("src-tauri/src/lib.rs");
   assert.match(rust, /const SIDECAR_HOST: &str = "127\.0\.0\.1"/);
   assert.match(rust, /const SIDECAR_PORT: u16 = 4780/);
-  assert.match(rust, /\{\\"app\\":\\"synq\\",\\"mode\\":\\"desktop\\"\}/);
+  assert.match(rust, /\{\\"app\\":\\"balance\\",\\"mode\\":\\"desktop\\"\}/);
 
   const official = read("src/lib/quota/official.server.ts");
+  assert.match(official, /"Application Support", "Balance", "official-quota\.json"/);
   assert.match(official, /"Application Support", "Synq", "official-quota\.json"/);
+  assert.match(official, /function resolveClaudeSnapshotPath/);
 });
 
 test("installed screenshot capture follows Balance without changing storage", () => {
   const capture = read("scripts/capture-public-screenshots.mjs");
-  assert.match(capture, /\/Applications\/Balance\.app\/Contents\/Resources\/synq-server/);
+  assert.match(capture, /\/Applications\/Balance\.app\/Contents\/Resources\/balance-server/);
   assert.doesNotMatch(capture, /\/Applications\/Synq\.app/);
-  assert.match(capture, /localStorage\.setItem\("synq-quota-v8"/);
-  assert.match(capture, /localStorage\.getItem\("synq-quota-v8"/);
+  assert.match(capture, /localStorage\.setItem\("balance-quota-v8"/);
+  assert.match(capture, /localStorage\.getItem\("balance-quota-v8"/);
   assert.match(capture, /余量 \/ Balance/);
   assert.match(capture, /getByText\("余量", \{ exact: true \}\)/);
 });
 
 test("native verification reads the persisted settings through the Balance UI", () => {
-  const plans = read("src/components/synq/plans-panel.tsx");
+  const plans = read("src/components/balance/plans-panel.tsx");
   assert.match(plans, /aria-label=\{active \? `\$\{p\.name\}，当前套餐` : p\.name\}/);
   assert.match(plans, /aria-label="周额度加成百分比"/);
   assert.match(plans, /aria-label="五小时窗告警阈值"/);

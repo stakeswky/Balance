@@ -29,7 +29,7 @@ const ARM64_SPEC = Object.freeze({
   archive: `node-${NODE_VERSION}-darwin-arm64.tar.gz`,
   directory: `node-${NODE_VERSION}-darwin-arm64`,
   sha256: "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6",
-  output: "synq-node-aarch64-apple-darwin",
+  output: "balance-node-aarch64-apple-darwin",
   url: `${NODE_BASE_URL}/node-${NODE_VERSION}-darwin-arm64.tar.gz`,
 });
 
@@ -58,7 +58,7 @@ async function download(url, destination) {
 }
 
 function extractNodeRuntime({ archivePath, licensePath, outputPath, spec }) {
-  const extractDir = mkdtempSync(join(tmpdir(), "synq-node-runtime-"));
+  const extractDir = mkdtempSync(join(tmpdir(), "balance-node-runtime-"));
   try {
     execFileSync("tar", ["-xzf", archivePath, "-C", extractDir]);
     const sourceRoot = join(extractDir, spec.directory);
@@ -85,7 +85,7 @@ export async function prepareRuntime({
   sha256 = sha256File,
 } = {}) {
   const spec = runtimeSpec(target);
-  const cacheDir = join(root, ".cache", "synq-desktop");
+  const cacheDir = join(root, ".cache", "balance-desktop");
   const archivePath = join(cacheDir, spec.archive);
   const outputPath = join(root, "src-tauri", "binaries", spec.output);
   const licensePath = join(root, "src-tauri", "resources", "node", "LICENSE");

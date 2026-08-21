@@ -5,7 +5,7 @@
 覆盖范围：Claude Code、Grok、Codex 订阅额度与本地 JSONL 用量
 参考实现：`sub2api` 项目的模型计价与窗口统计思路
 
-当前实现使用 `PRICING_VERSION = 2026-08-20-synq-3`。Claude 同时计算 5h 与 7d 窗口，Grok 计算官方共享周池，Codex 保持官方主窗口并额外提供公开 rate card 的 credit 等价。三者的美元结果都是 API 等价金额；只有 Codex 产生 credit 等价，Claude/Grok 不借用 OpenAI credit 单位。
+当前实现使用 `PRICING_VERSION = 2026-08-21-balance-1`。Claude 同时计算 5h 与 7d 窗口，Grok 计算官方共享周池，Codex 保持官方主窗口并额外提供公开 rate card 的 credit 等价。三者的美元结果都是 API 等价金额；只有 Codex 产生 credit 等价，Claude/Grok 不借用 OpenAI credit 单位。
 
 ## 1. 目标
 
@@ -341,7 +341,7 @@ rawTokens = uncachedInputTokens
 
 ### 7.4 当前价格快照
 
-当前仓库快照版本为 `2026-08-20-synq-3`，按供应商公开标准 API 价分别保存 Claude Fable 5、Opus 5/4.x、Sonnet 5、Sonnet 4.6、Haiku 4.5，以及 Grok 4.6、Grok 4.5、grok-build-0.1。别名必须归到同一精确价格键，例如 `grok-4.6-build → grok-4.6`，避免仅因命名不同制造模型组合漂移。
+当前仓库快照版本为 `2026-08-21-balance-1`，按供应商公开标准 API 价分别保存 Claude Fable 5、Opus 5/4.x、Sonnet 5、Sonnet 4.6、Haiku 4.5，以及 Grok 4.6、Grok 4.5、grok-build-0.1。别名必须归到同一精确价格键，例如 `grok-4.6-build → grok-4.6`，避免仅因命名不同制造模型组合漂移。
 
 价格与订阅语义的官方校验来源：
 
@@ -823,7 +823,7 @@ UI 应显示区间和置信度，不能只显示 `$19.32`。
 | `src/lib/quota/official.ts` | 解析 Claude/Grok/Codex 官方利用率历史与 reset 边界 |
 | `src/lib/quota/quota-value.ts` | 生成稳定 `windowId`，实现同窗口差分、稳健区间和置信度算法 |
 | `src/lib/quota/store.ts` | 持久化有限数量的 QuotaSample，按窗口淘汰 |
-| `src/components/synq/agent-card.tsx` | 展示 L1、L2/L3 区间、覆盖率和价格来源 |
+| `src/components/balance/agent-card.tsx` | 展示 L1、L2/L3 区间、覆盖率和价格来源 |
 
 建议新增：
 

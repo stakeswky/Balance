@@ -7,7 +7,7 @@ import { createServer } from "vite";
 const mode = process.argv[2] === "production" ? "production" : "development";
 const server = await createServer({ mode, appType: "custom", server: { middlewareMode: true } });
 try {
-  const { AgentCard } = await server.ssrLoadModule("/src/components/synq/agent-card.tsx");
+  const { AgentCard } = await server.ssrLoadModule("/src/components/balance/agent-card.tsx");
   const now = Date.now();
   const activeTasks = ["a", "b", "c", "d", "e"].map((id, index) => ({
     sessionId: "parent",

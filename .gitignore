@@ -9,7 +9,7 @@ node_modules/
 claude-quota-report.md
 synq-claude-import.json
 screenshots/claude-grok-quota-production.png
-.cache/synq-desktop/
+.cache/balance-desktop/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 src-tauri/target/

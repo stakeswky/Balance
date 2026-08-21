@@ -1,7 +1,7 @@
 import { Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { PlansPanel } from "@/components/synq/plans-panel";
+import { PlansPanel } from "@/components/balance/plans-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";

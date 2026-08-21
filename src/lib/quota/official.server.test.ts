@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   CLAUDE_USAGE_STALE_MS,
@@ -10,15 +10,18 @@ import {
   claudeOauthAuthFromCredentials,
   claudeOauthAuthFromProcessEnvironment,
   claudeRetryAfterMs,
+  claudeSnapshotPath,
   clearOfficialCache,
   CODEX_USAGE_URL,
   GROK_BILLING_URL,
+  legacyClaudeSnapshotPath,
   readClaudeOauthAuth,
   readOfficialQuota,
+  resolveClaudeSnapshotPath,
 } from "./official.server.ts";
 
 function fixtureHome() {
-  const home = mkdtempSync(join(tmpdir(), "synq-official-"));
+  const home = mkdtempSync(join(tmpdir(), "balance-official-"));
   const grokHome = join(home, ".grok");
   mkdirSync(join(home, "Library", "Application Support", "Claude"), { recursive: true });
   mkdirSync(join(grokHome, "logs"), { recursive: true });
@@ -785,4 +788,28 @@ test("Claude auth discovery falls through when a managed child has no token", as
   });
 
   assert.deepEqual(auth, { accessToken: "file-token" });
+});
+
+test("claude snapshot path uses Balance and copies a legacy Synq file once", () => {
+  const home = mkdtempSync(join(tmpdir(), "balance-snapshot-mig-"));
+  const current = claudeSnapshotPath(home, "darwin", {});
+  const legacy = legacyClaudeSnapshotPath(home, "darwin", {});
+  assert.match(current, /Application Support\/Balance\/official-quota\.json$/);
+  assert.match(legacy, /Application Support\/Synq\/official-quota\.json$/);
+
+  mkdirSync(dirname(legacy), { recursive: true });
+  writeFileSync(legacy, '{"version":1,"claude":null}');
+  const resolved = resolveClaudeSnapshotPath(home, "darwin", {});
+  assert.equal(resolved, current);
+  assert.equal(readFileSync(current, "utf8"), '{"version":1,"claude":null}');
+  assert.equal(readFileSync(legacy, "utf8"), '{"version":1,"claude":null}');
+});
+
+test("linux snapshot path prefers XDG Balance over the legacy synq directory", () => {
+  const home = mkdtempSync(join(tmpdir(), "balance-snapshot-linux-"));
+  const env = { XDG_STATE_HOME: join(home, "xdg") };
+  const current = claudeSnapshotPath(home, "linux", env);
+  const legacy = legacyClaudeSnapshotPath(home, "linux", env);
+  assert.equal(current, join(home, "xdg", "balance", "official-quota.json"));
+  assert.equal(legacy, join(home, "xdg", "synq", "official-quota.json"));
 });

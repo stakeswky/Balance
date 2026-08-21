@@ -1,6 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
-import { ThemeSync } from "@/components/synq/theme-toggle";
+import { ThemeSync } from "@/components/balance/theme-toggle";
 import { THEME_BOOT } from "@/lib/theme";
 import "../styles.css";
 

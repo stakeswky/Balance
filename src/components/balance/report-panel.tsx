@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
-import { formatDuration, formatTokens, formatUsd, modelLabel } from "@/components/synq/format";
+import { formatDuration, formatTokens, formatUsd, modelLabel } from "@/components/balance/format";
 import {
   comparePlans,
   dailySeries,
@@ -302,7 +302,7 @@ export function ReportPanel({
               size="sm"
               variant="secondary"
               onClick={() => {
-                download("synq-week.csv", eventsToCsv(week), "text/csv");
+                download("balance-week.csv", eventsToCsv(week), "text/csv");
                 toast.success("已导出 CSV");
               }}
             >
@@ -312,7 +312,7 @@ export function ReportPanel({
               size="sm"
               variant="secondary"
               onClick={() => {
-                download("synq-week.json", JSON.stringify(week, null, 2), "application/json");
+                download("balance-week.json", JSON.stringify(week, null, 2), "application/json");
                 toast.success("已导出 JSON");
               }}
             >

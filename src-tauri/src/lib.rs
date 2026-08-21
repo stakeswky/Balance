@@ -11,16 +11,18 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tauri::menu::{MenuBuilder, MenuEvent, SubmenuBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
 
-const SIDECAR_BIN: &str = "synq-node";
+const SIDECAR_BIN: &str = "balance-node";
 const SIDECAR_HOST: &str = "127.0.0.1";
 const SIDECAR_PORT: u16 = 4780;
-const HEALTH_BODY: &str = "{\"app\":\"synq\",\"mode\":\"desktop\"}";
+const HEALTH_BODY: &str = "{\"app\":\"balance\",\"mode\":\"desktop\"}";
 const SIDECAR_ENV_ALLOWLIST: [&str; 6] = [
     "HOME",
     "GROK_HOME",
@@ -111,6 +113,92 @@ fn clear_sidecar(state: &SidecarState) {
     clear_lifecycle_child(&state.0);
 }
 
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn quit_app(app: &AppHandle) {
+    if let Some(state) = app.try_state::<SidecarState>() {
+        stop_sidecar(&state);
+    }
+    app.exit(0);
+}
+
+fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
+    match event.id().as_ref() {
+        "show" => show_main_window(app),
+        "quit-app" => quit_app(app),
+        _ => {}
+    }
+}
+
+fn install_desktop_shell(app: &AppHandle) -> tauri::Result<()> {
+    let app_menu = SubmenuBuilder::new(app, "余量")
+        .about(None)
+        .separator()
+        .text("show", "打开主窗口")
+        .separator()
+        .hide_with_text("隐藏余量")
+        .hide_others()
+        .show_all()
+        .separator()
+        .text("quit-app", "退出余量")
+        .build()?;
+    let edit_menu = SubmenuBuilder::new(app, "编辑")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let window_menu = SubmenuBuilder::new(app, "窗口")
+        .minimize()
+        .separator()
+        .close_window()
+        .build()?;
+    let menu = MenuBuilder::new(app)
+        .item(&app_menu)
+        .item(&edit_menu)
+        .item(&window_menu)
+        .build()?;
+    app.set_menu(menu)?;
+    app.on_menu_event(handle_menu_event);
+
+    let tray_menu = MenuBuilder::new(app)
+        .text("show", "打开余量")
+        .separator()
+        .text("quit-app", "退出")
+        .build()?;
+    if let Some(icon) = app.default_window_icon() {
+        TrayIconBuilder::with_id("balance-tray")
+            .icon(icon.clone())
+            .menu(&tray_menu)
+            .tooltip("余量 / Balance")
+            .show_menu_on_left_click(false)
+            .on_menu_event(handle_menu_event)
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    show_main_window(tray.app_handle());
+                }
+            })
+            .build(app)?;
+    } else {
+        eprintln!("Balance menu bar icon is missing; continuing without a tray extra");
+    }
+    Ok(())
+}
+
 fn ensure_port_available() -> Result<(), String> {
     TcpListener::bind((SIDECAR_HOST, SIDECAR_PORT))
         .map(|listener| drop(listener))
@@ -139,7 +227,7 @@ fn decode_chunked_body(mut body: &str) -> Option<String> {
     }
 }
 
-fn is_synq_health_response(response: &str) -> bool {
+fn is_desktop_health_response(response: &str) -> bool {
     let Some((head, body)) = response.split_once("\r\n\r\n") else {
         return false;
     };
@@ -176,7 +264,7 @@ fn request_health() -> Result<bool, String> {
     stream
         .read_to_string(&mut response)
         .map_err(|error| error.to_string())?;
-    Ok(is_synq_health_response(&response))
+    Ok(is_desktop_health_response(&response))
 }
 
 fn wait_for_health(timeout: Duration) -> Result<(), String> {
@@ -195,7 +283,7 @@ fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> 
         .path()
         .resource_dir()
         .map_err(|error| error.to_string())?;
-    let root = resource_dir.join("synq-server");
+    let root = resource_dir.join("balance-server");
     let entry = root.join("server").join("index.mjs");
     if !entry.is_file() {
         return Err(format!(
@@ -221,17 +309,17 @@ fn drain_sidecar_events(
         while let Some(event) = receiver.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
-                    eprintln!("[synq-node][stdout] {}", String::from_utf8_lossy(&bytes));
+                    eprintln!("[balance-node][stdout] {}", String::from_utf8_lossy(&bytes));
                 }
                 CommandEvent::Stderr(bytes) => {
-                    eprintln!("[synq-node][stderr] {}", String::from_utf8_lossy(&bytes));
+                    eprintln!("[balance-node][stderr] {}", String::from_utf8_lossy(&bytes));
                 }
                 CommandEvent::Error(error) => {
-                    eprintln!("[synq-node][error] {error}");
+                    eprintln!("[balance-node][error] {error}");
                 }
                 CommandEvent::Terminated(payload) => {
                     eprintln!(
-                        "[synq-node] terminated: code={:?}, signal={:?}",
+                        "[balance-node] terminated: code={:?}, signal={:?}",
                         payload.code, payload.signal
                     );
                     clear_sidecar(&state);
@@ -261,8 +349,8 @@ fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<bool, String> 
         .env("NITRO_HOST", SIDECAR_HOST)
         .env("PORT", SIDECAR_PORT.to_string())
         .env("NITRO_PORT", SIDECAR_PORT.to_string())
-        .env("SYNQ_DESKTOP", "1")
-        .env("SYNQ_PARENT_PID", std::process::id().to_string())
+        .env("BALANCE_DESKTOP", "1")
+        .env("BALANCE_PARENT_PID", std::process::id().to_string())
         .env("VITE_AUTH_ENABLED", "false")
         .env("NODE_ENV", "production")
         .spawn()
@@ -347,12 +435,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar_state.clone())
+        .setup(|app| {
+            install_desktop_shell(app.handle())?;
+            Ok(())
+        })
         .on_window_event({
             let state = sidecar_state.clone();
             move |window, event| {
-                if let WindowEvent::CloseRequested { .. } = event {
-                    stop_sidecar(&state);
-                    window.app_handle().exit(0);
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    if window.label() == "startup-error" {
+                        stop_sidecar(&state);
+                        window.app_handle().exit(0);
+                        return;
+                    }
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
             }
         })
@@ -368,6 +465,15 @@ pub fn run() {
                         let handle = app.clone();
                         let state_for_thread = state.clone();
                         thread::spawn(move || bootstrap(handle, state_for_thread));
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    if !has_visible_windows {
+                        show_main_window(app);
                     }
                 }
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => stop_sidecar(&state),
@@ -393,18 +499,21 @@ mod tests {
     }
 
     #[test]
-    fn health_check_accepts_only_synq_desktop() {
-        assert!(is_synq_health_response(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}"
+    fn health_check_accepts_only_balance_desktop() {
+        assert!(is_desktop_health_response(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"app\":\"balance\",\"mode\":\"desktop\"}"
         ));
-        assert!(!is_synq_health_response(
+        assert!(!is_desktop_health_response(
+            "HTTP/1.1 200 OK\r\n\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}"
+        ));
+        assert!(!is_desktop_health_response(
             "HTTP/1.1 200 OK\r\n\r\n{\"app\":\"other\",\"mode\":\"desktop\"}"
         ));
-        assert!(!is_synq_health_response(
-            "HTTP/1.1 503 Service Unavailable\r\n\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}"
+        assert!(!is_desktop_health_response(
+            "HTTP/1.1 503 Service Unavailable\r\n\r\n{\"app\":\"balance\",\"mode\":\"desktop\"}"
         ));
-        assert!(is_synq_health_response(
-            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n1f\r\n{\"app\":\"synq\",\"mode\":\"desktop\"}\r\n0\r\n\r\n"
+        assert!(is_desktop_health_response(
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n22\r\n{\"app\":\"balance\",\"mode\":\"desktop\"}\r\n0\r\n\r\n"
         ));
     }
 

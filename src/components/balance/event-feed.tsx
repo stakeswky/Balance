@@ -1,4 +1,4 @@
-import { formatTokens, modelLabel } from "@/components/synq/format";
+import { formatTokens, modelLabel } from "@/components/balance/format";
 import { AGENT_LABEL, agentDotClass } from "@/lib/quota/agent";
 import { rawTokens } from "@/lib/quota/engine";
 import { activityIdOf, type UsageEvent } from "@/lib/quota/types";

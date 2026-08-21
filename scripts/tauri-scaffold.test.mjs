@@ -18,8 +18,8 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   const verifier = await readFile(new URL("./verify-macos-app.sh", import.meta.url), "utf8");
   const nativeSmoke = await readFile(new URL("./macos-ui-smoke.swift", import.meta.url), "utf8");
   assert.deepEqual(config.app.windows, []);
-  assert.equal(config.identifier, "com.synq.desktop");
-  assert.deepEqual(config.bundle.externalBin, ["binaries/synq-node"]);
+  assert.equal(config.identifier, "com.balance.desktop");
+  assert.deepEqual(config.bundle.externalBin, ["binaries/balance-node"]);
   assert.equal(config.bundle.macOS.signingIdentity, "-");
   assert.equal(config.bundle.macOS.infoPlist, "Info.plist");
   assert.equal(config.bundle.resources["resources/sidecar-watchdog.cjs"], "sidecar-watchdog.cjs");
@@ -29,17 +29,21 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.match(infoPlist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/);
   assert.doesNotMatch(infoPlist, /NSAllowsArbitraryLoads/);
   assert.match(rust, /WebviewUrl::External/);
-  assert.match(rust, /const SIDECAR_BIN: &str = "synq-node"/);
+  assert.match(rust, /const SIDECAR_BIN: &str = "balance-node"/);
   assert.match(rust, /wait_for_health/);
   assert.match(rust, /CommandChild/);
   assert.match(rust, /RunEvent::Ready/);
   assert.match(rust, /RunEvent::ExitRequested/);
-  assert.match(rust, /window\.app_handle\(\)\.exit\(0\)/);
-  assert.match(rust, /SYNQ_PARENT_PID/);
+  assert.match(rust, /api\.prevent_close/);
+  assert.match(rust, /window\.hide\(\)/);
+  assert.match(rust, /TrayIconBuilder/);
+  assert.match(rust, /MenuBuilder/);
+  assert.match(rust, /quit_app/);
+  assert.match(rust, /BALANCE_PARENT_PID/);
   assert.match(rust, /sidecar-watchdog\.cjs/);
   assert.match(rust, /stopping/);
   assert.match(rust, /\.env_clear\(\)/);
-  assert.match(rust, /SIDECARE_ENV_ALLOWLIST|SIDECAR_ENV_ALLOWLIST/);
+  assert.match(rust, /SIDECAR_ENV_ALLOWLIST/);
   for (const key of ["HOME", "GROK_HOME", "CODEX_HOME", "TMPDIR", "LANG", "LC_ALL"]) {
     assert.match(rust, new RegExp(`"${key}"`));
   }
