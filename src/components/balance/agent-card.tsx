@@ -24,6 +24,7 @@ import {
   effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
+  formatWeekResetLabel,
 } from "@/lib/quota/presentation";
 import type { QuotaValue } from "@/lib/quota/quota-value";
 import {
@@ -78,6 +79,7 @@ export function AgentCard({
   officialLoadState,
   weekValue,
   windowValue,
+  weekResetsAt,
   events,
   now,
   onToggle,
@@ -99,6 +101,7 @@ export function AgentCard({
   officialLoadState?: OfficialLoadState;
   weekValue?: QuotaValue;
   windowValue?: QuotaValue;
+  weekResetsAt?: number | null;
   events: UsageEvent[];
   now: number;
   onToggle: () => void;
@@ -228,19 +231,22 @@ export function AgentCard({
 
       <div className="mt-5 space-y-3">
         {windowLabel === "本周额度" ? (
-          <MeterBar
-            value={meter.weekPct}
-            tone={
-              quotaSources.week === "official"
-                ? meter.weekPct >= 88
-                  ? "crit"
-                  : meter.weekPct >= 72
-                    ? "warn"
-                    : tone
-                : tone
-            }
-            label={quotaSourceLabel("本周额度", quotaSources.week)}
-          />
+          <>
+            <MeterBar
+              value={meter.weekPct}
+              tone={
+                quotaSources.week === "official"
+                  ? meter.weekPct >= 88
+                    ? "crit"
+                    : meter.weekPct >= 72
+                      ? "warn"
+                      : tone
+                  : tone
+              }
+              label={quotaSourceLabel("本周额度", quotaSources.week)}
+            />
+            <WeekResetHint resetsAt={weekResetsAt} now={now} />
+          </>
         ) : (
           <>
             <MeterBar
@@ -269,6 +275,7 @@ export function AgentCard({
               }
               label={quotaSourceLabel("本周额度", quotaSources.week)}
             />
+            <WeekResetHint resetsAt={weekResetsAt} now={now} />
             {modelWeekLimit ? (
               <>
                 <MeterBar
@@ -284,6 +291,11 @@ export function AgentCard({
                     "Fable 5 周额度",
                     modelWeekLimitStale ? "official-stale" : "official",
                   )}
+                />
+                <WeekResetHint
+                  resetsAt={modelWeekLimit.resetsAt}
+                  now={now}
+                  prefix="Fable 5 周限额刷新"
                 />
                 <p className="text-xs leading-relaxed text-faint">
                   {`Claude Max 的 Fable 5 套餐上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；${
@@ -509,6 +521,20 @@ function formatCreditL1(value?: QuotaValue): { text: string; dim: boolean } {
   const credits = formatCredits(value.l1Credits);
   if (value.pricedTokenCoverage < 0.95) return { text: `≥ ${credits}`, dim: false };
   return { text: credits, dim: false };
+}
+
+function WeekResetHint({
+  resetsAt,
+  now,
+  prefix,
+}: {
+  resetsAt?: number | null;
+  now: number;
+  prefix?: string;
+}) {
+  const text = formatWeekResetLabel(resetsAt, now, { prefix });
+  if (!text) return null;
+  return <p className="text-xs text-faint">{text}</p>;
 }
 
 function Stat({
