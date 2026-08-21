@@ -10,8 +10,11 @@ export interface GrokSessionMeta {
 }
 
 export function asGrokModel(raw: string): GrokModelId {
-  const s = (raw || "").toLowerCase();
-  if (s.includes("4.5")) return "grok-4.5";
+  const value = (raw || "").toLowerCase();
+  if (value.includes("4.20")) return "grok-4.20";
+  if (value.includes("4.6")) return "grok-4.6";
+  if (value.includes("4.5")) return "grok-4.5";
+  if (value.includes("4.3")) return "grok-4.3";
   return "grok-4.6";
 }
 

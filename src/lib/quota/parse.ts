@@ -10,9 +10,16 @@ function asModel(raw: string, agent: AgentId): ModelId {
     return "sonnet";
   }
   if (agent === "grok") {
+    if (s.includes("4.20")) return "grok-4.20";
+    if (s.includes("4.6")) return "grok-4.6";
     if (s.includes("4.5")) return "grok-4.5";
+    if (s.includes("4.3")) return "grok-4.3";
     return "grok-4.6";
   }
+  if (s.includes("daybreak-red")) return "daybreak-red";
+  if (s.includes("daybreak-blue")) return "daybreak-blue";
+  if (s.includes("5.4-mini")) return "gpt-5.4-mini";
+  if (s.includes("5.5")) return "gpt-5.5";
   if (s.includes("luna") || s.includes("mini") || s.includes("spark")) return "gpt-5.6-luna";
   if (s.includes("terra")) return "gpt-5.6-terra";
   if (s.includes("sol") || s.includes("5.6")) return "gpt-5.6-sol";

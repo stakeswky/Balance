@@ -95,8 +95,20 @@ function modelRawOf(model: ModelId): string {
       return "gpt-5.6-terra";
     case "gpt-5.6-luna":
       return "gpt-5.6-luna";
+    case "gpt-5.5":
+      return "gpt-5.5";
     case "gpt-5.4":
       return "gpt-5.4";
+    case "gpt-5.4-mini":
+      return "gpt-5.4-mini";
+    case "daybreak-blue":
+      return "daybreak-blue";
+    case "daybreak-red":
+      return "daybreak-red";
+    case "grok-4.3":
+      return "grok-4.3";
+    case "grok-4.20":
+      return "grok-4.20";
     case "grok-4.6":
       return "grok-4.6";
     case "grok-4.5":

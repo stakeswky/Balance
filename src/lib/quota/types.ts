@@ -15,8 +15,16 @@ export type UsageSpeed = "standard" | "fast" | "unknown";
 export type AgentId = "claude" | "codex" | "grok";
 
 export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
-export type CodexModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-5.4";
-export type GrokModelId = "grok-4.6" | "grok-4.5";
+export type CodexModelId =
+  | "gpt-5.6-sol"
+  | "gpt-5.6-terra"
+  | "gpt-5.6-luna"
+  | "gpt-5.5"
+  | "gpt-5.4"
+  | "gpt-5.4-mini"
+  | "daybreak-blue"
+  | "daybreak-red";
+export type GrokModelId = "grok-4.6" | "grok-4.5" | "grok-4.3" | "grok-4.20";
 export type ModelId = ClaudeModelId | CodexModelId | GrokModelId;
 export type ActorKind = "subagent" | "workflow-subagent";
 

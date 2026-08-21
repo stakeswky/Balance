@@ -11,11 +11,15 @@ export interface CodexSessionMeta {
 }
 
 export function asCodexModel(raw: string): CodexModelId {
-  const s = (raw || "").toLowerCase();
-  if (s.includes("luna") || s.includes("mini") || s.includes("spark")) return "gpt-5.6-luna";
-  if (s.includes("terra")) return "gpt-5.6-terra";
-  if (s.includes("sol") || s.includes("5.6")) return "gpt-5.6-sol";
-  if (s.includes("5.4")) return "gpt-5.4";
+  const value = (raw || "").toLowerCase();
+  if (value.includes("daybreak-red")) return "daybreak-red";
+  if (value.includes("daybreak-blue")) return "daybreak-blue";
+  if (value.includes("5.4-mini")) return "gpt-5.4-mini";
+  if (value.includes("5.5")) return "gpt-5.5";
+  if (value.includes("luna") || value.includes("mini") || value.includes("spark")) return "gpt-5.6-luna";
+  if (value.includes("terra")) return "gpt-5.6-terra";
+  if (value.includes("sol") || value.includes("5.6")) return "gpt-5.6-sol";
+  if (value.includes("5.4") || value.includes("o3")) return "gpt-5.4";
   return "gpt-5.6-sol";
 }
 
