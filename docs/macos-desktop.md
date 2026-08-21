@@ -1,6 +1,8 @@
 # macOS 桌面应用
 
-首个桌面构建面向 Apple Silicon。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.1_aarch64.dmg`。Node.js、Rust、Docker 和数据库已打包或不需要。
+首个桌面构建面向 Apple Silicon。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.1_aarch64.dmg`。Node.js、Rust、Docker 和数据库已打包或不需要。已经安装的 0.1.0 没有检查更新代码，必须先装 0.1.1 的 DMG；之后 sidecar 更新才能热更新。
+
+0.1.1 起可在「设置 → 应用更新」检查仓库最新版。只改界面和采集逻辑时下载 sidecar 包即可，不用重下安装包；更新完成后必须从菜单栏选择「退出余量」再打开（关闭窗口只会藏到菜单栏）。改了桌面壳、内置 Node 或能力时，设置页会提示重新下载安装包。
 
 当前构建使用 macOS ad-hoc 签名，不是 Apple Developer ID 签名或公证。从网络下载的构建因此可能在首次启动时出现 macOS 安全提示。
 
