@@ -6,6 +6,9 @@ const workflowUrl = new URL("../.github/workflows/macos-arm64.yml", import.meta.
 
 test("macOS workflow builds, verifies, and uploads both bundles", async () => {
   const yaml = await readFile(workflowUrl, "utf8");
+  assert.match(yaml, /workflow_dispatch:/);
+  assert.match(yaml, /branches:\n\s+- main/);
+  assert.match(yaml, /tags:\n\s+- "app-v\*"/);
   assert.match(yaml, /runs-on: macos-26/);
   assert.match(yaml, /node-version: 22\.23\.2/);
   assert.match(yaml, /toolchain: 1\.88\.0/);
@@ -24,6 +27,12 @@ test("macOS workflow builds, verifies, and uploads both bundles", async () => {
     yaml.indexOf("npm run desktop:prepare") < yaml.indexOf("npm run desktop:test"),
     "clean CI must generate externalBin and resources before cargo test",
   );
+});
+
+test("package-lock nests babel lru-cache so npm ci does not look for v11", async () => {
+  const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+  assert.ok(lock.packages["node_modules/@babel/helper-compilation-targets/node_modules/lru-cache"]);
+  assert.equal(lock.packages["node_modules/lru-cache"], undefined);
 });
 
 test("macOS workflow pins every action to an immutable commit", async () => {

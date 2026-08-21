@@ -3,6 +3,8 @@ name: macOS Apple Silicon
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "app-v*"
 

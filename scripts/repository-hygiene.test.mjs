@@ -102,6 +102,7 @@ test("README stays user-facing and omits maintainer verification", () => {
     "L1：",
     "L2：",
     "L3：",
+    "从 Synq 升级",
   ]) {
     assert.ok(!readme.includes(forbidden), `README should not include: ${forbidden}`);
   }

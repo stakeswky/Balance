@@ -52,11 +52,8 @@ test("native verification reads the persisted settings through the Balance UI", 
   assert.match(appVerifier, /native-persistence-ok/);
 });
 
-test("README documents the in-place upgrade contract", () => {
+test("README does not document the Synq upgrade path", () => {
   const readme = read("README.md");
-  assert.match(readme, /## 从 Synq 升级/);
-  assert.match(readme, /`com\.synq\.desktop`/);
-  assert.match(readme, /`synq-quota-v8`/);
-  assert.match(readme, /`127\.0\.0\.1:4780`/);
-  assert.match(readme, /Application Support\/Synq\/official-quota\.json/);
+  assert.doesNotMatch(readme, /## 从 Synq 升级/);
+  assert.doesNotMatch(readme, /原地品牌升级/);
 });

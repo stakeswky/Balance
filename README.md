@@ -33,10 +33,6 @@ npm run build
 
 从 GitHub Actions 下载名为 `Balance-macos-arm64` 的构件，解压 `Balance-macos-arm64.app.zip` 或打开其中的 DMG 后启动。当前构建使用 macOS ad-hoc 签名，从网络下载后首次打开可能出现系统安全提示。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。
 
-## 从 Synq 升级
-
-Balance 是 Synq 的原地品牌升级。桌面应用继续使用 bundle identifier `com.synq.desktop`、固定 origin `127.0.0.1:4780` 和持久化 key `synq-quota-v8`；官方成功快照仍位于 `~/Library/Application Support/Synq/official-quota.json`。因此覆盖安装后，既有套餐、阈值、采样设置和最后一次官方额度快照会继续可用。
-
 ## 数据与隐私
 
 Claude、Grok、Codex 分别读取本机 `~/.claude`、`~/.grok`（或 `$GROK_HOME`）、`~/.codex`（或 `$CODEX_HOME`）中的会话日志，再叠加各供应商官方订阅百分比。金额分层与计价规则见 [订阅配额 API 等价金额算法](./docs/subscription-quota-value-algorithm.md)。
