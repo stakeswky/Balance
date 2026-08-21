@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(join(root, relative), "utf8");
+const tracked = () =>
+  execFileSync("git", ["ls-files", "-z"], { cwd: root }).toString("utf8").split("\0").filter(Boolean);
 
 test("bundled Claude demo data contains no local identity or absolute path", () => {
   const raw = read("src/data/claude-import.json");
@@ -71,7 +74,7 @@ test("macOS verification is one-command and documented", () => {
     assert.ok(verify.includes(`desktop:verify:${script}`), `desktop:verify omits ${script}`);
   }
 
-  const readme = read("README.md");
+  const macosDoc = read("docs/macos-desktop.md");
   for (const required of [
     "npm run desktop:verify",
     "Accessibility",
@@ -79,7 +82,23 @@ test("macOS verification is one-command and documented", () => {
     "startup-error",
     "hdiutil verify",
   ]) {
-    assert.ok(readme.includes(required), `README missing desktop verification detail: ${required}`);
+    assert.ok(macosDoc.includes(required), `macOS doc missing desktop verification detail: ${required}`);
+  }
+});
+
+test("README stays user-facing and omits maintainer verification", () => {
+  const readme = read("README.md");
+  for (const forbidden of [
+    "Accessibility",
+    "SIGKILL",
+    "startup-error",
+    "hdiutil verify",
+    "npm run desktop:verify",
+    "L1：",
+    "L2：",
+    "L3：",
+  ]) {
+    assert.ok(!readme.includes(forbidden), `README should not include: ${forbidden}`);
   }
 });
 
@@ -94,4 +113,90 @@ test("private local artifacts are ignored", () => {
   ]) {
     assert.ok(ignore.includes(entry), `.gitignore missing: ${entry}`);
   }
+});
+
+test("gitignore keeps App Builder and local-only paths out of git", () => {
+  const ignore = read(".gitignore").split(/\r?\n/);
+  for (const entry of [
+    ".grok/",
+    "AGENTS.md",
+    "startup.sh",
+    ".node_modules.lock",
+    "docs/plans/",
+    "docs/designs/",
+    "docs/research/",
+    "playwright-onboarding-snapshot.md",
+    "screenshots/*",
+    "!screenshots/.gitkeep",
+    "!screenshots/claude-grok-quota-desktop.png",
+    "!screenshots/claude-grok-quota-mobile.png",
+  ]) {
+    assert.ok(ignore.includes(entry), `.gitignore missing: ${entry}`);
+  }
+});
+
+test("git does not track App Builder, plans, or extra screenshots", () => {
+  const files = tracked();
+  for (const prefix of [
+    ".grok/",
+    "AGENTS.md",
+    "startup.sh",
+    ".node_modules.lock",
+    "docs/plans/",
+    "docs/designs/",
+    "docs/research/",
+    "playwright-onboarding-snapshot.md",
+  ]) {
+    assert.equal(
+      files.filter((file) => file === prefix || file.startsWith(prefix)).length,
+      0,
+      `tracked unrelated path: ${prefix}`,
+    );
+  }
+  assert.deepEqual(files.filter((file) => file.startsWith("screenshots/")).sort(), [
+    "screenshots/.gitkeep",
+    "screenshots/claude-grok-quota-desktop.png",
+    "screenshots/claude-grok-quota-mobile.png",
+  ]);
+});
+
+test("repository is MIT licensed", () => {
+  const license = read("LICENSE");
+  assert.match(license, /^MIT License/m);
+  assert.match(license, /Permission is hereby granted, free of charge/);
+  assert.equal(JSON.parse(read("package.json")).license, "MIT");
+  assert.match(read("README.md"), /\[MIT\]\(\.\/LICENSE\)/);
+});
+
+test("App Builder PWA, preview bridge, and unused multiplayer are gone", () => {
+  const files = tracked();
+  for (const prefix of [
+    "public/__grok/",
+    "scripts/grok-pwa-plugin.mjs",
+    "scripts/grok-pwa-plugin.test.mjs",
+    "scripts/grok-pwa-shared.mjs",
+    "scripts/grok-pwa-shared.d.mts",
+    "scripts/install-page.html",
+    "server/",
+    "src/components/preview-host-bridge.tsx",
+    "src/lib/preview-host-bridge.ts",
+    "src/lib/preview-embedder-origin.ts",
+    "src/lib/multiplayer/",
+  ]) {
+    assert.equal(
+      files.filter((file) => file === prefix || file.startsWith(prefix)).length,
+      0,
+      `tracked App Builder path: ${prefix}`,
+    );
+    const diskPath = join(root, prefix.replace(/\/$/, ""));
+    assert.equal(existsSync(diskPath), false, `still on disk: ${prefix}`);
+  }
+
+  const rootRoute = read("src/routes/__root.tsx");
+  assert.doesNotMatch(rootRoute, /PreviewHostBridge/);
+  assert.doesNotMatch(rootRoute, /\/__grok\//);
+
+  const viteConfig = read("vite.config.ts");
+  assert.doesNotMatch(viteConfig, /grokPwaPlugin/);
+  assert.doesNotMatch(viteConfig, /serverDir/);
 });

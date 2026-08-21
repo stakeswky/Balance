@@ -1,6 +1,5 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
-import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { ThemeSync } from "@/components/synq/theme-toggle";
 import { THEME_BOOT } from "@/lib/theme";
 import "../styles.css";
@@ -43,11 +42,7 @@ export const Route = createRootRoute({
           ]
         : []),
     ],
-    links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
-      { rel: "manifest", href: "/__grok/manifest.webmanifest" },
-      { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
-    ],
+    links: [{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
   }),
   component: () => (
     <html lang="zh-CN" className="antialiased" data-theme="light" suppressHydrationWarning>
@@ -56,7 +51,6 @@ export const Route = createRootRoute({
         <HeadContent />
       </head>
       <body>
-        <PreviewHostBridge />
         <AuthProvider>
           <ThemeSync />
           <Outlet />

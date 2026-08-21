@@ -55,3 +55,8 @@ test("the document shell lets Vite own the production stylesheet asset", async (
   assert.doesNotMatch(source, /styles\.css\?url/);
   assert.doesNotMatch(source, /rel: "stylesheet"/);
 });
+
+test("vite config full-traces the PGLite production fallback", async () => {
+  const viteConfig = await readFile(resolve(root, "vite.config.ts"), "utf8");
+  assert.match(viteConfig, /traceDeps:\s*\["@electric-sql\/pglite\*"\]/);
+});

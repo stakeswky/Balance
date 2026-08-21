@@ -13,3 +13,15 @@ screenshots/claude-grok-quota-production.png
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 src-tauri/target/
+.grok/
+AGENTS.md
+startup.sh
+.node_modules.lock
+docs/plans/
+docs/designs/
+docs/research/
+playwright-onboarding-snapshot.md
+screenshots/*
+!screenshots/.gitkeep
+!screenshots/claude-grok-quota-desktop.png
+!screenshots/claude-grok-quota-mobile.png

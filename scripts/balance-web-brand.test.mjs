@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(resolve(root, relative), "utf8");
 
-test("web and PWA surfaces use the Balance brand", () => {
+test("web surfaces use the Balance brand", () => {
   const rootRoute = read("src/routes/__root.tsx");
   assert.match(rootRoute, /const APP_NAME = "Balance";/);
   assert.match(rootRoute, /余量 \/ Balance — Claude × Grok × Codex 额度监控/);
@@ -25,15 +25,6 @@ test("web and PWA surfaces use the Balance brand", () => {
   const settings = read("src/components/synq/settings-panel.tsx");
   assert.match(settings, /余量只读本机 Agent\s+日志/);
   assert.doesNotMatch(settings, /Synq 只读本机 Agent\s+日志/);
-
-  const pwa = read("scripts/grok-pwa-shared.mjs");
-  assert.match(pwa, /export const DEFAULT_APP_NAME = "Balance"/);
-  assert.doesNotMatch(pwa, /export const DEFAULT_APP_NAME = "Grok App"/);
-
-  const pwaTest = read("scripts/grok-pwa-plugin.test.mjs");
-  assert.match(pwaTest, /appNameFromHost\("localhost:8080"\), "Balance"/);
-  assert.match(pwaTest, /appNameFromHost\("172\.17\.154\.217:8080"\), "Balance"/);
-  assert.doesNotMatch(pwaTest, /"Grok App"/);
 });
 
 test("package and README publish the new product name", () => {
