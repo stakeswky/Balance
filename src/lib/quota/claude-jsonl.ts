@@ -32,11 +32,11 @@ function num(v: unknown): number {
 
 function parseTs(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) {
-    return raw > 1e12 ? raw : raw;
+    return raw >= 1_000_000_000_000 ? raw : raw * 1000;
   }
   if (typeof raw === "string" && raw) {
-    const n = Date.parse(raw);
-    return Number.isFinite(n) ? n : null;
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
 }

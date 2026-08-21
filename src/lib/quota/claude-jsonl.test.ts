@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { foldByRequestId, parseJsonlLine } from "./claude-jsonl.ts";
+import { foldByRequestId, parseJsonlLine, type SessionMeta } from "./claude-jsonl.ts";
 import { createScanState, scanClaudeUsage } from "./claude-log.server.ts";
 
 function assistant(partial: Record<string, unknown>) {
@@ -225,4 +225,23 @@ test("Claude workflow subagent prefers the workflow label over its long prompt",
   assert.equal(result.events[0]?.task, "M0-3-ws-origin");
   assert.equal(result.events[0]?.actorKind, "workflow-subagent");
   assert.equal(result.active[0]?.task, "M0-3-ws-origin");
+});
+
+test("Claude numeric Unix seconds are converted to milliseconds", () => {
+  const meta: SessionMeta = {
+    sessionId: "session",
+    cwd: "/tmp/project",
+    title: "",
+    lastUser: "",
+  };
+  const event = parseJsonlLine(JSON.stringify({
+    type: "assistant",
+    timestamp: 1_725_000_000,
+    requestId: "req-seconds",
+    message: {
+      model: "claude-sonnet-5",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  }), meta);
+  assert.equal(event!.ts, 1_725_000_000_000);
 });
