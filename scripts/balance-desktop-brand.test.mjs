@@ -66,5 +66,7 @@ test("desktop verification and CI use Balance artifact paths", () => {
   assert.match(workflow, /name: Balance-macos-arm64/);
   assert.match(workflow, /Contents\/MacOS\/synq-desktop/);
   assert.match(workflow, /Contents\/MacOS\/synq-node/);
+  assert.match(workflow, /gh release create/);
+  assert.match(workflow, /Balance_\*\.dmg/);
   assert.doesNotMatch(workflow, /Synq-macos-arm64/);
 });

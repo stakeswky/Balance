@@ -9,7 +9,7 @@ on:
       - "app-v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-macos-arm64:
@@ -86,3 +86,31 @@ jobs:
           path: |
             artifacts/Balance-macos-arm64.app.zip
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          dmg_files=(src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Balance_*.dmg)
+          test "${#dmg_files[@]}" -eq 1
+          DMG="${dmg_files[0]}"
+          test -f "$DMG"
+          ZIP="artifacts/Balance-macos-arm64.app.zip"
+          test -f "$ZIP"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            gh release create "${GITHUB_REF_NAME}" "$DMG" "$ZIP" \
+              --title "Balance ${GITHUB_REF_NAME}" \
+              --notes "Apple Silicon installer: $(basename "$DMG")" \
+              --verify-tag
+          else
+            if gh release view latest >/dev/null 2>&1; then
+              gh release delete latest --cleanup-tag --yes
+            fi
+            gh release create latest "$DMG" "$ZIP" \
+              --title "Balance macOS Apple Silicon" \
+              --notes "Latest Apple Silicon build. Download $(basename "$DMG")." \
+              --target "${GITHUB_SHA}" \
+              --latest
+          fi

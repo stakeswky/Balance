@@ -1,6 +1,6 @@
 # macOS 桌面应用
 
-首个桌面构建面向 Apple Silicon。从 GitHub Actions 下载名为 `Balance-macos-arm64` 的构件，解压 `Balance-macos-arm64.app.zip` 或打开其中的 DMG 后启动。Node.js、Rust、Docker 和数据库已打包或不需要。
+首个桌面构建面向 Apple Silicon。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.0_aarch64.dmg`。Node.js、Rust、Docker 和数据库已打包或不需要。
 
 当前构建使用 macOS ad-hoc 签名，不是 Apple Developer ID 签名或公证。从网络下载的构建因此可能在首次启动时出现 macOS 安全提示。
 

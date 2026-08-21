@@ -31,7 +31,7 @@ npm run build
 
 ## macOS 应用
 
-从 GitHub Actions 下载名为 `Balance-macos-arm64` 的构件，解压 `Balance-macos-arm64.app.zip` 或打开其中的 DMG 后启动。当前构建使用 macOS ad-hoc 签名，从网络下载后首次打开可能出现系统安全提示。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。
+从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.1.0_aarch64.dmg`。当前构建使用 macOS ad-hoc 签名，从网络下载后首次打开可能出现系统安全提示。维护者构建与验收见 [macOS 桌面应用](./docs/macos-desktop.md)。
 
 ## 数据与隐私
 

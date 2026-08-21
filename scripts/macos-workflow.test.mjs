@@ -23,6 +23,11 @@ test("macOS workflow builds, verifies, and uploads both bundles", async () => {
   assert.match(yaml, /Mach-O 64-bit executable arm64/);
   assert.match(yaml, /Balance-macos-arm64\.app\.zip/);
   assert.match(yaml, /bundle\/dmg\/\*\.dmg/);
+  assert.match(yaml, /contents: write/);
+  assert.match(yaml, /gh release create/);
+  assert.match(yaml, /Balance_\*\.dmg/);
+  assert.match(yaml, /GITHUB_TOKEN/);
+  assert.match(yaml, /release create latest/);
   assert.ok(
     yaml.indexOf("npm run desktop:prepare") < yaml.indexOf("npm run desktop:test"),
     "clean CI must generate externalBin and resources before cargo test",

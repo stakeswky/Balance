@@ -40,8 +40,8 @@ test("package and README publish the new product name", () => {
   assert.match(readme, /alt="Balance desktop quota dashboard \(light\)"/);
   assert.match(readme, /alt="Balance desktop quota dashboard \(dark\)"/);
   assert.doesNotMatch(readme, /mobile quota dashboard/);
-  assert.match(readme, /`Balance-macos-arm64`/);
-  assert.match(readme, /`Balance-macos-arm64\.app\.zip`/);
+  assert.match(readme, /github\.com\/stakeswky\/Balance\/releases\/latest/);
+  assert.match(readme, /`Balance_0\.1\.0_aarch64\.dmg`/);
   assert.doesNotMatch(readme, /`Synq-macos-arm64/);
 });
 
