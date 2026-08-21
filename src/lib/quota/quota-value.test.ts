@@ -753,9 +753,9 @@ test("calibration ignores partial first and current percent plateaus", () => {
   ];
   const cal = calibrateFromSamples(rows, 61, false);
   assert.equal(cal.confidence, "low");
-  assert.ok(cal.totalLowUsd != null && cal.totalLowUsd > 700);
-  assert.ok(cal.totalHighUsd != null && cal.totalHighUsd < 1_100);
-  assert.ok(cal.remainingLowUsd != null && cal.remainingLowUsd > 250);
+  assert.ok(cal.totalLowUsd != null && cal.totalLowUsd > 500);
+  assert.ok(cal.totalHighUsd != null && cal.totalHighUsd < 1_200);
+  assert.ok(cal.remainingLowUsd != null && cal.remainingLowUsd > 200);
 });
 
 test("external use in the first censored interval is still detected", () => {
@@ -1040,4 +1040,16 @@ test("a cheap interval with unknown model mix is retained but capped low", () =>
   const result = calibrateFromSamples(rows, 60, false);
   assert.equal(result.externalUsageDetected, false);
   assert.equal(result.confidence, "low");
+});
+
+test("low-confidence quantization band is at least one over cumulative percent", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 2, cumulativeObservedUsd: 1 }),
+  ];
+  const result = calibrateFromSamples(rows, 2, false);
+  assert.equal(result.confidence, "low");
+  assert.equal(result.totalPointUsd, 50);
+  assert.equal(result.totalLowUsd, 25);
+  assert.equal(result.totalHighUsd, 75);
 });

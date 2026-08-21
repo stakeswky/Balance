@@ -554,6 +554,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
 
   let band = drift >= 0.15 ? 0.25 : 0.15;
   if (confidence === "high" && usedPct % 1 !== 0) band = Math.min(band, 0.1);
+  if (confidence !== "high") band = Math.max(band, 1 / sumPct);
   const low = Math.min(lowRaw, point * (1 - band));
   const high = Math.max(highRaw, point * (1 + band));
 
