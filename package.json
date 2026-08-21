@@ -1,5 +1,6 @@
 {
   "name": "balance",
+  "description": "Local-first quota dashboard for Claude Code, Grok, and Codex",
   "private": true,
   "sideEffects": false,
   "type": "module",
