@@ -11,7 +11,10 @@ test("hot-update path stays allowlisted, guarded, and capability-minimal", () =>
   const actions = read("src/lib/desktop-update/actions.ts");
   const manifest = read("src/lib/desktop-update/manifest.ts");
   const apply = read("src/lib/desktop-update/apply.ts");
-  const capability = JSON.parse(read("src-tauri/capabilities/default.json"));
+  const defaultCapability = JSON.parse(read("src-tauri/capabilities/default.json"));
+  const updaterCapability = JSON.parse(
+    read("src-tauri/capabilities/updater-loopback.json"),
+  );
   const packageJson = JSON.parse(read("package.json"));
 
   const guards = actions.match(/assertQuotaRequestAllowed\(\)/g) ?? [];
@@ -21,19 +24,23 @@ test("hot-update path stays allowlisted, guarded, and capability-minimal", () =>
   assert.match(manifest, /isAllowedInstallerUrl/);
   assert.match(apply, /MAX_PACK_BYTES = 80 \* 1024 \* 1024/);
   assert.match(apply, /timingSafeEqual/);
-  assert.deepEqual(capability.permissions, ["core:default", "updater:default"]);
-  assert.doesNotMatch(JSON.stringify(capability), /shell:allow|fs:allow/);
+  assert.deepEqual(defaultCapability.permissions, ["core:default"]);
+  assert.deepEqual(updaterCapability.permissions, ["updater:default"]);
+  assert.deepEqual(updaterCapability.remote?.urls, ["http://127.0.0.1:4780/*"]);
+  assert.doesNotMatch(
+    JSON.stringify([defaultCapability, updaterCapability]),
+    /shell:allow|fs:allow/,
+  );
   assert.equal(packageJson.dependencies?.["@tauri-apps/plugin-updater"], "2.10.1");
   assert.equal(packageJson.dependencies?.["@tauri-apps/api"], undefined);
   assert.equal(packageJson.devDependencies?.["@tauri-apps/api"], undefined);
 });
 
-test("tracked docs tell 0.1.0 users to install 0.2.0 before hot updates", () => {
+test("tracked docs describe the desktop update entry point and restart path", () => {
   const readme = read("README.md");
   const macos = read("docs/macos-desktop.md");
-  const chickenEgg = /已经安装的 0\.1\.0 没有检查更新代码，必须先装 0\.2\.0 的 DMG；之后 sidecar 更新才能热更新。/;
-  assert.match(readme, chickenEgg);
-  assert.match(macos, chickenEgg);
   assert.match(readme, /设置/);
+  assert.match(readme, /退出余量/);
+  assert.match(macos, /设置/);
   assert.match(macos, /退出余量/);
 });

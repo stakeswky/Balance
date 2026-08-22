@@ -11,7 +11,10 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
   const cargo = read("src-tauri/Cargo.toml");
   const rust = read("src-tauri/src/lib.rs");
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
-  const capability = JSON.parse(read("src-tauri/capabilities/default.json"));
+  const defaultCapability = JSON.parse(read("src-tauri/capabilities/default.json"));
+  const updaterCapability = JSON.parse(
+    read("src-tauri/capabilities/updater-loopback.json"),
+  );
   const packageJson = JSON.parse(read("package.json"));
 
   assert.match(cargo, /serde_json = "=1\.0\.149"/);
@@ -22,9 +25,19 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
   assert.deepEqual(config.plugins.updater.endpoints, [
     "https://github.com/stakeswky/Balance/releases/latest/download/latest.json",
   ]);
+  assert.deepEqual(config.app.security.capabilities, ["default", "updater-loopback"]);
   const publicKey = config.plugins.updater.pubkey;
-  assert.deepEqual(capability.permissions, ["core:default", "updater:default"]);
-  assert.doesNotMatch(JSON.stringify(capability), /shell:allow|fs:allow/);
+  assert.deepEqual(defaultCapability.permissions, ["core:default"]);
+  assert.equal(updaterCapability.local, false);
+  assert.deepEqual(updaterCapability.windows, ["main"]);
+  assert.deepEqual(updaterCapability.remote, {
+    urls: ["http://127.0.0.1:4780/*"],
+  });
+  assert.deepEqual(updaterCapability.permissions, ["updater:default"]);
+  assert.doesNotMatch(
+    JSON.stringify([defaultCapability, updaterCapability]),
+    /shell:allow|fs:allow|http:\/\/\*|:\*/,
+  );
   assert.match(publicKey.trim(), /^[A-Za-z0-9+/]+={0,2}$/);
   assert.match(
     Buffer.from(publicKey.trim(), "base64").toString("utf8"),

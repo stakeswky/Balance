@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Minimal capability for Balance desktop windows",
   "windows": ["main", "startup-error", "tray"],
-  "permissions": ["core:default", "updater:default"]
+  "permissions": ["core:default"]
 }

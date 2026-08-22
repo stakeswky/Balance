@@ -6,8 +6,14 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   const config = JSON.parse(
     await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
   );
-  const capability = JSON.parse(
+  const defaultCapability = JSON.parse(
     await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"),
+  );
+  const updaterCapability = JSON.parse(
+    await readFile(
+      new URL("../src-tauri/capabilities/updater-loopback.json", import.meta.url),
+      "utf8",
+    ),
   );
   const rust = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
   const infoPlist = await readFile(new URL("../src-tauri/Info.plist", import.meta.url), "utf8");
@@ -23,8 +29,18 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.equal(config.bundle.macOS.signingIdentity, "-");
   assert.equal(config.bundle.macOS.infoPlist, "Info.plist");
   assert.equal(config.bundle.resources["resources/sidecar-watchdog.cjs"], "sidecar-watchdog.cjs");
-  assert.deepEqual(capability.permissions, ["core:default", "updater:default"]);
-  assert.doesNotMatch(JSON.stringify(capability), /shell:allow|fs:allow/);
+  assert.deepEqual(config.app.security.capabilities, ["default", "updater-loopback"]);
+  assert.deepEqual(defaultCapability.permissions, ["core:default"]);
+  assert.equal(updaterCapability.local, false);
+  assert.deepEqual(updaterCapability.windows, ["main"]);
+  assert.deepEqual(updaterCapability.remote, {
+    urls: ["http://127.0.0.1:4780/*"],
+  });
+  assert.deepEqual(updaterCapability.permissions, ["updater:default"]);
+  assert.doesNotMatch(
+    JSON.stringify([defaultCapability, updaterCapability]),
+    /shell:allow|fs:allow|http:\/\/\*|:\*/,
+  );
   assert.match(infoPlist, /<key>NSAppTransportSecurity<\/key>/);
   assert.match(infoPlist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/);
   assert.doesNotMatch(infoPlist, /NSAllowsArbitraryLoads/);
@@ -44,7 +60,7 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.match(rust, /__desktop\/show-main/);
   assert.match(rust, /\/tray/);
   assert.match(rust, /title\("余量周限额"\)/);
-  assert.deepEqual(capability.windows, ["main", "startup-error", "tray"]);
+  assert.deepEqual(defaultCapability.windows, ["main", "startup-error", "tray"]);
   assert.match(rust, /BALANCE_PARENT_PID/);
   assert.match(rust, /sidecar-watchdog\.cjs/);
   assert.match(rust, /stopping/);

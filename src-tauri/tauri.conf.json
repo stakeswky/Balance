@@ -10,7 +10,7 @@
   "app": {
     "windows": [],
     "security": {
-      "capabilities": ["default"]
+      "capabilities": ["default", "updater-loopback"]
     }
   },
   "bundle": {

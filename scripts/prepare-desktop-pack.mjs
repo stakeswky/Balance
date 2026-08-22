@@ -10,6 +10,7 @@ export const NATIVE_SURFACE_FILES = [
   "src-tauri/Info.plist",
   "src-tauri/build.rs",
   "src-tauri/capabilities/default.json",
+  "src-tauri/capabilities/updater-loopback.json",
   "src-tauri/Cargo.toml",
   "src-tauri/resources/sidecar-watchdog.cjs",
   "src-tauri/src/lib.rs",

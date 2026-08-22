@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater-loopback",
+  "description": "Allow only the Balance main loopback UI to install signed updates",
+  "local": false,
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:4780/*"]
+  },
+  "permissions": ["updater:default"]
+}

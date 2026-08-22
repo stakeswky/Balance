@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  NATIVE_SURFACE_FILES,
   cargoPackageVersion,
   nativeFingerprint,
   stampDesktopPack,
@@ -32,6 +33,7 @@ test("desktop pack, Tauri, Cargo, and native lock share version 0.3.0", () => {
 
 test("native fingerprint matches the committed lock after the 0.3.0 bump", () => {
   const lock = JSON.parse(read("desktop-native.lock"));
+  assert.ok(NATIVE_SURFACE_FILES.includes("src-tauri/capabilities/updater-loopback.json"));
   assert.equal(nativeFingerprint(root), lock.fingerprint);
   assert.match(lock.fingerprint, /^[0-9a-f]{64}$/);
 });
