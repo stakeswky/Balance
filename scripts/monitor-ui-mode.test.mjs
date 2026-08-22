@@ -21,7 +21,9 @@ test("settings expose geek mode as the opt-in full dashboard", () => {
 
 test("collaboration plan keeps title and tips on one row", () => {
   const advice = read("src/components/balance/advice-card.tsx");
-  assert.match(advice, /flex min-w-0 items-center gap-3/);
+  const timeline = read("src/components/balance/timeline.tsx");
+  assert.match(advice, /grid-cols-\[4\.5rem_1fr\]/);
+  assert.match(timeline, /grid-cols-\[4\.5rem_1fr\]/);
   assert.match(advice, /truncate text-sm/);
   assert.doesNotMatch(advice, /sm:grid-cols-2/);
   assert.doesNotMatch(advice, /CardHint/);
@@ -31,8 +33,7 @@ test("monitor cards and dashboard use compact spacing", () => {
   const card = read("src/components/ui/card.tsx");
   const dashboard = read("src/components/balance/dashboard.tsx");
   assert.match(card, /p-3 shadow-\[var\(--shadow-border\)\] sm:p-4/);
-  assert.match(dashboard, /px-4 py-4 sm:px-6 sm:py-5/);
-  assert.match(dashboard, /space-y-3/);
+  assert.match(dashboard, /h-dvh overflow-hidden/);
   assert.match(dashboard, /self-start/);
   assert.doesNotMatch(dashboard, /space-y-5/);
 });

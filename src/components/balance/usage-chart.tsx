@@ -1,20 +1,24 @@
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { hourlySeries } from "@/lib/quota/engine";
 import type { AgentId, UsageEvent } from "@/lib/quota/types";
+import { cn } from "@/lib/utils";
 import { formatTokens } from "./format";
 
 export function UsageChart({
   agents,
   events,
   now,
+  className,
 }: {
   agents: readonly AgentId[];
   events: UsageEvent[];
   now: number;
+  className?: string;
 }) {
   const data = hourlySeries(events, now, 24);
   return (
-    <div className="h-48 w-full">
+    <div className={cn("relative h-48 w-full", className)}>
+      <div className="absolute inset-0">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
           <defs>
@@ -87,6 +91,7 @@ export function UsageChart({
           ) : null}
         </AreaChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }

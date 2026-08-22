@@ -187,7 +187,7 @@ export function AgentCard({
 
   return (
     <Card>
-      <CardHeader className="min-w-0">
+      <CardHeader className={cn("min-w-0", minimalMode && "mb-2")}>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-faint")} />
@@ -208,7 +208,12 @@ export function AgentCard({
       <div className="flex items-end justify-between gap-4">
         <div>
           <p className="text-xs text-mute">{primaryRemainingLabel}</p>
-          <p className="mt-1 font-mono text-4xl leading-none font-medium tracking-tight tabular">
+          <p
+            className={cn(
+              "mt-1 font-mono leading-none font-medium tracking-tight tabular",
+              minimalMode ? "text-3xl" : "text-4xl",
+            )}
+          >
             {remain.toFixed(0)}
             <span className="ml-1 text-lg text-mute">%</span>
           </p>
@@ -220,11 +225,11 @@ export function AgentCard({
                 {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
                 <span className="text-faint"> %</span>
               </p>
-              <p className="mt-1">
-                {minimalMode || meter.agent !== "codex"
-                  ? "API 等价按公开价折算"
-                  : "credit 按公开价等价折算"}
-              </p>
+              {!minimalMode ? (
+                <p className="mt-1">
+                  {meter.agent !== "codex" ? "API 等价按公开价折算" : "credit 按公开价等价折算"}
+                </p>
+              ) : null}
             </>
           ) : (
             <>
@@ -253,7 +258,7 @@ export function AgentCard({
         </p>
       ) : null}
 
-      <div className="mt-3 space-y-3">
+      <div className={cn("mt-3", minimalMode ? "space-y-2" : "space-y-3")}>
         {weeklyView ? (
           <MeterBar
             value={meter.weekPct}
@@ -266,8 +271,10 @@ export function AgentCard({
                     : tone
                 : tone
             }
-            label={weekMeterLabel}
-            detail={weekReset}
+            label={
+              minimalMode && weekReset ? `${weekMeterLabel} · ${weekReset}` : weekMeterLabel
+            }
+            detail={minimalMode ? null : weekReset}
           />
         ) : (
           <>
@@ -330,13 +337,13 @@ export function AgentCard({
         </div>
       ) : null}
 
-      <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+      <dl className={cn("mt-3 grid grid-cols-2 text-xs", minimalMode ? "gap-2" : "gap-3")}>
         {minimalMode ? (
           <>
-            <Stat label="本周已用 token" value={formatTokens(meter.weekTokens)} />
-            <Stat label="本周用量" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
-            <Stat label="本周预估总 token" value={formatTokens(meter.weekBudget)} />
-            <Stat label="本周预估总用量" value={estimatedWeekUsage} hint={VALUE_HINT} />
+            <Stat compact label="本周已用 token" value={formatTokens(meter.weekTokens)} />
+            <Stat compact label="本周用量" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
+            <Stat compact label="本周预估总 token" value={formatTokens(meter.weekBudget)} />
+            <Stat compact label="本周预估总用量" value={estimatedWeekUsage} hint={VALUE_HINT} />
           </>
         ) : (
           <>
@@ -611,17 +618,29 @@ function Stat({
   dim,
   hint,
   testId,
+  compact,
 }: {
   label: string;
   value: string;
   dim?: boolean;
   hint?: string;
   testId?: string;
+  compact?: boolean;
 }) {
   return (
-    <div className="rounded-md bg-raised px-3 py-2.5" title={hint} data-testid={testId}>
+    <div
+      className={cn("rounded-md bg-raised", compact ? "px-2 py-1.5" : "px-3 py-2.5")}
+      title={hint}
+      data-testid={testId}
+    >
       <dt className="text-faint">{label}</dt>
-      <dd className={cn("mt-1 font-mono text-sm tabular", dim ? "text-faint" : "text-ink")}>
+      <dd
+        className={cn(
+          "font-mono text-sm tabular",
+          compact ? "mt-0.5" : "mt-1",
+          dim ? "text-faint" : "text-ink",
+        )}
+      >
         {value}
       </dd>
     </div>

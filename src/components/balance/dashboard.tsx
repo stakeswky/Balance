@@ -47,6 +47,7 @@ import {
   pullOfficialHistory,
   pullOfficialQuota,
 } from "@/lib/quota/watch";
+import { cn } from "@/lib/utils";
 
 function claudeQuotaNote(slice: OfficialSlice | null): string | undefined {
   if (!slice) return undefined;
@@ -493,8 +494,15 @@ export function Dashboard() {
     codexPlanId,
   ]);
 
+  const fitMonitor = view === "monitor" && visibleAgents.length > 0 && minimalMode;
+
   return (
-    <div className="min-h-dvh bg-canvas text-ink">
+    <div
+      className={cn(
+        "flex min-h-dvh flex-col bg-canvas text-ink",
+        fitMonitor && "h-dvh overflow-hidden",
+      )}
+    >
       <Toaster
         theme={theme}
         position="bottom-center"
@@ -516,7 +524,12 @@ export function Dashboard() {
         onClose={() => setSessionId(null)}
       />
 
-      <main className="mx-auto max-w-6xl px-4 py-4 sm:px-6 sm:py-5">
+      <main
+        className={cn(
+          "mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 sm:px-6",
+          fitMonitor ? "min-h-0 overflow-hidden py-3" : "overflow-y-auto py-4 sm:py-5",
+        )}
+      >
         {adapterHint && !minimalMode && view === "monitor" && visibleAgents.length ? (
           <div className="mb-3 flex flex-col gap-3 rounded-xl bg-surface px-4 py-3 shadow-[var(--shadow-border)] sm:flex-row sm:items-center">
             <p className="flex-1 text-sm text-mute">
@@ -544,17 +557,19 @@ export function Dashboard() {
         ) : null}
 
         {view === "monitor" && visibleAgents.length ? (
-          <div className="space-y-3">
-            <section className="grid gap-3 lg:grid-cols-[minmax(0,17rem)_1fr]">
+          <div
+            className={cn("flex flex-col gap-2", fitMonitor && "min-h-0 flex-1 overflow-hidden")}
+          >
+            <section className="grid shrink-0 gap-2 lg:grid-cols-[minmax(0,15rem)_1fr]">
               {tighter ? (
                 <Card className="self-start">
                   <p className="text-xs text-mute">更紧的窗口</p>
-                  <p className="mt-2 font-mono text-5xl leading-none font-medium tracking-tight tabular">
+                  <p className="mt-1 font-mono text-4xl leading-none font-medium tracking-tight tabular">
                     {Math.max(0, 100 - tighterPct).toFixed(0)}
-                    <span className="ml-1 text-xl text-mute">%</span>
+                    <span className="ml-1 text-lg text-mute">%</span>
                   </p>
-                  <p className="mt-2 text-sm text-mute">{tighter.label} 先碰到上限</p>
-                  <dl className="mt-3 space-y-2 text-xs">
+                  <p className="mt-1.5 text-sm text-mute">{tighter.label} 先碰到上限</p>
+                  <dl className="mt-2 space-y-1.5 text-xs">
                     <div className="flex justify-between">
                       <dt className="text-faint">本周 API 等价</dt>
                       <dd className="font-mono tabular">{formatUsd(combinedUsd)}</dd>
@@ -574,7 +589,7 @@ export function Dashboard() {
                     <Button
                       variant="secondary"
                       size="sm"
-                      className="mt-3 w-full"
+                      className="mt-2 w-full"
                       onClick={() => {
                         useQuota.getState().resetDemo();
                         setNow(Date.now());
@@ -589,10 +604,10 @@ export function Dashboard() {
               ) : null}
 
               <Card>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                  <div>
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                     <CardTitle>协同时间线</CardTitle>
-                    <CardHint className="mt-1">
+                    <CardHint>
                       {visibleAgents.length} 路 Agent 共享同一口 5 小时时钟
                     </CardHint>
                   </div>
@@ -609,7 +624,7 @@ export function Dashboard() {
               </Card>
             </section>
 
-            <section className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <section className="grid min-w-0 shrink-0 gap-2 md:grid-cols-2 xl:grid-cols-3">
               {visibleAgents.includes("claude") ? (
                 <AgentCard
                   name="Claude Code"
@@ -714,15 +729,23 @@ export function Dashboard() {
             </section>
 
             <section
-              className={minimalMode ? "grid gap-3" : "grid gap-3 lg:grid-cols-[1.2fr_0.8fr]"}
+              className={cn(
+                "grid min-h-0 gap-2",
+                fitMonitor ? "flex-1" : "lg:grid-cols-[1.2fr_0.8fr]",
+              )}
             >
-              <Card>
+              <Card className={fitMonitor ? "flex min-h-0 flex-1 flex-col" : undefined}>
                 <CardTitle>近 24 小时 token</CardTitle>
-                <CardHint className="mt-1">
+                <CardHint className="mt-0.5">
                   按小时叠加，便于看 {visibleAgents.length} 路 Agent 燃烧节奏
                 </CardHint>
-                <div className="mt-3">
-                  <UsageChart agents={visibleAgents} events={visibleEvents} now={now} />
+                <div className={fitMonitor ? "mt-2 min-h-0 flex-1" : "mt-3"}>
+                  <UsageChart
+                    agents={visibleAgents}
+                    events={visibleEvents}
+                    now={now}
+                    className={fitMonitor ? "h-full min-h-0" : undefined}
+                  />
                 </div>
               </Card>
               {!minimalMode ? (

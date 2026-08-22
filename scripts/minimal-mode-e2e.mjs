@@ -247,11 +247,19 @@ async function assertAdvicePlanOneLine(page) {
     `tips should sit to the right of the title: titleX=${titleBox.x} tipX=${tipBox.x}`,
   );
   assert.ok(sectionBox.height <= 72, `collaboration plan too tall: ${sectionBox.height}`);
+  const agentLabel = timeline.getByText("Codex", { exact: true });
+  const labelBox = await agentLabel.boundingBox();
+  if (labelBox) {
+    assert.ok(
+      Math.abs(titleBox.x - labelBox.x) <= 12,
+      `plan title should align with agent labels: plan=${titleBox.x} label=${labelBox.x}`,
+    );
+  }
 }
 async function assertFullMode(page) {
   const timeline = cardAround(page, "协同时间线");
   await timeline.getByRole("heading", { name: "协同计划", exact: true }).waitFor();
-  assert.equal(await timeline.getByText("5 小时滚动窗", { exact: true }).count(), 1);
+  assert.equal(await timeline.getByText("now", { exact: true }).count(), 1);
   assert.equal(await page.getByRole("heading", { name: "协同建议", exact: true }).count(), 0);
   assert.equal(await page.getByRole("heading", { name: "实时流水", exact: true }).count(), 1);
   assert.equal(await page.getByText("当前是演示数据", { exact: false }).count(), 1);
@@ -323,6 +331,26 @@ async function assertNoOverflow(page) {
     `horizontal overflow ${size.scrollWidth} > ${size.clientWidth}`,
   );
 }
+async function assertFitsViewport(page) {
+  await assertNoOverflow(page);
+  const size = await page.evaluate(() => {
+    const main = document.querySelector("main");
+    return {
+      rootScroll: document.documentElement.scrollHeight,
+      rootClient: document.documentElement.clientHeight,
+      mainScroll: main?.scrollHeight ?? 0,
+      mainClient: main?.clientHeight ?? 0,
+    };
+  });
+  assert.ok(
+    size.rootScroll <= size.rootClient + 1,
+    `page vertical overflow ${size.rootScroll} > ${size.rootClient}`,
+  );
+  assert.ok(
+    size.mainScroll <= size.mainClient + 1,
+    `main vertical overflow ${size.mainScroll} > ${size.mainClient}`,
+  );
+}
 const browser = await chromium.launch({
   headless: true,
   channel: "chrome",
@@ -349,6 +377,7 @@ try {
   });
   await assertMinimalMode(page);
   await assertAdvicePlanOneLine(page);
+  await assertFitsViewport(page);
   await openView(page, "设置");
   const geek = geekSwitch(page);
   await geek.waitFor();
@@ -373,7 +402,7 @@ try {
   await openView(page, "监控");
   await assertMinimalMode(page);
   await assertDesktopMinimalLayout(page);
-  await assertNoOverflow(page);
+  await assertFitsViewport(page);
   await page.getByRole("button", { name: "全部暂停", exact: true }).click();
   const resume = page.getByRole("button", { name: "开始协同", exact: true });
   await resume.waitFor();
