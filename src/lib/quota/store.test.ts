@@ -284,3 +284,58 @@ test("Claude exposes a live child even before that child's first usage event", (
   assert.equal(useQuota.getState().claudeSession?.task, "刚启动的子任务");
   assert.equal(useQuota.getState().claudeWriting, true);
 });
+
+test("empty incremental ingest preserves event references", () => {
+  // Seed some events so arrays are non-empty
+  useQuota.getState().ingestClaudeLogs([event("claude", "ref-test-c", 100)], { replace: true });
+  useQuota.getState().ingestGrokLogs([event("grok", "ref-test-g", 200)], { replace: true });
+  useQuota.getState().ingestCodexLogs([event("codex", "ref-test-x", 300)], { replace: true });
+
+  const state = useQuota.getState();
+  const realEvents = state.realEvents;
+  const events = state.events;
+
+  // Empty incremental ingest (replace:false is the default) should not rebuild arrays
+  assert.equal(state.ingestClaudeLogs([], { active: [] }), 0);
+  const afterClaude = useQuota.getState();
+  assert.strictEqual(afterClaude.realEvents, realEvents);
+  assert.strictEqual(afterClaude.events, events);
+  // live metadata must still update
+  assert.deepEqual(afterClaude.activeClaude, []);
+  assert.ok(afterClaude.lastBeat > 0);
+
+  assert.equal(afterClaude.ingestGrokLogs([], { active: [] }), 0);
+  const afterGrok = useQuota.getState();
+  assert.strictEqual(afterGrok.realEvents, realEvents);
+  assert.strictEqual(afterGrok.events, events);
+
+  assert.equal(afterGrok.ingestCodexLogs([], { active: [] }), 0);
+  const afterCodex = useQuota.getState();
+  assert.strictEqual(afterCodex.realEvents, realEvents);
+  assert.strictEqual(afterCodex.events, events);
+});
+
+test("empty incremental ingest preserves event-derived session (no live downgrade)", () => {
+  // First ingest builds an event-derived claudeSession
+  const ev = event("claude", "session-derive-c", 500);
+  useQuota.getState().ingestClaudeLogs([ev], { replace: true });
+  const derivedSession = useQuota.getState().claudeSession;
+  assert.ok(derivedSession, "should have event-derived session");
+
+  // Now empty incremental ingest with a different live stub
+  const stubLive = {
+    sessionId: "other-session",
+    actorId: "stub-actor",
+    actorKind: "subagent" as const,
+    cwd: "/tmp",
+    task: "stub task",
+    writing: false,
+    lastTs: 600,
+    startedAt: 600,
+    turns: 0,
+  };
+  useQuota.getState().ingestClaudeLogs([], { live: stubLive });
+  const after = useQuota.getState();
+  // The event-derived session must not be downgraded to the live stub
+  assert.strictEqual(after.claudeSession, derivedSession);
+});

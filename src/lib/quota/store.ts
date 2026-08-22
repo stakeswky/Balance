@@ -140,6 +140,43 @@ function sessionFromLive(live: AgentLiveInfo | null | undefined, model: ModelId)
   };
 }
 
+type IngestOptions = {
+  replace?: boolean;
+  live?: AgentLiveInfo | null;
+  active?: AgentLiveInfo[];
+};
+
+function idleIngestPatch(
+  state: QuotaState,
+  agent: AgentId,
+  opts: IngestOptions | undefined,
+): Partial<QuotaState> {
+  const live = opts?.live;
+  const active = opts?.active;
+  if (agent === "claude") {
+    return {
+      activeClaude: active ?? state.activeClaude,
+      claudeWriting: active ? active.length > 0 : live?.writing ?? state.claudeWriting,
+      claudeSession: state.claudeSession ?? sessionFromLive(live, "sonnet"),
+      lastBeat: Date.now(),
+    };
+  }
+  if (agent === "grok") {
+    return {
+      activeGrok: active ?? state.activeGrok,
+      grokWriting: active ? active.length > 0 : live?.writing ?? state.grokWriting,
+      grokSession: state.grokSession ?? sessionFromLive(live, "grok-4.6"),
+      lastBeat: Date.now(),
+    };
+  }
+  return {
+    activeCodex: active ?? state.activeCodex,
+    codexWriting: active ? active.length > 0 : live?.writing ?? state.codexWriting,
+    codexSession: state.codexSession ?? sessionFromLive(live, "gpt-5.6-sol"),
+    lastBeat: Date.now(),
+  };
+}
+
 export const useQuota = create<QuotaState>()(
   persist(
     (set, get) => ({
@@ -353,6 +390,10 @@ export const useQuota = create<QuotaState>()(
       },
       ingestClaudeLogs: (incoming, opts) => {
         const state = get();
+        if (!opts?.replace && incoming.length === 0) {
+          set(idleIngestPatch(state, "claude", opts));
+          return 0;
+        }
         const others = state.realEvents.filter((e) => e.agent !== "claude");
         let claude: UsageEvent[];
         if (opts?.replace) {
@@ -387,6 +428,10 @@ export const useQuota = create<QuotaState>()(
       },
       ingestGrokLogs: (incoming, opts) => {
         const state = get();
+        if (!opts?.replace && incoming.length === 0) {
+          set(idleIngestPatch(state, "grok", opts));
+          return 0;
+        }
         const others = state.realEvents.filter((e) => e.agent !== "grok");
         let grok: UsageEvent[];
         if (opts?.replace) {
@@ -421,6 +466,10 @@ export const useQuota = create<QuotaState>()(
       },
       ingestCodexLogs: (incoming, opts) => {
         const state = get();
+        if (!opts?.replace && incoming.length === 0) {
+          set(idleIngestPatch(state, "codex", opts));
+          return 0;
+        }
         const others = state.realEvents.filter((e) => e.agent !== "codex");
         let codex: UsageEvent[];
         if (opts?.replace) {
