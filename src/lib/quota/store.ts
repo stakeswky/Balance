@@ -114,6 +114,7 @@ export interface QuotaState {
   liveGrok: boolean;
   liveCodex: boolean;
   demoMode: boolean;
+  minimalMode: boolean;
   agentAvailability: AgentAvailability;
   captureEnabled: AgentAvailability;
   onboardingComplete: boolean;
@@ -154,6 +155,7 @@ export interface QuotaState {
   setAgentAvailability: (availability: AgentAvailability) => void;
   setOnboardingComplete: (complete: boolean) => void;
   setDemoMode: (on: boolean) => void;
+  setMinimalMode: (on: boolean) => void;
   toggleLive: (agent: AgentId) => void;
   setBothLive: (on: boolean) => void;
   tick: (now?: number) => UsageEvent[];
@@ -274,6 +276,7 @@ export const useQuota = create<QuotaState>()(
       liveGrok: false,
       liveCodex: false,
       demoMode: false,
+      minimalMode: false,
       agentAvailability: { ...EMPTY_AGENT_AVAILABILITY },
       captureEnabled: { ...ALL_AGENT_AVAILABILITY },
       onboardingComplete: false,
@@ -370,6 +373,7 @@ export const useQuota = create<QuotaState>()(
           lastBeat: Date.now(),
         });
       },
+      setMinimalMode: (minimalMode) => set({ minimalMode }),
       toggleLive: (agent) => {
         const state = get();
         if (state.demoMode) {
@@ -799,6 +803,7 @@ export const useQuota = create<QuotaState>()(
         liveGrok: s.liveGrok,
         liveCodex: s.liveCodex,
         demoMode: s.demoMode,
+        minimalMode: s.minimalMode,
         agentAvailability: s.agentAvailability,
         captureEnabled: s.captureEnabled,
         onboardingComplete: s.onboardingComplete,

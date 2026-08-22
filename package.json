@@ -24,6 +24,7 @@
     "desktop:verify:ci": "npm run desktop:verify:security && npm run desktop:verify:crash && npm run desktop:verify:dmg",
     "desktop:verify": "npm run desktop:verify:security && npm run desktop:verify:app && npm run desktop:verify:crash && npm run desktop:verify:startup-error && npm run desktop:verify:dmg",
     "screenshots:public": "node scripts/capture-public-screenshots.mjs",
+    "test:e2e:minimal": "node scripts/minimal-mode-e2e.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "vite build --mode development",
     "preview": "vite preview --host 0.0.0.0 --port 8080",

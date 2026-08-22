@@ -49,6 +49,7 @@ export function SettingsPanel() {
   const liveGrok = useQuota((s) => s.liveGrok);
   const liveCodex = useQuota((s) => s.liveCodex);
   const demoMode = useQuota((s) => s.demoMode);
+  const minimalMode = useQuota((s) => s.minimalMode);
   const agentAvailability = useQuota((s) => s.agentAvailability);
   const realEvents = useQuota((s) => s.realEvents);
   const claudePlanId = useQuota((s) => s.claudePlanId);
@@ -115,6 +116,25 @@ export function SettingsPanel() {
               暂未检测到本机 Agent。运行一次 Agent 后，使用上方“重新检测”更新采集入口。
             </p>
           ) : null}
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <CardTitle>简约模式</CardTitle>
+            <CardHint className="mt-1">
+              主页面只保留额度摘要、协同时间线、Agent 卡和 24 小时 token。
+            </CardHint>
+          </div>
+          <Switch
+            checked={minimalMode}
+            aria-label="简约模式"
+            onCheckedChange={(on) => {
+              useQuota.getState().setMinimalMode(on);
+              toast.message(on ? "已开启简约模式" : "已恢复完整模式");
+            }}
+          />
         </div>
       </Card>
 
