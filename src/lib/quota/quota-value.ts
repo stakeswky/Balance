@@ -3,6 +3,13 @@ import { OPENAI_CREDITS_PER_USD, PRICING_VERSION } from "./pricing.ts";
 import type { OfficialQuotaPool, OfficialSlice } from "./official.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
 import { WEEK_MS, WINDOW_MS } from "./types.ts";
+import {
+  buildUsageCostIndex,
+  deduplicateUsageEvents,
+  observeIndexedWindow,
+  type UsageCostIndex,
+  type WindowObservation,
+} from "./usage-cost-index.ts";
 
 export type ValueConfidence = "none" | "low" | "medium" | "high";
 export type CalibrationSource = "none" | "current-window" | "historical-prior";
@@ -335,17 +342,15 @@ export function windowBounds(
   return { start: now - FIVE_H, end: now, rolling: true, resetsAt: null };
 }
 
-export function eventsInWindow(events: UsageEvent[], agent: AgentId, start: number, end: number): UsageEvent[] {
-  const seen = new Set<string>();
-  const out: UsageEvent[] = [];
-  for (const e of events) {
-    if (e.agent !== agent) continue;
-    if (e.ts < start || e.ts > end) continue;
-    if (seen.has(e.id)) continue;
-    seen.add(e.id);
-    out.push(e);
-  }
-  return out;
+export function eventsInWindow(
+  events: UsageEvent[],
+  agent: AgentId,
+  start: number,
+  end: number,
+): UsageEvent[] {
+  return deduplicateUsageEvents(events).filter(
+    (event) => event.agent === agent && event.ts >= start && event.ts <= end,
+  );
 }
 
 export function observeWindow(events: UsageEvent[]): {
@@ -743,16 +748,19 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   };
 }
 
+type SampleObservationInput =
+  | { events: UsageEvent[]; observation?: never }
+  | { events?: never; observation: WindowObservation };
+
 export function makeSample(opts: {
   windowId: string;
   agent: AgentId;
   product?: string | null;
   timestampMs: number;
   usedPercent: number;
-  events: UsageEvent[];
   planLabel?: string | null;
-}): QuotaSample | null {
-  const obs = observeWindow(opts.events);
+} & SampleObservationInput): QuotaSample | null {
+  const obs = opts.observation ?? observeWindow(opts.events);
   return {
     windowId: opts.windowId,
     agent: opts.agent,
@@ -819,6 +827,7 @@ export function samplesFromOfficialHistory(
   history: OfficialSlice[],
   existing: QuotaSample[],
 ): QuotaSample[] {
+  const costIndex = buildUsageCostIndex(events);
   let samples = existing;
   for (const slice of [...history].sort((a, b) => a.fetchedAt - b.fetchedAt)) {
     samples = samplesFromOfficial(
@@ -830,6 +839,7 @@ export function samplesFromOfficialHistory(
       },
       slice.fetchedAt,
       samples,
+      costIndex,
     );
   }
   return samples;
@@ -840,6 +850,7 @@ export function samplesFromOfficial(
   official: { claude: OfficialSlice | null; grok: OfficialSlice | null; codex: OfficialSlice | null },
   now: number,
   existing: QuotaSample[],
+  costIndex?: UsageCostIndex,
 ): QuotaSample[] {
   let samples = existing;
   const consider = (slice: OfficialSlice | null, kind: "five_hour" | "weekly") => {
@@ -857,17 +868,15 @@ export function samplesFromOfficial(
     if (bounds.rolling || sampledAt < bounds.start || sampledAt > bounds.end) return;
 
     const windowId = officialWindowId(slice.agent, kind, null, bounds.start, bounds.resetsAt);
+    const observation = costIndex
+      ? observeIndexedWindow(costIndex, slice.agent, bounds.start, Math.min(bounds.end, sampledAt))
+      : observeWindow(eventsInWindow(events, slice.agent, bounds.start, Math.min(bounds.end, sampledAt, now)));
     const next = makeSample({
       windowId,
       agent: slice.agent,
       timestampMs: sampledAt,
       usedPercent: used,
-      events: eventsInWindow(
-        events,
-        slice.agent,
-        bounds.start,
-        Math.min(bounds.end, sampledAt, now),
-      ),
+      observation,
       planLabel: slice.planLabel,
     });
     if (next) samples = mergeSamples(samples, next);
