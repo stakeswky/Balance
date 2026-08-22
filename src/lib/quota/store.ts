@@ -8,6 +8,7 @@ import {
 import { rawTokens } from "./engine.ts";
 import { importedClaudeEvents, sessionFromEvents } from "./imported.ts";
 import { parseUsagePayload } from "./parse.ts";
+import { quotaAlertLatch } from "./presentation.ts";
 import { samplesFromOfficial, samplesFromOfficialHistory, type QuotaSample } from "./quota-value.ts";
 import { liveRng, newSession, nextLiveEvent, seedHistory } from "./seed.ts";
 import {
@@ -46,6 +47,29 @@ export interface QuotaAlert {
   agent: AgentId;
   kind: "window" | "week";
   message: string;
+}
+
+export type QuotaAlertLatchKey =
+  | "claudeWin"
+  | "claudeWeek"
+  | "claudeFable"
+  | "grokWin"
+  | "grokWeek"
+  | "codexWin"
+  | "codexWeek";
+
+export type QuotaAlertLatches = Record<QuotaAlertLatchKey, boolean>;
+
+export function emptyAlertLatches(): QuotaAlertLatches {
+  return {
+    claudeWin: false,
+    claudeWeek: false,
+    claudeFable: false,
+    grokWin: false,
+    grokWeek: false,
+    codexWin: false,
+    codexWeek: false,
+  };
 }
 
 interface TrimmedEventState {
@@ -161,11 +185,13 @@ export interface QuotaState {
   adapterHint: boolean;
   alertWindowPct: number;
   alertWeekPct: number;
+  alertLatches: QuotaAlertLatches;
   alerts: QuotaAlert[];
   setPlan: (agent: AgentId, id: string) => void;
   setBoost: (n: number) => void;
   setAlertWindow: (n: number) => void;
   setAlertWeek: (n: number) => void;
+  claimAlertLatch: (key: QuotaAlertLatchKey, usedPct: number | null, threshold: number) => boolean;
   pushAlert: (alert: Omit<QuotaAlert, "id">) => void;
   clearAlerts: () => void;
   setAgentAvailability: (availability: AgentAvailability) => void;
@@ -323,6 +349,7 @@ export const useQuota = create<QuotaState>()(
       adapterHint: true,
       alertWindowPct: 80,
       alertWeekPct: 85,
+      alertLatches: emptyAlertLatches(),
       alerts: [],
       setPlan: (agent, id) => {
         if (agent === "claude") set({ claudePlanId: id });
@@ -330,8 +357,24 @@ export const useQuota = create<QuotaState>()(
         else set({ codexPlanId: id });
       },
       setBoost: (n) => set({ weekBoostPct: Math.max(0, Math.min(100, Math.round(n))) }),
-      setAlertWindow: (n) => set({ alertWindowPct: Math.max(40, Math.min(99, Math.round(n))) }),
-      setAlertWeek: (n) => set({ alertWeekPct: Math.max(40, Math.min(99, Math.round(n))) }),
+      setAlertWindow: (n) => {
+        const alertWindowPct = Math.max(40, Math.min(99, Math.round(n)));
+        if (alertWindowPct === get().alertWindowPct) return;
+        set({ alertWindowPct, alertLatches: emptyAlertLatches() });
+      },
+      setAlertWeek: (n) => {
+        const alertWeekPct = Math.max(40, Math.min(99, Math.round(n)));
+        if (alertWeekPct === get().alertWeekPct) return;
+        set({ alertWeekPct, alertLatches: emptyAlertLatches() });
+      },
+      claimAlertLatch: (key, usedPct, threshold) => {
+        const current = get().alertLatches;
+        const result = quotaAlertLatch(usedPct, threshold, current[key]);
+        if (result.nextWarned !== current[key]) {
+          set({ alertLatches: { ...current, [key]: result.nextWarned } });
+        }
+        return result.triggered;
+      },
       pushAlert: (alert) =>
         set({
           alerts: [
@@ -828,6 +871,7 @@ export const useQuota = create<QuotaState>()(
         adapterHint: s.adapterHint,
         alertWindowPct: s.alertWindowPct,
         alertWeekPct: s.alertWeekPct,
+        alertLatches: s.alertLatches,
         alerts: s.alerts.slice(0, MAX_ALERTS),
         quotaSamples: s.quotaSamples,
       }),

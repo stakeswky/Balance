@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { OfficialSlice } from "./official.ts";
 import { quotaEventIdentity } from "./quota-cache.ts";
-import { calibrationDataFrom, migrateQuotaPersist, useQuota } from "./store.ts";
+import {
+  calibrationDataFrom,
+  emptyAlertLatches,
+  migrateQuotaPersist,
+  useQuota,
+  type QuotaState,
+} from "./store.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
 import { CALIBRATION_RETENTION_MS } from "./types.ts";
 
@@ -117,6 +123,32 @@ test("minimal mode defaults on, geek toggle persists, and v0 storage migrates to
   assert.equal(fromV0Missing.minimalMode, true);
   const fromV1Geek = migrateQuotaPersist({ minimalMode: false }, 1);
   assert.equal(fromV1Geek.minimalMode, false);
+});
+
+test("alert latch persists one warning until usage drops or threshold changes", () => {
+  useQuota.setState({
+    alertWindowPct: 80,
+    alertWeekPct: 85,
+    alertLatches: emptyAlertLatches(),
+  });
+
+  assert.equal(useQuota.getState().claimAlertLatch("claudeWin", 80, 80), true);
+  assert.equal(useQuota.getState().claimAlertLatch("claudeWin", 96, 80), false);
+
+  const partialize = useQuota.persist.getOptions().partialize;
+  assert.ok(partialize);
+  const persisted = partialize(useQuota.getState()) as Partial<QuotaState>;
+  assert.equal(persisted.alertLatches?.claudeWin, true);
+
+  assert.equal(useQuota.getState().claimAlertLatch("claudeWin", 67, 80), false);
+  assert.equal(useQuota.getState().alertLatches.claudeWin, false);
+  assert.equal(useQuota.getState().claimAlertLatch("claudeWin", 80, 80), true);
+
+  useQuota.getState().setAlertWindow(80);
+  assert.equal(useQuota.getState().alertLatches.claudeWin, true);
+
+  useQuota.getState().setAlertWindow(90);
+  assert.deepEqual(useQuota.getState().alertLatches, emptyAlertLatches());
 });
 
 test("demo can be enabled and disabled without losing real events or calibration samples", () => {
