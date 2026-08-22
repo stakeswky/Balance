@@ -17,7 +17,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
+  readJsonlTailFile,
+  readParsedFile,
+  type JsonlTailCache,
+  type ParsedFileCache,
+} from "./local-file-cache.server.ts";
+import {
   codexAuthFromFile,
+  collapseOfficialPlateaus,
   grokAccessTokenFromAuthFile,
   mergeGrokOfficial,
   parseClaudeHistoryPoints,
@@ -28,6 +35,7 @@ import {
   parseCodexUsagePayload,
   parseGrokBillingLog,
   parseGrokBillingLogAll,
+  parseGrokBillingLogLine,
   parseGrokBillingPayload,
   quotaPoolsWithStale,
   slicesFromClaudeHistory,
@@ -96,6 +104,13 @@ const execFileText: ExecFileText = async (file, args, options) => {
 const claudeCache = new Map<string, ClaudeCacheEntry>();
 const grokCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 const codexCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
+
+// File-level caches for local official data files.
+// readClaudeOfficial and readGrokLog/readOfficialHistory use these to skip
+// re-parsing unchanged files on disk.
+let claudeHistoryFileCache: ParsedFileCache<OfficialSlice | null> | null = null;
+let claudeHistorySlicesCache: ParsedFileCache<OfficialSlice[]> | null = null;
+let grokLogFileCache: JsonlTailCache<OfficialSlice> | null = null;
 
 function readText(path: string): string | null {
   try {
@@ -306,34 +321,60 @@ function staleOfficial(slice: OfficialSlice | null): OfficialSlice | null {
 
 function readClaudeOfficial(home: string, now: number): OfficialSlice | null {
   const claudePath = join(home, "Library", "Application Support", "Claude", "plan-usage-history.json");
-  const claudeRaw = readText(claudePath);
-  if (!claudeRaw) return null;
-  try {
-    return parseClaudePlanHistory(JSON.parse(claudeRaw), now);
-  } catch {
-    return null;
-  }
+  claudeHistoryFileCache = readParsedFile({
+    path: claudePath,
+    cache: claudeHistoryFileCache,
+    parse: (text) => {
+      try {
+        return parseClaudePlanHistory(JSON.parse(text), now);
+      } catch {
+        return null;
+      }
+    },
+  });
+  return claudeHistoryFileCache?.value ?? null;
 }
 
 function readGrokLog(grokHome: string): OfficialSlice | null {
-  const grokRaw = readText(join(grokHome, "logs", "unified.jsonl"));
-  return grokRaw ? parseGrokBillingLog(grokRaw) : null;
+  grokLogFileCache = readJsonlTailFile({
+    path: join(grokHome, "logs", "unified.jsonl"),
+    cache: grokLogFileCache,
+    parseLine: (line) => {
+      if (!line.includes("fetched credits config")) return null;
+      return parseGrokBillingLogLine(line);
+    },
+    compact: (values) => collapseOfficialPlateaus(values),
+  });
+  return grokLogFileCache?.values.at(-1) ?? null;
 }
 
 export function readOfficialHistory(opts?: { home?: string; grokHome?: string }): OfficialSlice[] {
   const home = opts?.home ?? homedir();
   const grokHome = grokHomeOf(home, opts?.grokHome);
   const out: OfficialSlice[] = [];
-  const claudeRaw = readText(join(home, "Library", "Application Support", "Claude", "plan-usage-history.json"));
-  if (claudeRaw) {
-    try {
-      out.push(...slicesFromClaudeHistory(parseClaudeHistoryPoints(JSON.parse(claudeRaw))));
-    } catch {
-      /* ignore malformed history */
-    }
-  }
-  const grokRaw = readText(join(grokHome, "logs", "unified.jsonl"));
-  if (grokRaw) out.push(...parseGrokBillingLogAll(grokRaw));
+  const claudePath = join(home, "Library", "Application Support", "Claude", "plan-usage-history.json");
+  claudeHistorySlicesCache = readParsedFile({
+    path: claudePath,
+    cache: claudeHistorySlicesCache,
+    parse: (text) => {
+      try {
+        return slicesFromClaudeHistory(parseClaudeHistoryPoints(JSON.parse(text)));
+      } catch {
+        return [];
+      }
+    },
+  });
+  if (claudeHistorySlicesCache) out.push(...claudeHistorySlicesCache.value);
+  grokLogFileCache = readJsonlTailFile({
+    path: join(grokHome, "logs", "unified.jsonl"),
+    cache: grokLogFileCache,
+    parseLine: (line) => {
+      if (!line.includes("fetched credits config")) return null;
+      return parseGrokBillingLogLine(line);
+    },
+    compact: (values) => collapseOfficialPlateaus(values),
+  });
+  if (grokLogFileCache) out.push(...grokLogFileCache.values);
   return out;
 }
 
@@ -910,6 +951,9 @@ export function clearOfficialCache(): void {
   claudeCache.clear();
   grokCache.clear();
   codexCache.clear();
+  claudeHistoryFileCache = null;
+  claudeHistorySlicesCache = null;
+  grokLogFileCache = null;
 }
 
 const CLAUDE_STATUSLINE_STALE_MS = 15 * 60_000;
