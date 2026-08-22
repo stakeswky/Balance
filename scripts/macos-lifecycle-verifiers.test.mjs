@@ -26,6 +26,11 @@ test("macOS lifecycle verification covers crash cleanup and startup failure", as
   assert.match(environment, /HTTP 404/);
   assert.match(environment, /sentinel/i);
   assert.match(environment, /TCP 4780/);
+  assert.match(app, /"\$APP_BINARY"[^\n]*&/);
+  assert.doesNotMatch(app, /open -n "\$APP_PATH"/);
+  assert.match(app, /menu bar item \\"Balance\\"/);
+  assert.match(app, /menu item \\"退出余量\\"/);
+  assert.doesNotMatch(app, /click button 1 of window 1/);
   assert.match(app, /NO_PROXY='\*'/);
   for (const proxy of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
     assert.match(app, new RegExp(`${proxy}=''`));

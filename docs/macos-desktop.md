@@ -1,8 +1,8 @@
 # macOS 桌面应用
 
-首个桌面构建面向 Apple Silicon。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.2.0_aarch64.dmg`。Node.js、Rust、Docker 和数据库已打包或不需要。已经安装的 0.1.0 没有检查更新代码，必须先装 0.2.0 的 DMG；之后 sidecar 更新才能热更新。
+首个桌面构建面向 Apple Silicon。从 [Releases](https://github.com/stakeswky/Balance/releases/latest) 下载 `Balance_0.3.0_aarch64.dmg`。Node.js、Rust、Docker 和数据库已打包或不需要。从 0.2.0 升级到 0.3.0 是最后一次手动安装。
 
-0.1.1 起可在「设置 → 应用更新」检查仓库最新版。只改界面和采集逻辑时下载 sidecar 包即可，不用重下安装包；更新完成后必须从菜单栏选择「退出余量」再打开（关闭窗口只会藏到菜单栏）。改了桌面壳、内置 Node 或能力时，设置页会提示重新下载安装包。
+0.3.0 起可在「设置 → 应用更新」检查仓库最新版。只改界面和采集逻辑时下载 sidecar 包即可；需要更新桌面壳、内置 Node 或能力时，应用会自动下载并安装完整应用。更新完成后必须从菜单栏选择「退出余量」再重新打开（关闭窗口只会藏到菜单栏）。
 
 当前构建使用 macOS ad-hoc 签名，不是 Apple Developer ID 签名或公证。从网络下载的构建因此可能在首次启动时出现 macOS 安全提示。
 
@@ -33,10 +33,19 @@ npm run desktop:test
 npm run desktop:build
 ```
 
+完整应用更新必须用固定私钥签名。维护者本机构建前设置 `TAURI_SIGNING_PRIVATE_KEY` 和空的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；CI 使用同名 GitHub Secret。私钥不得提交到仓库，也必须安全备份：一旦遗失，已经安装的应用将无法验证后续自动更新。
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/balance-updater.key" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+npm run desktop:build
+```
+
 运行原生验收套件前，先在 macOS **System Settings → Privacy & Security → Accessibility** 中授予启动该套件的终端应用权限。然后用一条命令验收已构建的 app 和 DMG：
 
 ```bash
 npm run desktop:verify
+npm run desktop:verify:updater
 ```
 
-这会覆盖环境与 auth 隔离、真实 app UI 与正常关闭路径、父进程 `SIGKILL` 后的 sidecar 清理、端口占用时的 `startup-error` 路径，以及打包 DMG 的 `hdiutil verify`。
+这会覆盖环境与 auth 隔离、真实 app UI 与正常关闭路径、父进程 `SIGKILL` 后的 sidecar 清理、端口占用时的 `startup-error` 路径、打包 DMG 的 `hdiutil verify`，以及本地签名的 0.3.0 → 0.3.1 完整更新、重启与坏签名拒绝路径。

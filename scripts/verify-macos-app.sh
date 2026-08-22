@@ -111,7 +111,10 @@ assert_arm64_binary "$SIDECAR_BINARY"
 test -f "$SERVER_ENTRY"
 test "$(plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$APP_PATH/Contents/Info.plist")" = "true"
 
-open -n "$APP_PATH"
+APP_STDOUT="$TMP_ROOT/app.out"
+APP_STDERR="$TMP_ROOT/app.err"
+"$APP_BINARY" >"$APP_STDOUT" 2>"$APP_STDERR" &
+APP_PID=$!
 STARTED_APP=1
 
 attempt=0
@@ -124,6 +127,12 @@ while :; do
     fi
     break
   fi
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    cat "$APP_STDOUT"
+    cat "$APP_STDERR" >&2
+    echo "Balance desktop exited before its health endpoint became ready" >&2
+    exit 1
+  fi
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 60 ]; then
     echo "Balance desktop health check timed out" >&2
@@ -134,12 +143,11 @@ done
 
 app_pids=$(exact_pids "$APP_BINARY")
 app_count=$(printf '%s\n' "$app_pids" | awk 'NF { count += 1 } END { print count + 0 }')
-if [ "$app_count" -ne 1 ]; then
+if [ "$app_count" -ne 1 ] || [ "$app_pids" != "$APP_PID" ]; then
   printf '%s\n' "$app_pids" >&2
-  echo "Expected exactly one Balance desktop process" >&2
+  echo "Expected exactly the directly launched Balance desktop process" >&2
   exit 1
 fi
-APP_PID=$app_pids
 
 listen_output=$(lsof -nP -iTCP:4780 -sTCP:LISTEN)
 printf '%s\n' "$listen_output"
@@ -216,19 +224,19 @@ if [ "$browser_status" -ne 0 ]; then
   exit "$browser_status"
 fi
 
-close_stdout="$TMP_ROOT/close.out"
-close_stderr="$TMP_ROOT/close.err"
-close_script="tell application \"System Events\" to tell first process whose unix id is $APP_PID to click button 1 of window 1"
+quit_stdout="$TMP_ROOT/quit.out"
+quit_stderr="$TMP_ROOT/quit.err"
+quit_script="tell application \"System Events\" to tell first process whose unix id is $APP_PID to click menu item \"退出余量\" of menu 1 of menu bar item \"Balance\" of menu bar 1"
 set +e
-run_timeout 10 "$close_stdout" "$close_stderr" osascript -e "$close_script"
-close_status=$?
+run_timeout 10 "$quit_stdout" "$quit_stderr" osascript -e "$quit_script"
+quit_status=$?
 set -e
-if [ "$close_status" -ne 0 ]; then
-  cat "$close_stderr" >&2
-  echo "Balance native close action failed or timed out (status $close_status)" >&2
+if [ "$quit_status" -ne 0 ]; then
+  cat "$quit_stderr" >&2
+  echo "Balance native menu quit failed or timed out (status $quit_status)" >&2
   exit 1
 fi
-cat "$close_stderr" >&2
+cat "$quit_stderr" >&2
 
 attempt=0
 while :; do
@@ -242,11 +250,12 @@ while :; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 40 ]; then
     printf 'remaining app pids: %s\nremaining sidecar pids: %s\n' "$remaining_app" "$remaining_sidecar" >&2
-    echo "Balance app or sidecar remained alive after native window close" >&2
+    echo "Balance app or sidecar remained alive after 退出余量" >&2
     exit 1
   fi
   sleep 0.25
 done
 
+wait "$APP_PID" >/dev/null 2>&1 || true
 STARTED_APP=0
-echo "native-close-ok: app and sidecar exited; TCP 4780 is closed"
+echo "native-menu-quit-ok: exact app and sidecar exited; TCP 4780 is closed"
