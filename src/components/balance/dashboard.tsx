@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { RotateCcw } from "lucide-react";
-import { AdviceCard } from "@/components/balance/advice-card";
+import { AdvicePlan } from "@/components/balance/advice-card";
 import { AgentCard } from "@/components/balance/agent-card";
 import { EventFeed } from "@/components/balance/event-feed";
 import { Header, type ViewId } from "@/components/balance/header";
@@ -579,6 +579,7 @@ export function Dashboard() {
                   </Button>
                 </div>
                 <DualTimeline agents={visibleAgents} events={visibleEvents} now={now} />
+                {adviceMeters.length ? <AdvicePlan meters={adviceMeters} /> : null}
               </Card>
             </section>
 
@@ -683,8 +684,6 @@ export function Dashboard() {
                 />
               ) : null}
             </section>
-
-            {adviceMeters.length ? <AdviceCard meters={adviceMeters} /> : null}
 
             <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
               <Card>
