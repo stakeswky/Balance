@@ -2,7 +2,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -278,7 +278,7 @@ fn wait_for_health(timeout: Duration) -> Result<(), String> {
     Err("timed out waiting for the Balance desktop server".to_owned())
 }
 
-fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
     let resource_dir = app
         .path()
         .resource_dir()
@@ -286,19 +286,58 @@ fn server_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> 
     let root = resource_dir.join("balance-server");
     let entry = root.join("server").join("index.mjs");
     if !entry.is_file() {
-        return Err(format!(
-            "desktop server entry is missing: {}",
-            entry.display()
-        ));
+        return Err(format!("desktop server entry is missing: {}", entry.display()));
     }
     let watchdog = resource_dir.join("sidecar-watchdog.cjs");
     if !watchdog.is_file() {
-        return Err(format!(
-            "desktop sidecar watchdog is missing: {}",
-            watchdog.display()
-        ));
+        return Err(format!("desktop sidecar watchdog is missing: {}", watchdog.display()));
     }
-    Ok((root, entry, watchdog))
+    let collector = resource_dir.join("claude-statusline.mjs");
+    if !collector.is_file() {
+        return Err(format!("Claude statusline collector is missing: {}", collector.display()));
+    }
+    Ok((root, entry, watchdog, collector))
+}
+
+fn install_statusline_collector(app: &AppHandle, source: &Path) -> Result<PathBuf, String> {
+    let home = app.path().home_dir().map_err(|error| error.to_string())?;
+    let directory = home
+        .join(".local")
+        .join("share")
+        .join("balance")
+        .join("bin");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&directory, permissions).map_err(|error| error.to_string())?;
+    }
+    let target = directory.join("claude-statusline.mjs");
+    std::fs::copy(source, &target).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&target, permissions).map_err(|error| error.to_string())?;
+    }
+    Ok(target)
+}
+
+fn statusline_snapshot_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let home = app.path().home_dir().map_err(|error| error.to_string())?;
+    let root = match std::env::consts::OS {
+        "macos" => home.join("Library").join("Application Support").join("Balance"),
+        "windows" => std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData").join("Local"))
+            .join("Balance"),
+        _ => std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local").join("state"))
+            .join("balance"),
+    };
+    Ok(root.join("claude-statusline.json"))
 }
 
 fn drain_sidecar_events(
@@ -333,7 +372,9 @@ fn drain_sidecar_events(
 
 fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<bool, String> {
     ensure_port_available()?;
-    let (server_root, server_entry, watchdog) = server_paths(app)?;
+    let (server_root, server_entry, watchdog, collector) = server_paths(app)?;
+    let installed_collector = install_statusline_collector(app, &collector)?;
+    let statusline_snapshot = statusline_snapshot_path(app)?;
     let inherited_environment = filtered_sidecar_environment(std::env::vars_os());
     let (receiver, child) = app
         .shell()
@@ -353,6 +394,14 @@ fn start_sidecar(app: &AppHandle, state: &SidecarState) -> Result<bool, String> 
         .env("BALANCE_PARENT_PID", std::process::id().to_string())
         .env("VITE_AUTH_ENABLED", "false")
         .env("NODE_ENV", "production")
+        .env(
+            "BALANCE_CLAUDE_STATUSLINE_COLLECTOR",
+            installed_collector.to_string_lossy().to_string(),
+        )
+        .env(
+            "BALANCE_CLAUDE_STATUSLINE_PATH",
+            statusline_snapshot.to_string_lossy().to_string(),
+        )
         .spawn()
         .map_err(|error| error.to_string())?;
     if let Err(child) = install_spawned_child(&state.0, child) {

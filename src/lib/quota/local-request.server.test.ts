@@ -132,8 +132,8 @@ test("non-desktop runtime does not enforce the desktop host restriction", async 
   assert.equal(result.responseStatusText, "");
 });
 
-test("all six local quota RPC handlers invoke the request guard", async () => {
+test("all local quota RPC handlers invoke the request guard", async () => {
   const source = await readFile(new URL("./watch.ts", import.meta.url), "utf8");
   const calls = source.match(/assertQuotaRequestAllowed\(\)/g) ?? [];
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 7);
 });

@@ -56,3 +56,23 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.match(nativeSmoke, /case \.onboarding/);
   assert.match(nativeSmoke, /case \.dashboard/);
 });
+
+test("statusline collector is bundled, installed 0700, and injected into the sidecar", async () => {
+  const config = JSON.parse(
+    await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
+  );
+  const rust = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+  assert.equal(
+    config.bundle.resources["../scripts/balance-claude-statusline.mjs"],
+    "claude-statusline.mjs",
+  );
+  assert.match(rust, /fn install_statusline_collector/);
+  assert.match(rust, /\.join\("\.local"\)\s*\.join\("share"\)\s*\.join\("balance"\)\s*\.join\("bin"\)/);
+  assert.match(rust, /set_permissions\(&directory, /);
+  assert.match(rust, /set_permissions\(&target, /);
+  assert.match(rust, /from_mode\(0o700\)/);
+  assert.match(rust, /fn statusline_snapshot_path/);
+  assert.match(rust, /home\.join\("Library"\)\.join\("Application Support"\)\.join\("Balance"\)/);
+  assert.match(rust, /"BALANCE_CLAUDE_STATUSLINE_COLLECTOR"/);
+  assert.match(rust, /"BALANCE_CLAUDE_STATUSLINE_PATH"/);
+});

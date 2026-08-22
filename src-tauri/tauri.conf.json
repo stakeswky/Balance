@@ -21,7 +21,8 @@
     "resources": {
       "../.output": "balance-server",
       "resources/sidecar-watchdog.cjs": "sidecar-watchdog.cjs",
-      "resources/node/LICENSE": "licenses/node/LICENSE"
+      "resources/node/LICENSE": "licenses/node/LICENSE",
+      "../scripts/balance-claude-statusline.mjs": "claude-statusline.mjs"
     },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.icns"],
     "macOS": {
