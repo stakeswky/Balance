@@ -277,6 +277,25 @@ const SCENARIOS = {
     absent: ["5 小时窗（官方）", "本周额度（官方）", "将尽"],
     expectNoAlerts: true,
   },
+  "alert-once": {
+    official: {
+      claude: officialSlice({
+        windowPct: 90,
+        weekPct: 34,
+        modelWeekLimits: undefined,
+        quotaPools: [],
+      }),
+      grok: null,
+      codex: null,
+    },
+    state: {
+      alertWindowPct: 80,
+      alertWeekPct: 85,
+    },
+    present: ["本周额度", "34%"],
+    absent: ["官方快照"],
+    expectSingleAlertAcrossReload: true,
+  },
   error: {
     mode: "error",
     present: [
@@ -433,10 +452,12 @@ async function runScenario(browser, scenarioName, viewportName) {
   const serverFnRequests = [];
   const scannerBodies = [];
   await context.addInitScript((state) => {
-    localStorage.setItem(
-      "balance-quota-v8",
-      JSON.stringify({ state, version: 0 }),
-    );
+    if (localStorage.getItem("balance-quota-v8") == null) {
+      localStorage.setItem(
+        "balance-quota-v8",
+        JSON.stringify({ state, version: 0 }),
+      );
+    }
   }, persistedState(scenario.state ?? {}));
   await context.route(/https:\/\/(grok\.com|fonts\.(gstatic|googleapis)\.com)\//, async (route) => {
     const type = route.request().resourceType();
@@ -596,6 +617,40 @@ async function runScenario(browser, scenarioName, viewportName) {
         return raw ? (JSON.parse(raw)?.state?.alerts?.length ?? 0) : 0;
       });
       if (alertCount !== 0) throw new Error(`stale quota emitted ${alertCount} alerts`);
+    }
+    if (scenario.expectSingleAlertAcrossReload) {
+      await page.waitForFunction(() => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        if (!raw) return false;
+        const state = JSON.parse(raw).state;
+        return state.alerts?.length === 1;
+      });
+      const firstMessage = await page.evaluate(() => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        return raw ? JSON.parse(raw).state.alerts[0]?.message : null;
+      });
+      assert.equal(firstMessage, "Claude Code 5 小时窗已用 90%");
+      const firstToast = page.locator("[data-sonner-toast]").first();
+      await firstToast.waitFor({ state: "visible" });
+      await firstToast.waitFor({ state: "detached", timeout: 10_000 });
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await card.waitFor();
+      await page.waitForTimeout(3_000);
+      const afterReload = await page.evaluate(() => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        const state = raw ? JSON.parse(raw).state : null;
+        return {
+          alerts: state?.alerts?.length ?? 0,
+          warned: state?.alertLatches?.claudeWin ?? false,
+          toastMessages: [...document.querySelectorAll("[data-sonner-toast]")].map((toast) => ({
+            text: toast.textContent,
+            removed: toast.getAttribute("data-removed"),
+            mounted: toast.getAttribute("data-mounted"),
+          })),
+        };
+      });
+      assert.deepEqual(afterReload, { alerts: 1, warned: true, toastMessages: [] });
     }
     for (const name of scenario.accessibilityNames ?? []) {
       await page.getByLabel(name, { exact: true }).waitFor({ state: "visible" });

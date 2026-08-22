@@ -30,7 +30,6 @@ import {
   primaryUsagePercent,
   primaryWindowResetsAt,
   quotaAlertDecision,
-  quotaAlertLatch,
   tightestQuota,
   type PrimaryWindowKind,
   type QuotaPoolView,
@@ -68,15 +67,6 @@ export function Dashboard() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [officialLoadState, setOfficialLoadState] = useState<OfficialLoadState>("loading");
   const historyLoaded = useRef(false);
-  const warned = useRef({
-    claudeWin: false,
-    claudeWeek: false,
-    claudeFable: false,
-    grokWin: false,
-    grokWeek: false,
-    codexWin: false,
-    codexWeek: false,
-  });
 
   const events = useQuota((s) => s.events);
   const realEvents = useQuota((s) => s.realEvents);
@@ -146,8 +136,12 @@ export function Dashboard() {
           windowThreshold: state.alertWindowPct,
           weekThreshold: state.alertWeekPct,
         });
-        if (decision.primaryTriggered && !warned.current[winKey]) {
-          warned.current[winKey] = true;
+        const primaryTriggered = state.claimAlertLatch(
+          winKey,
+          decision.primaryPercent,
+          decision.primaryThreshold,
+        );
+        if (decision.primaryTriggered && primaryTriggered) {
           const message = `${name} ${decision.primaryLabel}已用 ${decision.primaryPercent.toFixed(0)}%`;
           toast.error(message);
           state.pushAlert({
@@ -157,15 +151,14 @@ export function Dashboard() {
             message,
           });
         }
-        if (decision.primaryPercent < decision.primaryThreshold - 12)
-          warned.current[winKey] = false;
-        if (decision.weekTriggered && !warned.current[weekKey]) {
-          warned.current[weekKey] = true;
+        const weekTriggered = kind !== "weekly"
+          ? state.claimAlertLatch(weekKey, meter.weekPct, state.alertWeekPct)
+          : false;
+        if (decision.weekTriggered && weekTriggered) {
           const message = `${name} 本周额度已用 ${meter.weekPct.toFixed(0)}%`;
           toast.error(message);
           state.pushAlert({ ts: t, agent, kind: "week", message });
         }
-        if (meter.weekPct < state.alertWeekPct - 12) warned.current[weekKey] = false;
       };
 
       const claudeMeter = applyOfficial(
@@ -205,18 +198,18 @@ export function Dashboard() {
             "Claude Code",
           );
         }
-        const fableAlert = quotaAlertLatch(
-          state.demoMode || !state.official.claude?.modelWeekLimitsStale
-            ? (claudeFableLimit?.usedPct ?? null)
-            : null,
+        const fableUsedPct = state.demoMode || !state.official.claude?.modelWeekLimitsStale
+          ? (claudeFableLimit?.usedPct ?? null)
+          : null;
+        const fableTriggered = state.claimAlertLatch(
+          "claudeFable",
+          fableUsedPct,
           state.alertWeekPct,
-          warned.current.claudeFable,
         );
-        warned.current.claudeFable = fableAlert.nextWarned;
         if (
           claudeFableLimit &&
           (state.demoMode || !state.official.claude?.modelWeekLimitsStale) &&
-          fableAlert.triggered
+          fableTriggered
         ) {
           const message = `Claude Code Fable 5 周额度已用 ${claudeFableLimit.usedPct.toFixed(0)}%`;
           toast.error(message);
