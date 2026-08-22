@@ -58,6 +58,9 @@ jobs:
         run: npm run desktop:test
 
       - name: Build macOS Apple Silicon bundles
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npm run desktop:build
 
       - name: Verify desktop security, crash cleanup, and DMG
@@ -90,6 +93,9 @@ jobs:
             artifacts/Balance-macos-arm64.app.zip
             artifacts/balance-server.zip
             artifacts/update-manifest.json
+            artifacts/latest.json
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app.tar.gz
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app.tar.gz.sig
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Publish GitHub Release
@@ -108,8 +114,14 @@ jobs:
           test -f "$HOT_ZIP"
           MANIFEST="artifacts/update-manifest.json"
           test -f "$MANIFEST"
+          LATEST="artifacts/latest.json"
+          UPDATER="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Balance.app.tar.gz"
+          SIG="$UPDATER.sig"
+          test -f "$LATEST"
+          test -f "$UPDATER"
+          test -s "$SIG"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            gh release create "${GITHUB_REF_NAME}" "$DMG" "$ZIP" "$HOT_ZIP" "$MANIFEST" \
+            gh release create "${GITHUB_REF_NAME}" "$DMG" "$ZIP" "$HOT_ZIP" "$MANIFEST" "$LATEST" "$UPDATER" "$SIG" \
               --title "Balance ${GITHUB_REF_NAME}" \
               --notes "Apple Silicon installer: $(basename "$DMG")" \
               --verify-tag
@@ -117,7 +129,7 @@ jobs:
             if gh release view latest >/dev/null 2>&1; then
               gh release delete latest --cleanup-tag --yes
             fi
-            gh release create latest "$DMG" "$ZIP" "$HOT_ZIP" "$MANIFEST" \
+            gh release create latest "$DMG" "$ZIP" "$HOT_ZIP" "$MANIFEST" "$LATEST" "$UPDATER" "$SIG" \
               --title "Balance macOS Apple Silicon" \
               --notes "Latest Apple Silicon build. Download $(basename "$DMG")." \
               --target "${GITHUB_SHA}" \

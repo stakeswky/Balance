@@ -14,6 +14,8 @@ test("sidecar zip roots pack.json, server entry, and public without wrapping .ou
   const workspace = mkdtempSync(join(tmpdir(), "balance-hot-artifacts-"));
   const outputDir = join(workspace, ".output");
   const artifactsDir = join(workspace, "artifacts");
+  const updaterBundlePath = join(workspace, "Balance.app.tar.gz");
+  const updaterSignaturePath = `${updaterBundlePath}.sig`;
   mkdirSync(join(outputDir, "server"), { recursive: true });
   mkdirSync(join(outputDir, "public"), { recursive: true });
   writeFileSync(join(outputDir, "server", "index.mjs"), "export {}\n");
@@ -33,6 +35,8 @@ test("sidecar zip roots pack.json, server entry, and public without wrapping .ou
       2,
     )}\n`,
   );
+  writeFileSync(updaterBundlePath, "signed updater bytes");
+  writeFileSync(updaterSignaturePath, "trusted updater signature\n");
 
   const published = await publishDesktopUpdateArtifacts({
     outputDir,
@@ -40,6 +44,8 @@ test("sidecar zip roots pack.json, server entry, and public without wrapping .ou
     tag: "latest",
     gitSha: "abc1234deadbeef",
     publishedAt: "2026-08-21T00:00:00.000Z",
+    updaterBundlePath,
+    updaterSignaturePath,
   });
 
   const names = execFileSync("/usr/bin/zipinfo", ["-1", published.zipPath], { encoding: "utf8" })
@@ -60,6 +66,15 @@ test("sidecar zip roots pack.json, server entry, and public without wrapping .ou
   );
   assert.equal(manifest.installer.url, "https://github.com/stakeswky/Balance/releases/latest");
 
+  const latest = JSON.parse(readFileSync(published.latestPath, "utf8"));
+  assert.equal(latest.version, "0.1.1");
+  assert.equal(latest.pub_date, "2026-08-21T00:00:00.000Z");
+  assert.deepEqual(latest.platforms["darwin-aarch64"], {
+    signature: "trusted updater signature",
+    url: "https://github.com/stakeswky/Balance/releases/download/latest/Balance.app.tar.gz",
+  });
+  assert.deepEqual(published.latest, latest);
+
   rmSync(workspace, { recursive: true, force: true });
 });
 
@@ -73,4 +88,22 @@ test("macOS workflow publishes sidecar zip before uploading artifacts", async ()
     "hot-update assets must exist before upload-artifact",
   );
   assert.ok(yaml.indexOf("artifacts/balance-server.zip") < yaml.indexOf("gh release create"));
+  assert.match(
+    yaml,
+    /TAURI_SIGNING_PRIVATE_KEY: \$\{\{ secrets\.TAURI_SIGNING_PRIVATE_KEY \}\}/,
+  );
+  assert.match(yaml, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""/);
+  assert.equal((yaml.match(/TAURI_SIGNING_PRIVATE_KEY(?!_PASSWORD)/g) ?? []).length, 2);
+  assert.doesNotMatch(yaml, /echo[^\n]*TAURI_SIGNING_PRIVATE_KEY/);
+  assert.match(yaml, /artifacts\/latest\.json/);
+  assert.match(yaml, /Balance\.app\.tar\.gz/);
+  assert.match(yaml, /Balance\.app\.tar\.gz\.sig/);
+  assert.equal(
+    (
+      yaml.match(
+        /gh release create[^\n]*"\$LATEST" "\$UPDATER" "\$SIG"/g,
+      ) ?? []
+    ).length,
+    2,
+  );
 });
