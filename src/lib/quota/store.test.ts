@@ -85,6 +85,21 @@ test("the real store starts empty with every collector stopped", () => {
   assert.deepEqual(initialLive, [false, false, false]);
 });
 
+test("minimal mode defaults off, toggles, and is selected for persistence", () => {
+  const eventsBefore = useQuota.getState().events;
+  assert.equal(initialState.minimalMode, false);
+
+  useQuota.getState().setMinimalMode(true);
+
+  const state = useQuota.getState();
+  assert.equal(state.minimalMode, true);
+  assert.equal(state.events, eventsBefore);
+  const partialize = useQuota.persist.getOptions().partialize;
+  assert.ok(partialize);
+  const persisted = partialize(state) as Partial<typeof state>;
+  assert.equal(persisted.minimalMode, true);
+});
+
 test("demo can be enabled and disabled without losing real events or calibration samples", () => {
   useQuota.getState().setDemoMode(true);
   assert.equal(useQuota.getState().demoMode, true);
