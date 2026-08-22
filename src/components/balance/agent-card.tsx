@@ -28,8 +28,10 @@ import {
 } from "@/lib/quota/presentation";
 import type { QuotaValue } from "@/lib/quota/quota-value";
 import {
+  calibrationSourceLabel,
   quotaSourceLabel,
   quotaSourceMessage,
+  quotaValueDiagnostics,
   type OfficialLoadState,
 } from "@/lib/quota/quota-label";
 import type {
@@ -158,6 +160,9 @@ export function AgentCard({
     weekValue && windowValue
       ? apiEquivalentSections(meter.agent, primaryKind, weekValue, windowValue)
       : [];
+  const diagnosticMessages = [...new Set(
+    valueSections.flatMap((section) => quotaValueDiagnostics(section.value)),
+  )];
   const l1 = formatL1(weekValue);
   const winL1 = formatL1(windowValue);
   const creditL1 = formatCreditL1(weekValue);
@@ -342,7 +347,7 @@ export function AgentCard({
           }
         />
         <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
-        <Stat label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
+        <Stat testId={`quota-${meter.agent}-weekly-l1`} label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
         {meter.agent === "codex" ? (
           <Stat
             label="本周 credit 等价"
@@ -352,17 +357,28 @@ export function AgentCard({
           />
         ) : null}
         {windowLabel !== "本周额度" ? (
-          <Stat label="5h API 等价" value={winL1.text} dim={winL1.dim} hint={VALUE_HINT} />
+          <Stat testId={`quota-${meter.agent}-five-hour-l1`} label="5h API 等价" value={winL1.text} dim={winL1.dim} hint={VALUE_HINT} />
         ) : null}
-        <Stat
-          label="本地价格覆盖率"
-          value={`${Math.round((weekValue?.pricedTokenCoverage ?? 0) * 100)}%`}
-        />
+        {primary ? (
+          <>
+            <Stat
+              testId={`quota-${meter.agent}-token-coverage`}
+              label="可计价 token 覆盖率"
+              value={`${Math.round(primary.pricedTokenCoverage * 100)}%`}
+            />
+            <Stat
+              testId={`quota-${meter.agent}-event-coverage`}
+              label="可计价事件覆盖率"
+              value={`${Math.round(primary.pricedEventCoverage * 100)}%`}
+            />
+          </>
+        ) : null}
         {valueSections.flatMap((section) => {
           const hasRange = section.value.confidence !== "none";
           return [
             <Stat
               key={`${section.key}-total`}
+              testId={`quota-${meter.agent}-${section.key}-l2`}
               label={`估算${section.label}总 API 等价`}
               value={
                 hasRange
@@ -373,6 +389,7 @@ export function AgentCard({
             />,
             <Stat
               key={`${section.key}-remaining`}
+              testId={`quota-${meter.agent}-${section.key}-l3`}
               label={`估算${section.label}剩余 API 等价`}
               value={
                 hasRange
@@ -383,8 +400,15 @@ export function AgentCard({
             />,
             <Stat
               key={`${section.key}-confidence`}
+              testId={`quota-${meter.agent}-${section.key}-confidence`}
               label={`${section.label}置信度`}
               value={CONFIDENCE_LABEL[section.value.confidence]}
+            />,
+            <Stat
+              key={`${section.key}-calibration-source`}
+              testId={`quota-${meter.agent}-${section.key}-source`}
+              label={`${section.label}校准来源`}
+              value={calibrationSourceLabel(section.value.calibrationSource)}
             />,
           ];
         })}
@@ -416,13 +440,15 @@ export function AgentCard({
           </>
         ) : null}
       </dl>
-      <p className="mt-3 text-[11px] leading-5 text-faint">
-        按当前片段模型组合校准 · 本地日志覆盖 · 不是账户现金余额
-        {valueSections.some((section) => section.value.rolling) ? " · 滚动窗口金额" : ""}
-        {valueSections.some((section) => section.value.externalUsageDetected)
-          ? " · 检测到本机以外用量"
-          : ""}
-      </p>
+      <div className="mt-3 space-y-1 text-[11px] leading-5 text-faint">
+        <p>
+          本地日志按公开 API 价折算 · 不是账户现金余额
+          {valueSections.some((section) => section.value.rolling) ? " · 滚动窗口只显示已观测下界" : ""}
+        </p>
+        {diagnosticMessages.map((message) => (
+          <p key={message}>· {message}</p>
+        ))}
+      </div>
 
       {parallel ? (
         <div className="mt-5 rounded-md bg-raised px-3 py-3">
@@ -522,14 +548,16 @@ function Stat({
   value,
   dim,
   hint,
+  testId,
 }: {
   label: string;
   value: string;
   dim?: boolean;
   hint?: string;
+  testId?: string;
 }) {
   return (
-    <div className="rounded-md bg-raised px-3 py-2.5" title={hint}>
+    <div className="rounded-md bg-raised px-3 py-2.5" title={hint} data-testid={testId}>
       <dt className="text-faint">{label}</dt>
       <dd className={cn("mt-1 font-mono text-sm tabular", dim ? "text-faint" : "text-ink")}>
         {value}
