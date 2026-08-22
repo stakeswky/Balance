@@ -5,6 +5,7 @@ import type { CachedLogCursor, QuotaCacheSnapshot } from "./quota-cache.ts";
 import {
   type QuotaCacheWriteDeps,
   type QuotaCacheCoordinatorDeps,
+  type BootstrapMemo,
   nodeQuotaCacheWriteDeps,
   quotaCachePath,
   quotaCacheSnapshotId,
@@ -14,6 +15,7 @@ import {
   readQuotaCache,
   createQuotaCacheWriter,
   createQuotaCacheCoordinator,
+  paginateQuotaBootstrap,
 } from "./quota-cache.server.ts";
 import { cacheEvent } from "./quota-cache.server.ts";
 
@@ -563,5 +565,183 @@ describe("persists scanner cursors via coordinator", () => {
     // After failure, resumeCursors should still work (state is updated in memory)
     const resumed = coordinator.resumeCursors("claude");
     assert.equal(resumed.length, 1, "in-memory state should still have the cursor");
+  });
+});
+
+describe("quota bootstrap pages", () => {
+  function makeMemo(eventCount: number, now: number): BootstrapMemo {
+    const events: UsageEvent[] = [];
+    for (let i = 0; i < eventCount; i++) {
+      events.push(makeEvent({ ts: now - (eventCount - i) * 1000, id: `page-${i}` }));
+    }
+    const snapshot = makeQuotaCacheSnapshot(events, [], now);
+    return { key: snapshot.snapshotId, snapshot };
+  }
+
+  it("paginates 10,001 events into 6 pages of at most 2,000", () => {
+    const now = Date.now();
+    const memo = makeMemo(10_001, now);
+    const collected: ReturnType<typeof cacheEvent>[] = [];
+    let offset = 0;
+    let pageCount = 0;
+    let snapshotKey: string | null = null;
+
+    while (true) {
+      const page = paginateQuotaBootstrap(memo, {
+        offset,
+        limit: 2_000,
+        snapshotKey,
+      });
+      assert.equal(page.restart, false, `page ${pageCount} restart`);
+      assert.ok(page.events.length <= 2_000, `page ${pageCount} exceeds 2k`);
+      collected.push(...page.events);
+      snapshotKey = page.snapshotKey;
+      pageCount++;
+      if (page.nextOffset == null) break;
+      offset = page.nextOffset;
+    }
+
+    assert.equal(pageCount, 6, "10,001 events / 2,000 per page = 6 pages");
+    assert.equal(collected.length, memo.snapshot.events.length, "all events collected");
+  });
+
+  it("returns empty page with snapshotKey null when no cache exists", () => {
+    const page = paginateQuotaBootstrap(null, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: null,
+    });
+    assert.deepEqual(page.events, []);
+    assert.equal(page.nextOffset, null);
+    assert.equal(page.snapshotKey, null);
+    assert.equal(page.restart, false);
+  });
+
+  it("returns restart false when client sends null snapshotKey for first page", () => {
+    const now = Date.now();
+    const memo = makeMemo(100, now);
+    const page = paginateQuotaBootstrap(memo, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: null,
+    });
+    assert.equal(page.restart, false);
+    assert.equal(page.snapshotKey, memo.key);
+    assert.equal(page.events.length, 100);
+    assert.equal(page.nextOffset, null);
+  });
+
+  it("stable snapshotId across pages when cache unchanged", () => {
+    const now = Date.now();
+    const memo = makeMemo(5_000, now);
+    const page1 = paginateQuotaBootstrap(memo, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: null,
+    });
+    assert.ok(page1.snapshotKey != null);
+    assert.equal(page1.nextOffset, 2_000);
+
+    const page2 = paginateQuotaBootstrap(memo, {
+      offset: page1.nextOffset!,
+      limit: 2_000,
+      snapshotKey: page1.snapshotKey,
+    });
+    assert.equal(page2.snapshotKey, page1.snapshotKey, "same snapshot key");
+    assert.equal(page2.restart, false);
+    assert.equal(page2.events.length, 2_000);
+  });
+});
+
+describe("restarts changed cache snapshot", () => {
+  function makeMemo(eventCount: number, now: number): BootstrapMemo {
+    const events: UsageEvent[] = [];
+    for (let i = 0; i < eventCount; i++) {
+      events.push(makeEvent({ ts: now - (eventCount - i) * 1000, id: `restart-${i}` }));
+    }
+    const snapshot = makeQuotaCacheSnapshot(events, [], now);
+    return { key: snapshot.snapshotId, snapshot };
+  }
+
+  it("signals restart when snapshot changed mid-pagination", () => {
+    const now = Date.now();
+    const memo1 = makeMemo(5_000, now);
+    const page1 = paginateQuotaBootstrap(memo1, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: null,
+    });
+    assert.equal(page1.restart, false);
+    assert.ok(page1.snapshotKey != null);
+
+    // Simulate cache replacement: different events produce different snapshotId
+    const memo2 = makeMemo(5_000, now + 1000);
+    assert.notEqual(memo1.key, memo2.key, "snapshot keys must differ");
+
+    const page2 = paginateQuotaBootstrap(memo2, {
+      offset: page1.nextOffset!,
+      limit: 2_000,
+      snapshotKey: page1.snapshotKey,
+    });
+    assert.equal(page2.restart, true, "must signal restart on changed snapshot");
+    assert.equal(page2.nextOffset, 0, "nextOffset must be 0 to restart from beginning");
+    assert.deepEqual(page2.events, [], "restart page carries no events");
+    assert.equal(page2.snapshotKey, memo2.key, "returns new snapshot key");
+  });
+
+  it("restart:true when client had null cache but server now has one", () => {
+    const now = Date.now();
+    const page1 = paginateQuotaBootstrap(null, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: null,
+    });
+    assert.equal(page1.restart, false);
+    assert.equal(page1.snapshotKey, null);
+
+    // Now cache appears — client retries with snapshotKey: null but gets data
+    const memo = makeMemo(100, now);
+    const page2 = paginateQuotaBootstrap(memo, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: null,
+    });
+    // First page with null key is not a restart — client starts fresh
+    assert.equal(page2.restart, false);
+    assert.equal(page2.snapshotKey, memo.key);
+  });
+
+  it("restart:true when client sends stale key but cache is gone", () => {
+    const page = paginateQuotaBootstrap(null, {
+      offset: 2_000,
+      limit: 2_000,
+      snapshotKey: "a".repeat(64),
+    });
+    assert.equal(page.restart, true, "stale key against null cache = restart");
+    assert.deepEqual(page.events, []);
+    assert.equal(page.snapshotKey, null);
+  });
+
+  it("preserves historyTruncated and truncatedBeforeMs in restart page", () => {
+    const now = Date.now();
+    // Create a snapshot with truncation
+    const events: UsageEvent[] = [];
+    for (let i = 0; i < 100_001; i++) {
+      events.push(makeEvent({ ts: now - (100_001 - i) * 1000, id: `trunc-${i}` }));
+    }
+    const snapshot = makeQuotaCacheSnapshot(events, [], now);
+    assert.equal(snapshot.historyTruncated, true);
+    const memo: BootstrapMemo = { key: snapshot.snapshotId, snapshot };
+
+    // Client sends stale key — get restart page
+    const page = paginateQuotaBootstrap(memo, {
+      offset: 0,
+      limit: 2_000,
+      snapshotKey: "b".repeat(64),
+    });
+    assert.equal(page.restart, true);
+    assert.equal(page.historyTruncated, snapshot.historyTruncated);
+    assert.equal(page.truncatedBeforeMs, snapshot.truncatedBeforeMs);
+    assert.equal(page.savedAt, snapshot.savedAt);
   });
 });

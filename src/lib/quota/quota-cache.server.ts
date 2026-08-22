@@ -7,6 +7,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -21,6 +22,7 @@ import {
   isSafeModelRaw,
   type CachedLogCursor,
   type CachedQuotaEvent,
+  type QuotaBootstrapPage,
   type QuotaCacheSnapshot,
 } from "./quota-cache.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
@@ -411,4 +413,87 @@ export function recordQuotaScanCursors(
   now = Date.now(),
 ): Promise<void> {
   return quotaCacheCoordinator.recordCursors(agent, cursors, now);
+}
+
+// ── Bootstrap pagination (Step 5.9a) ──────────────────────────────────
+
+export function readQuotaCacheSnapshotId(path: string): string | null {
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(path, "r");
+    const buffer = Buffer.alloc(256);
+    const count = readSync(descriptor, buffer, 0, buffer.length, 0);
+    const match = buffer.subarray(0, count).toString("utf8")
+      .match(/"snapshotId":"([a-f0-9]{64})"/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  } finally {
+    if (descriptor != null) closeSync(descriptor);
+  }
+}
+
+export interface QuotaBootstrapRequest {
+  offset: number;
+  limit: number;
+  snapshotKey: string | null;
+}
+
+export interface BootstrapMemo {
+  key: string;
+  snapshot: QuotaCacheSnapshot;
+}
+
+let bootstrapMemo: BootstrapMemo | null = null;
+
+export function readQuotaBootstrapSnapshot(): BootstrapMemo | null {
+  const path = quotaCachePath();
+  const headerId = readQuotaCacheSnapshotId(path);
+  if (headerId && bootstrapMemo?.key === headerId) return bootstrapMemo;
+  const snapshot = readQuotaCache(path);
+  bootstrapMemo = snapshot
+    ? { key: snapshot.snapshotId, snapshot }
+    : null;
+  return bootstrapMemo;
+}
+
+export function paginateQuotaBootstrap(
+  current: BootstrapMemo | null,
+  data: QuotaBootstrapRequest,
+): QuotaBootstrapPage {
+  if (!current) {
+    return {
+      events: [],
+      nextOffset: null,
+      savedAt: null,
+      historyTruncated: false,
+      truncatedBeforeMs: null,
+      snapshotKey: null,
+      restart: data.snapshotKey != null,
+    };
+  }
+  if (data.snapshotKey != null && data.snapshotKey !== current.key) {
+    return {
+      events: [],
+      nextOffset: 0,
+      savedAt: current.snapshot.savedAt,
+      historyTruncated: current.snapshot.historyTruncated,
+      truncatedBeforeMs: current.snapshot.truncatedBeforeMs,
+      snapshotKey: current.key,
+      restart: true,
+    };
+  }
+  const events = current.snapshot.events.slice(data.offset, data.offset + data.limit);
+  const nextOffset = data.offset + events.length < current.snapshot.events.length
+    ? data.offset + events.length
+    : null;
+  return {
+    events,
+    nextOffset,
+    savedAt: current.snapshot.savedAt,
+    historyTruncated: current.snapshot.historyTruncated,
+    truncatedBeforeMs: current.snapshot.truncatedBeforeMs,
+    snapshotKey: current.key,
+    restart: false,
+  };
 }

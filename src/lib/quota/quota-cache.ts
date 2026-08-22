@@ -130,6 +130,16 @@ export interface QuotaCacheSnapshot {
   events: CachedQuotaEvent[];
 }
 
+export interface QuotaBootstrapPage {
+  events: CachedQuotaEvent[];
+  nextOffset: number | null;
+  savedAt: number | null;
+  historyTruncated: boolean;
+  truncatedBeforeMs: number | null;
+  snapshotKey: string | null;
+  restart: boolean;
+}
+
 const knownCachedModels = new Set<ModelId>([
   "fable", "opus", "sonnet", "haiku",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",

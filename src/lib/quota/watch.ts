@@ -8,7 +8,13 @@ import { scanClaudeUsage } from "./claude-log.server";
 import { scanCodexUsage } from "./codex-log.server";
 import { scanGrokUsage } from "./grok-log.server";
 import { assertQuotaRequestAllowed } from "./local-request.server.ts";
-import { quotaResumeCursors, recordQuotaScanCursors } from "./quota-cache.server.ts";
+import {
+  quotaResumeCursors,
+  recordQuotaScanCursors,
+  paginateQuotaBootstrap,
+  readQuotaBootstrapSnapshot,
+} from "./quota-cache.server.ts";
+import type { QuotaBootstrapPage } from "./quota-cache.ts";
 import { readOfficialHistory, readOfficialQuota } from "./official.server";
 import { claudeStatuslineSetup, type ClaudeStatuslineSetup } from "./onboarding.ts";
 
@@ -98,3 +104,16 @@ export const pullClaudeStatuslineSetup = createServerFn({ method: "GET" }).handl
     return { available: true, ...claudeStatuslineSetup(settings) };
   },
 );
+
+const bootstrapSchema = z.object({
+  offset: z.number().int().min(0),
+  limit: z.number().int().min(1).max(2_000),
+  snapshotKey: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+});
+
+export const pullQuotaBootstrap = createServerFn({ method: "POST" })
+  .validator((data: unknown) => bootstrapSchema.parse(data))
+  .handler(async ({ data }): Promise<QuotaBootstrapPage> => {
+    assertQuotaRequestAllowed();
+    return paginateQuotaBootstrap(readQuotaBootstrapSnapshot(), data);
+  });
