@@ -1,6 +1,6 @@
 import { costBreakdown, eventRawTokens } from "./cost.ts";
 import { OPENAI_CREDITS_PER_USD, PRICING_VERSION } from "./pricing.ts";
-import type { OfficialSlice } from "./official.ts";
+import type { OfficialQuotaPool, OfficialSlice } from "./official.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
 import { WEEK_MS, WINDOW_MS } from "./types.ts";
 
@@ -48,10 +48,175 @@ export interface QuotaValue {
   anomalousPairs: number;
 }
 
+export interface ExactQuotaValue {
+  usedUsd: number;
+  limitUsd: number;
+  remainingUsd: number;
+  usedPercent: number;
+  source: "official-extra-usage";
+}
+
+export type ProductQuotaValue =
+  | { kind: "estimated"; value: QuotaValue }
+  | { kind: "exact"; value: ExactQuotaValue }
+  | { kind: "stale"; value: { usedPercent: number | null } };
+
 const FIVE_H = WINDOW_MS;
 const WEEK = WEEK_MS;
 const WINDOW_ID_TOLERANCE_MS = 2_000;
 const COMPENSATION_RESET_MIN_DROP_PCT = 2;
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function validPoolMetadata(pool: OfficialQuotaPool, now: number): boolean {
+  if (
+    !Number.isFinite(now)
+    || now < 0
+    || !Number.isFinite(pool.fetchedAt)
+    || pool.fetchedAt < 0
+    || pool.fetchedAt > now
+  ) return false;
+  for (const value of [pool.startsAt, pool.resetsAt, pool.durationMs]) {
+    if (value != null && (!Number.isFinite(value) || value < 0)) return false;
+  }
+  if (
+    pool.startsAt != null
+    && pool.resetsAt != null
+    && pool.startsAt > pool.resetsAt
+  ) return false;
+  if (
+    pool.usagePercent != null
+    && (
+      !Number.isFinite(pool.usagePercent)
+      || pool.usagePercent < 0
+      || pool.usagePercent > 100
+    )
+  ) return false;
+  for (const value of [pool.exactUsedUsd, pool.exactLimitUsd]) {
+    if (value != null && (!Number.isFinite(value) || value < 0)) return false;
+  }
+  return true;
+}
+
+function eventsForPool(events: UsageEvent[], pool: OfficialQuotaPool): UsageEvent[] {
+  if (!pool.models.length) return events;
+  const models = new Set(pool.models);
+  return events.filter((event) => models.has(event.model));
+}
+
+export function exactQuotaValue(
+  pool: OfficialQuotaPool,
+  now: number,
+): ExactQuotaValue | null {
+  if (
+    pool.kind !== "extra-usage"
+    || pool.stale
+    || !validPoolMetadata(pool, now)
+  ) return null;
+  if (
+    pool.exactUsedUsd == null
+    || pool.exactLimitUsd == null
+    || pool.exactLimitUsd <= 0
+  ) return null;
+  const usedUsd = pool.exactUsedUsd;
+  const limitUsd = pool.exactLimitUsd;
+  return {
+    usedUsd,
+    limitUsd,
+    remainingUsd: Math.max(0, limitUsd - usedUsd),
+    usedPercent: clampPercent((usedUsd / limitUsd) * 100),
+    source: "official-extra-usage",
+  };
+}
+
+export function quotaValueForPool(
+  events: UsageEvent[],
+  slice: OfficialSlice,
+  pool: OfficialQuotaPool,
+  now: number,
+  samples: QuotaSample[],
+): ProductQuotaValue | null {
+  if (!validPoolMetadata(pool, now)) return null;
+  if (pool.stale) {
+    const staleUsagePercent = pool.usagePercent != null
+      && Number.isFinite(pool.usagePercent)
+      ? clampPercent(pool.usagePercent)
+      : null;
+    const exactPercent = pool.exactUsedUsd != null
+      && pool.exactLimitUsd != null
+      && Number.isFinite(pool.exactUsedUsd)
+      && Number.isFinite(pool.exactLimitUsd)
+      && pool.exactUsedUsd >= 0
+      && pool.exactLimitUsd > 0
+      ? clampPercent((pool.exactUsedUsd / pool.exactLimitUsd) * 100)
+      : null;
+    return {
+      kind: "stale",
+      value: { usedPercent: staleUsagePercent ?? exactPercent },
+    };
+  }
+  const exact = exactQuotaValue(pool, now);
+  if (exact) return { kind: "exact", value: exact };
+  if (
+    pool.kind !== "model-week"
+    || pool.usagePercent == null
+    || !Number.isFinite(pool.usagePercent)
+    || pool.resetsAt == null
+    || !Number.isFinite(pool.resetsAt)
+  ) return null;
+
+  const start = pool.startsAt ?? pool.resetsAt - (pool.durationMs ?? WEEK);
+  const end = Math.min(now, pool.resetsAt);
+  if (!Number.isFinite(now) || !Number.isFinite(start) || end < start) return null;
+  const windowId = officialWindowId(slice.agent, "product", pool.id, start, pool.resetsAt);
+  const scopedEvents = eventsForPool(
+    eventsInWindow(events, slice.agent, start, end),
+    pool,
+  );
+  const observation = observeWindow(scopedEvents);
+  const compatibleSamples = samples.filter((sample) =>
+    sameOfficialWindowId(sample.windowId, windowId),
+  );
+  const calibration = calibrateFromSamples(
+    compatibleSamples,
+    pool.usagePercent,
+    false,
+  );
+  const toCredits = (usd: number | null): number | null =>
+    slice.agent === "codex" && usd != null ? usd * OPENAI_CREDITS_PER_USD : null;
+  const value: QuotaValue = {
+    usedPct: pool.usagePercent,
+    l1Usd: observation.observedUsd,
+    l1Credits: toCredits(observation.observedUsd),
+    l1Tokens: observation.observedTokens,
+    pricedTokenCoverage: observation.pricedTokenCoverage,
+    pricedEventCoverage: observation.pricedEventCoverage,
+    rolling: false,
+    windowId,
+    totalLowUsd: calibration.totalLowUsd,
+    totalPointUsd: calibration.totalPointUsd,
+    totalHighUsd: calibration.totalHighUsd,
+    remainingLowUsd: calibration.remainingLowUsd,
+    remainingPointUsd: calibration.remainingPointUsd,
+    remainingHighUsd: calibration.remainingHighUsd,
+    totalLowCredits: toCredits(calibration.totalLowUsd),
+    totalPointCredits: toCredits(calibration.totalPointUsd),
+    totalHighCredits: toCredits(calibration.totalHighUsd),
+    remainingLowCredits: toCredits(calibration.remainingLowUsd),
+    remainingPointCredits: toCredits(calibration.remainingPointUsd),
+    remainingHighCredits: toCredits(calibration.remainingHighUsd),
+    confidence: calibration.confidence,
+    calibrationSource: calibration.confidence === "none" ? "none" : "current-window",
+    pricingVersion: PRICING_VERSION,
+    externalUsageDetected:
+      calibration.externalUsageDetected
+      || (pool.usagePercent > 0 && observation.observedUsd === 0),
+    anomalousPairs: calibration.anomalousPairs,
+  };
+  return { kind: "estimated", value };
+}
 
 export function officialWindowId(
   agent: AgentId,
@@ -711,6 +876,43 @@ export function samplesFromOfficial(
   consider(official.grok, "weekly");
   consider(official.codex, "five_hour");
   consider(official.codex, "weekly");
+  for (const slice of [official.claude, official.grok, official.codex]) {
+    if (!slice) continue;
+    for (const pool of slice.quotaPools ?? []) {
+      if (
+        !validPoolMetadata(pool, now)
+        || pool.stale
+        || pool.kind !== "model-week"
+        || pool.usagePercent == null
+        || !Number.isFinite(pool.usagePercent)
+        || pool.resetsAt == null
+        || !Number.isFinite(pool.resetsAt)
+      ) continue;
+      const sampledAt = pool.fetchedAt;
+      const start = pool.startsAt ?? pool.resetsAt - (pool.durationMs ?? WEEK);
+      if (
+        !Number.isFinite(sampledAt)
+        || !Number.isFinite(start)
+        || sampledAt < start
+        || sampledAt > now
+        || sampledAt > pool.resetsAt
+      ) continue;
+      const scopedEvents = eventsForPool(
+        eventsInWindow(events, slice.agent, start, sampledAt),
+        pool,
+      );
+      const next = makeSample({
+        windowId: officialWindowId(slice.agent, "product", pool.id, start, pool.resetsAt),
+        agent: slice.agent,
+        product: pool.id,
+        timestampMs: sampledAt,
+        usedPercent: pool.usagePercent,
+        planLabel: slice.planLabel,
+        events: scopedEvents,
+      });
+      if (next) samples = mergeSamples(samples, next);
+    }
+  }
   return samples;
 }
 

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   calibrateFromSamples,
   eventsInWindow,
+  exactQuotaValue,
   historicalWindowPrior,
   makeSample,
   mergeSamples,
@@ -10,16 +11,19 @@ import {
   observeWindow,
   officialWindowId,
   quotaValueFor,
+  quotaValueForPool,
   sameOfficialWindowId,
   samplesFromOfficialHistory,
   samplesFromOfficial,
   validSlopes,
   weightedMedian,
   windowBounds,
+  type ExactQuotaValue,
+  type ProductQuotaValue,
   type QuotaSample,
 } from "./quota-value.ts";
 import { costBreakdown } from "./cost.ts";
-import type { OfficialSlice } from "./official.ts";
+import type { OfficialSlice, OfficialQuotaPool } from "./official.ts";
 import type { UsageEvent } from "./types.ts";
 import { WINDOW_MS } from "./types.ts";
 import { PRICING_VERSION } from "./pricing.ts";
@@ -1257,4 +1261,312 @@ test("fast model mix separates fast and standard usage of one model", () => {
   ]);
   assert.ok(Math.abs((observed.modelMix["gpt-5.4:standard"] ?? 0) - 2 / 3) < 1e-9);
   assert.ok(Math.abs((observed.modelMix["gpt-5.4:fast"] ?? 0) - 1 / 3) < 1e-9);
+});
+
+// ── Step 4.3: Independent pool sampling & exact quota ──
+
+const POOL_WEEK_MS = 7 * 24 * 60 * 60_000;
+
+function modelWeekPoolFixture(now: number): OfficialQuotaPool {
+  return {
+    id: "seven_day_sonnet",
+    kind: "model-week",
+    usagePercent: 12.5,
+    startsAt: now,
+    resetsAt: now + POOL_WEEK_MS,
+    durationMs: POOL_WEEK_MS,
+    models: ["sonnet"],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt: now,
+    stale: false,
+  };
+}
+
+interface InvalidPoolMetadataCase {
+  name: string;
+  callNow: number;
+  patch: Partial<OfficialQuotaPool>;
+}
+
+function invalidPoolMetadataCases(now: number): InvalidPoolMetadataCase[] {
+  const reset = now + POOL_WEEK_MS;
+  return [
+    { name: "now is NaN", callNow: Number.NaN, patch: {} },
+    { name: "now is infinite", callNow: Number.POSITIVE_INFINITY, patch: {} },
+    { name: "now is negative", callNow: -1, patch: {} },
+    { name: "fetchedAt is NaN", callNow: now, patch: { fetchedAt: Number.NaN } },
+    { name: "fetchedAt is infinite", callNow: now, patch: { fetchedAt: Number.POSITIVE_INFINITY } },
+    { name: "fetchedAt is negative", callNow: now, patch: { fetchedAt: -1 } },
+    { name: "fetchedAt is in the future", callNow: now, patch: { fetchedAt: now + 1 } },
+    { name: "startsAt is NaN", callNow: now, patch: { startsAt: Number.NaN } },
+    { name: "startsAt is infinite", callNow: now, patch: { startsAt: Number.POSITIVE_INFINITY } },
+    { name: "startsAt is negative", callNow: now, patch: { startsAt: -1 } },
+    { name: "resetsAt is NaN", callNow: now, patch: { resetsAt: Number.NaN } },
+    { name: "resetsAt is infinite", callNow: now, patch: { resetsAt: Number.POSITIVE_INFINITY } },
+    { name: "resetsAt is negative", callNow: now, patch: { resetsAt: -1 } },
+    { name: "durationMs is NaN", callNow: now, patch: { durationMs: Number.NaN } },
+    { name: "durationMs is infinite", callNow: now, patch: { durationMs: Number.POSITIVE_INFINITY } },
+    { name: "durationMs is negative", callNow: now, patch: { durationMs: -1 } },
+    {
+      name: "startsAt exceeds resetsAt",
+      callNow: now,
+      patch: { startsAt: reset + 1, resetsAt: reset },
+    },
+    { name: "usagePercent is NaN", callNow: now, patch: { usagePercent: Number.NaN } },
+    { name: "usagePercent is infinite", callNow: now, patch: { usagePercent: Number.POSITIVE_INFINITY } },
+    { name: "usagePercent is negative", callNow: now, patch: { usagePercent: -1 } },
+    { name: "usagePercent exceeds 100", callNow: now, patch: { usagePercent: 100.01 } },
+    { name: "exactUsedUsd is NaN", callNow: now, patch: { exactUsedUsd: Number.NaN } },
+    { name: "exactUsedUsd is infinite", callNow: now, patch: { exactUsedUsd: Number.POSITIVE_INFINITY } },
+    { name: "exactUsedUsd is negative", callNow: now, patch: { exactUsedUsd: -1 } },
+    { name: "exactLimitUsd is NaN", callNow: now, patch: { exactLimitUsd: Number.NaN } },
+    { name: "exactLimitUsd is infinite", callNow: now, patch: { exactLimitUsd: Number.POSITIVE_INFINITY } },
+    { name: "exactLimitUsd is negative", callNow: now, patch: { exactLimitUsd: -1 } },
+  ];
+}
+
+test("samplesFromOfficial rejects every invalid pool metadata branch", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const basePool = modelWeekPoolFixture(now);
+  for (const invalid of invalidPoolMetadataCases(now)) {
+    await t.test(invalid.name, () => {
+      const pool: OfficialQuotaPool = { ...basePool, ...invalid.patch };
+    const claude = slice({
+      agent: "claude",
+      windowPct: null,
+      weekPct: null,
+      fetchedAt: now,
+      quotaPools: [pool],
+    });
+    assert.deepEqual(samplesFromOfficial(
+      [],
+      { claude, grok: null, codex: null },
+        invalid.callNow,
+      [],
+      ), []);
+    });
+  }
+});
+
+test("samplesFromOfficial samples a fresh model pool with scoped events", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const pool = modelWeekPoolFixture(now);
+  const sonnetEvent = ev({
+    id: "sonnet-pool-sample-event",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const opusEvent = ev({
+    id: "opus-pool-sample-event",
+    agent: "claude",
+    model: "opus",
+    modelRaw: "claude-opus-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const claude = slice({
+    agent: "claude",
+    windowPct: null,
+    weekPct: null,
+    fetchedAt: now,
+    quotaPools: [pool],
+  });
+  const samples = samplesFromOfficial(
+    [sonnetEvent, opusEvent],
+    { claude, grok: null, codex: null },
+    now,
+    [],
+  );
+  assert.equal(samples.length, 1);
+  assert.equal(samples[0].product, pool.id);
+  assert.equal(samples[0].usedPercent, 12.5);
+  assert.equal(samples[0].timestampMs, now);
+  assert.equal(
+    samples[0].cumulativeObservedUsd,
+    observeWindow([sonnetEvent]).observedUsd,
+  );
+  assert.deepEqual(
+    samples[0].modelMix,
+    observeWindow([sonnetEvent]).modelMix,
+  );
+});
+
+test("quotaValueForPool rejects every invalid pool metadata branch", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const basePool = modelWeekPoolFixture(now);
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  for (const invalid of invalidPoolMetadataCases(now)) {
+    await t.test(invalid.name, () => {
+      const pool: OfficialQuotaPool = { ...basePool, ...invalid.patch };
+      assert.equal(quotaValueForPool([], claude, pool, invalid.callNow, []), null);
+      assert.equal(quotaValueForPool([], claude, {
+        ...pool,
+        stale: true,
+      }, invalid.callNow, []), null);
+    });
+  }
+});
+
+test("fresh model pool scopes L1 observation to its declared models", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const pool = modelWeekPoolFixture(now);
+  const sonnetEvent = ev({
+    id: "sonnet-pool-event",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const opusEvent = ev({
+    id: "opus-pool-event",
+    agent: "claude",
+    model: "opus",
+    modelRaw: "claude-opus-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const fresh = quotaValueForPool(
+    [sonnetEvent, opusEvent],
+    claude,
+    pool,
+    now,
+    [],
+  );
+  assert.equal(fresh?.kind, "estimated");
+  assert.equal(
+    fresh?.kind === "estimated" ? fresh.value.l1Usd : null,
+    observeWindow([sonnetEvent]).observedUsd,
+  );
+});
+
+test("valid stale model pool returns a finite snapshot and never emits a sample", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const pool: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    stale: true,
+  };
+  const claude = slice({
+    agent: "claude",
+    windowPct: null,
+    weekPct: null,
+    fetchedAt: now,
+    quotaPools: [pool],
+  });
+  assert.deepEqual(samplesFromOfficial(
+    [],
+    { claude, grok: null, codex: null },
+    now,
+    [],
+  ), []);
+  assert.deepEqual(quotaValueForPool([], claude, pool, now, []), {
+    kind: "stale",
+    value: { usedPercent: 12.5 },
+  });
+});
+
+test("valid extra usage accepts null window metadata and returns exact dollars", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const validExtra: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: null,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    models: [],
+    fetchedAt: now,
+  };
+  const expectedExact: ExactQuotaValue = {
+    usedUsd: 42.5,
+    limitUsd: 100,
+    remainingUsd: 57.5,
+    usedPercent: 42.5,
+    source: "official-extra-usage",
+  };
+  assert.deepEqual(exactQuotaValue(validExtra, now), expectedExact);
+  assert.deepEqual(quotaValueForPool([], claude, validExtra, now, []), {
+    kind: "exact",
+    value: expectedExact,
+  });
+});
+
+test("exact quota rejects every invalid metadata branch and a zero limit", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const baseExtra: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: null,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    fetchedAt: now,
+    stale: false,
+  };
+  const cases: InvalidPoolMetadataCase[] = [
+    ...invalidPoolMetadataCases(now),
+    { name: "exactLimitUsd is zero", callNow: now, patch: { exactLimitUsd: 0 } },
+  ];
+  for (const invalid of cases) {
+    await t.test(invalid.name, () => {
+      const pool: OfficialQuotaPool = { ...baseExtra, ...invalid.patch };
+      assert.equal(exactQuotaValue(pool, invalid.callNow), null);
+      assert.equal(quotaValueForPool([], claude, pool, invalid.callNow, []), null);
+    });
+  }
+});
+
+test("exact quota rejects non-extra, stale, and missing amount branches", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const baseExtra: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: null,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    fetchedAt: now,
+    stale: false,
+  };
+  const cases: Array<{ name: string; pool: OfficialQuotaPool }> = [
+    {
+      name: "pool kind is not extra usage",
+      pool: { ...baseExtra, kind: "model-week" },
+    },
+    {
+      name: "extra usage is stale",
+      pool: { ...baseExtra, stale: true },
+    },
+    {
+      name: "exact used amount is missing",
+      pool: { ...baseExtra, exactUsedUsd: null },
+    },
+    {
+      name: "exact limit amount is missing",
+      pool: { ...baseExtra, exactLimitUsd: null },
+    },
+  ];
+  for (const invalid of cases) {
+    await t.test(invalid.name, () => {
+      assert.equal(exactQuotaValue(invalid.pool, now), null);
+    });
+  }
 });
