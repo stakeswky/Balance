@@ -126,6 +126,7 @@ export function Dashboard() {
         agent: "claude" | "grok" | "codex",
         meter: ReturnType<typeof meterFor>,
         kind: PrimaryWindowKind,
+        sources: MeterDataSources | null,
         winKey: "claudeWin" | "grokWin" | "codexWin",
         weekKey: "claudeWeek" | "grokWeek" | "codexWeek",
         name: string,
@@ -136,11 +137,16 @@ export function Dashboard() {
           windowThreshold: state.alertWindowPct,
           weekThreshold: state.alertWeekPct,
         });
-        const primaryTriggered = state.claimAlertLatch(
-          winKey,
-          decision.primaryPercent,
-          decision.primaryThreshold,
-        );
+        const primaryLatchKey = kind === "weekly" ? weekKey : winKey;
+        const primarySource = kind === "weekly" ? sources?.week : sources?.window;
+        const primaryAvailable = sources == null || primarySource === "official";
+        const primaryTriggered = primaryAvailable
+          ? state.claimAlertLatch(
+              primaryLatchKey,
+              decision.primaryPercent,
+              decision.primaryThreshold,
+            )
+          : false;
         if (decision.primaryTriggered && primaryTriggered) {
           const message = `${name} ${decision.primaryLabel}已用 ${decision.primaryPercent.toFixed(0)}%`;
           toast.error(message);
@@ -151,7 +157,8 @@ export function Dashboard() {
             message,
           });
         }
-        const weekTriggered = kind !== "weekly"
+        const weekAvailable = sources == null || sources.week === "official";
+        const weekTriggered = kind !== "weekly" && weekAvailable
           ? state.claimAlertLatch(weekKey, meter.weekPct, state.alertWeekPct)
           : false;
         if (decision.weekTriggered && weekTriggered) {
@@ -178,34 +185,39 @@ export function Dashboard() {
         meterFor(activeEvents, "codex", planById(state.codexPlanId), t, state.weekBoostPct),
         state.official.codex,
       );
+      const claudeSources = meterDataSources(state.official.claude);
+      const grokSources = meterDataSources(state.official.grok);
+      const codexSources = meterDataSources(state.official.codex);
       const claudeDecisionMeter = state.demoMode
         ? claudeMeter
-        : officialOnlyMeter(claudeMeter, meterDataSources(state.official.claude));
+        : officialOnlyMeter(claudeMeter, claudeSources);
       const grokDecisionMeter = state.demoMode
         ? grokMeter
-        : officialOnlyMeter(grokMeter, meterDataSources(state.official.grok));
+        : officialOnlyMeter(grokMeter, grokSources);
       const codexDecisionMeter = state.demoMode
         ? codexMeter
-        : officialOnlyMeter(codexMeter, meterDataSources(state.official.codex));
+        : officialOnlyMeter(codexMeter, codexSources);
       if (activeAgents.includes("claude")) {
         if (claudeDecisionMeter) {
           check(
             "claude",
             claudeDecisionMeter,
             state.official.claude?.windowKind ?? "five_hour",
+            state.demoMode ? null : claudeSources,
             "claudeWin",
             "claudeWeek",
             "Claude Code",
           );
         }
-        const fableUsedPct = state.demoMode || !state.official.claude?.modelWeekLimitsStale
-          ? (claudeFableLimit?.usedPct ?? null)
-          : null;
-        const fableTriggered = state.claimAlertLatch(
-          "claudeFable",
-          fableUsedPct,
-          state.alertWeekPct,
-        );
+        const fableAvailable = claudeFableLimit != null &&
+          (state.demoMode || !state.official.claude?.modelWeekLimitsStale);
+        const fableTriggered = fableAvailable
+          ? state.claimAlertLatch(
+              "claudeFable",
+              claudeFableLimit.usedPct,
+              state.alertWeekPct,
+            )
+          : false;
         if (
           claudeFableLimit &&
           (state.demoMode || !state.official.claude?.modelWeekLimitsStale) &&
@@ -221,6 +233,7 @@ export function Dashboard() {
           "grok",
           grokDecisionMeter,
           state.official.grok?.windowKind ?? "five_hour",
+          state.demoMode ? null : grokSources,
           "grokWin",
           "grokWeek",
           "Grok",
@@ -231,6 +244,7 @@ export function Dashboard() {
           "codex",
           codexDecisionMeter,
           state.official.codex?.windowKind ?? "five_hour",
+          state.demoMode ? null : codexSources,
           "codexWin",
           "codexWeek",
           "Codex",

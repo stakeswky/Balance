@@ -25,7 +25,7 @@ const MAX_DISPLAY_EVENTS = 20_000;
 const MAX_CALIBRATION_EVENTS = 100_000;
 const MAX_ALERTS = 40;
 
-export const QUOTA_PERSIST_VERSION = 1;
+export const QUOTA_PERSIST_VERSION = 2;
 
 export function migrateQuotaPersist(
   persisted: unknown,
@@ -38,6 +38,9 @@ export function migrateQuotaPersist(
   if (fromVersion < 1) {
     state.minimalMode = true;
   }
+  if (fromVersion < 2) {
+    state.alertLatches = normalizeAlertLatches(state.alertLatches);
+  }
   return state;
 }
 
@@ -49,27 +52,61 @@ export interface QuotaAlert {
   message: string;
 }
 
-export type QuotaAlertLatchKey =
-  | "claudeWin"
-  | "claudeWeek"
-  | "claudeFable"
-  | "grokWin"
-  | "grokWeek"
-  | "codexWin"
-  | "codexWeek";
+const QUOTA_ALERT_LATCH_KEYS = [
+  "claudeWin",
+  "claudeWeek",
+  "claudeFable",
+  "grokWin",
+  "grokWeek",
+  "codexWin",
+  "codexWeek",
+] as const;
+
+export type QuotaAlertLatchKey = typeof QUOTA_ALERT_LATCH_KEYS[number];
 
 export type QuotaAlertLatches = Record<QuotaAlertLatchKey, boolean>;
 
-export function emptyAlertLatches(): QuotaAlertLatches {
+export function normalizeAlertLatches(value: unknown): QuotaAlertLatches {
+  const source = value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
   return {
-    claudeWin: false,
-    claudeWeek: false,
-    claudeFable: false,
-    grokWin: false,
-    grokWeek: false,
-    codexWin: false,
-    codexWeek: false,
+    claudeWin: source.claudeWin === true,
+    claudeWeek: source.claudeWeek === true,
+    claudeFable: source.claudeFable === true,
+    grokWin: source.grokWin === true,
+    grokWeek: source.grokWeek === true,
+    codexWin: source.codexWin === true,
+    codexWeek: source.codexWeek === true,
   };
+}
+
+export function emptyAlertLatches(): QuotaAlertLatches {
+  return normalizeAlertLatches(null);
+}
+
+function validAlertLatches(value: unknown): value is QuotaAlertLatches {
+  if (value == null || typeof value !== "object") return false;
+  const source = value as Record<string, unknown>;
+  return QUOTA_ALERT_LATCH_KEYS.every((key) => typeof source[key] === "boolean");
+}
+
+function clearAgentAlertLatches(
+  current: QuotaAlertLatches,
+  agent: AgentId,
+): QuotaAlertLatches {
+  if (agent === "claude") {
+    return {
+      ...current,
+      claudeWin: false,
+      claudeWeek: false,
+      claudeFable: false,
+    };
+  }
+  if (agent === "grok") {
+    return { ...current, grokWin: false, grokWeek: false };
+  }
+  return { ...current, codexWin: false, codexWeek: false };
 }
 
 interface TrimmedEventState {
@@ -352,9 +389,20 @@ export const useQuota = create<QuotaState>()(
       alertLatches: emptyAlertLatches(),
       alerts: [],
       setPlan: (agent, id) => {
-        if (agent === "claude") set({ claudePlanId: id });
-        else if (agent === "grok") set({ grokPlanId: id });
-        else set({ codexPlanId: id });
+        const state = get();
+        const currentId = agent === "claude"
+          ? state.claudePlanId
+          : agent === "grok"
+            ? state.grokPlanId
+            : state.codexPlanId;
+        if (id === currentId) return;
+        const alertLatches = clearAgentAlertLatches(
+          normalizeAlertLatches(state.alertLatches),
+          agent,
+        );
+        if (agent === "claude") set({ claudePlanId: id, alertLatches });
+        else if (agent === "grok") set({ grokPlanId: id, alertLatches });
+        else set({ codexPlanId: id, alertLatches });
       },
       setBoost: (n) => set({ weekBoostPct: Math.max(0, Math.min(100, Math.round(n))) }),
       setAlertWindow: (n) => {
@@ -368,9 +416,10 @@ export const useQuota = create<QuotaState>()(
         set({ alertWeekPct, alertLatches: emptyAlertLatches() });
       },
       claimAlertLatch: (key, usedPct, threshold) => {
-        const current = get().alertLatches;
+        const stored: unknown = get().alertLatches;
+        const current = normalizeAlertLatches(stored);
         const result = quotaAlertLatch(usedPct, threshold, current[key]);
-        if (result.nextWarned !== current[key]) {
+        if (!validAlertLatches(stored) || result.nextWarned !== current[key]) {
           set({ alertLatches: { ...current, [key]: result.nextWarned } });
         }
         return result.triggered;
@@ -403,11 +452,13 @@ export const useQuota = create<QuotaState>()(
       },
       setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
       setDemoMode: (on) => {
+        const state = get();
+        if (on === state.demoMode) return;
         if (on) {
+          set({ alertLatches: emptyAlertLatches() });
           get().resetDemo();
           return;
         }
-        const state = get();
         set({
           events: state.realEvents,
           demoMode: false,
@@ -430,6 +481,7 @@ export const useQuota = create<QuotaState>()(
           grokSession: null,
           codexSession: null,
           lastBeat: Date.now(),
+          alertLatches: emptyAlertLatches(),
         });
       },
       setMinimalMode: (minimalMode) => set({ minimalMode }),
@@ -680,15 +732,30 @@ export const useQuota = create<QuotaState>()(
         return incoming.length;
       },
       setOfficial: (official) => {
+        const state = get();
         const patch: Partial<QuotaState> = { official, lastBeat: Date.now() };
+        let alertLatches = normalizeAlertLatches(state.alertLatches);
+        let planChanged = false;
         const grokPlan = grokPlanIdFromLabel(official.grok?.planLabel ?? null);
-        if (grokPlan && !get().demoMode) patch.grokPlanId = grokPlan;
-        if (!get().demoMode) {
-          patch.codexPlanId = nextCodexPlanId(
-            get().codexPlanId,
+        if (grokPlan && !state.demoMode) {
+          patch.grokPlanId = grokPlan;
+          if (grokPlan !== state.grokPlanId) {
+            alertLatches = clearAgentAlertLatches(alertLatches, "grok");
+            planChanged = true;
+          }
+        }
+        if (!state.demoMode) {
+          const codexPlan = nextCodexPlanId(
+            state.codexPlanId,
             official.codex?.planLabel ?? null,
           );
+          patch.codexPlanId = codexPlan;
+          if (codexPlan !== state.codexPlanId) {
+            alertLatches = clearAgentAlertLatches(alertLatches, "codex");
+            planChanged = true;
+          }
         }
+        if (planChanged) patch.alertLatches = alertLatches;
         set(patch);
         get().recordOfficialSamples();
       },
@@ -740,6 +807,7 @@ export const useQuota = create<QuotaState>()(
       },
       resetDemo: () => {
         const now = Date.now();
+        const alertLatches = normalizeAlertLatches(get().alertLatches);
         set({
           events: seedHistory(now),
           ...startTrio(now),
@@ -760,6 +828,7 @@ export const useQuota = create<QuotaState>()(
           activeClaude: [],
           activeGrok: [],
           activeCodex: [],
+          alertLatches,
         });
       },
       setHint: (on) => set({ adapterHint: on }),
@@ -871,7 +940,7 @@ export const useQuota = create<QuotaState>()(
         adapterHint: s.adapterHint,
         alertWindowPct: s.alertWindowPct,
         alertWeekPct: s.alertWeekPct,
-        alertLatches: s.alertLatches,
+        alertLatches: normalizeAlertLatches(s.alertLatches),
         alerts: s.alerts.slice(0, MAX_ALERTS),
         quotaSamples: s.quotaSamples,
       }),

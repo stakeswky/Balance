@@ -190,6 +190,7 @@ function persistedState(extra = {}) {
   return {
     onboardingComplete: true,
     demoMode: false,
+    minimalMode: false,
     adapterHint: false,
     agentAvailability: { claude: true, grok: false, codex: false },
     captureEnabled: { claude: true, grok: false, codex: false },
@@ -249,6 +250,7 @@ const SCENARIOS = {
     absent: ["5 小时窗（官方）", "Fable 5 周池（官方）"],
   },
   stale: {
+    persistVersion: 2,
     official: {
       claude: officialSlice({
         windowPct: 96,
@@ -275,7 +277,22 @@ const SCENARIOS = {
       "官方快照",
     ],
     absent: ["5 小时窗（官方）", "本周额度（官方）", "将尽"],
+    state: {
+      minimalMode: false,
+      alerts: [],
+      alertLatches: {
+        claudeWin: false,
+        claudeWeek: false,
+        claudeFable: true,
+        grokWin: false,
+        grokWeek: false,
+        codexWin: false,
+        codexWeek: false,
+      },
+    },
     expectNoAlerts: true,
+    expectPreservedAlertLatch: "claudeFable",
+    expectedPreservedAlertCount: 0,
   },
   "alert-once": {
     official: {
@@ -289,12 +306,119 @@ const SCENARIOS = {
       codex: null,
     },
     state: {
+      minimalMode: true,
       alertWindowPct: 80,
       alertWeekPct: 85,
     },
     present: ["本周额度", "34%"],
     absent: ["官方快照"],
-    expectSingleAlertAcrossReload: true,
+    expectedAlertMessage: "Claude Code 5 小时窗已用 90%",
+    expectedAlertLatch: "claudeWin",
+    expectedInactiveAlertLatch: "claudeWeek",
+  },
+  "alert-once-weekly": {
+    official: {
+      claude: officialSlice({
+        windowKind: "weekly",
+        windowPct: null,
+        weekPct: 90,
+        modelWeekLimits: undefined,
+        quotaPools: [],
+      }),
+      grok: null,
+      codex: null,
+    },
+    state: { minimalMode: true, alertWindowPct: 80, alertWeekPct: 85 },
+    present: ["本周额度", "90%"],
+    absent: ["官方快照"],
+    expectedAlertMessage: "Claude Code 本周额度已用 90%",
+    expectedAlertLatch: "claudeWeek",
+    expectedInactiveAlertLatch: "claudeWin",
+  },
+  "stale-recovery-alert-once": {
+    officialSequence: [
+      {
+        claude: officialSlice({ windowPct: 90, weekPct: 34, quotaPools: [] }),
+        grok: null,
+        codex: null,
+      },
+      {
+        claude: officialSlice({
+          windowPct: 90,
+          weekPct: 34,
+          windowStale: true,
+          quotaPools: [],
+        }),
+        grok: null,
+        codex: null,
+      },
+      {
+        claude: officialSlice({ windowPct: 90, weekPct: 34, quotaPools: [] }),
+        grok: null,
+        codex: null,
+      },
+    ],
+    state: { minimalMode: true, alertWindowPct: 80, alertWeekPct: 85 },
+    present: ["本周额度", "34%"],
+    absent: [],
+    expectedAlertMessage: "Claude Code 5 小时窗已用 90%",
+    expectedAlertLatch: "claudeWin",
+    expectedInactiveAlertLatch: "claudeWeek",
+    stepOfficialSequenceBeforeReload: true,
+  },
+  "fable-missing": {
+    persistVersion: 2,
+    official: {
+      claude: officialSlice({
+        windowPct: 24,
+        weekPct: 34,
+        modelWeekLimits: undefined,
+        quotaPools: [],
+      }),
+      grok: null,
+      codex: null,
+    },
+    state: {
+      minimalMode: false,
+      alerts: [],
+      alertLatches: {
+        claudeWin: false,
+        claudeWeek: false,
+        claudeFable: true,
+        grokWin: false,
+        grokWeek: false,
+        codexWin: false,
+        codexWeek: false,
+      },
+    },
+    present: ["本周额度（官方）", "34%"],
+    absent: ["Fable 5 周池（官方）", "官方快照"],
+    expectNoAlerts: true,
+    expectPreservedAlertLatch: "claudeFable",
+    expectedPreservedAlertCount: 0,
+  },
+  "demo-latch-reload": {
+    official: { claude: null, grok: null, codex: null },
+    state: {
+      demoMode: true,
+      alertWindowPct: 99,
+      alertWeekPct: 99,
+      alerts: [],
+      alertLatches: {
+        claudeWin: true,
+        claudeWeek: false,
+        claudeFable: false,
+        grokWin: false,
+        grokWeek: false,
+        codexWin: false,
+        codexWeek: false,
+      },
+    },
+    present: [],
+    absent: [],
+    expectOfficialRequest: false,
+    expectPreservedAlertLatch: "claudeWin",
+    expectedPreservedAlertCount: 0,
   },
   error: {
     mode: "error",
@@ -449,16 +573,20 @@ async function runScenario(browser, scenarioName, viewportName) {
   });
   const held = [];
   let officialSeen = 0;
+  let officialStage = 0;
   const serverFnRequests = [];
   const scannerBodies = [];
-  await context.addInitScript((state) => {
+  await context.addInitScript(({ state, version }) => {
     if (localStorage.getItem("balance-quota-v8") == null) {
       localStorage.setItem(
         "balance-quota-v8",
-        JSON.stringify({ state, version: 0 }),
+        JSON.stringify({ state, version }),
       );
     }
-  }, persistedState(scenario.state ?? {}));
+  }, {
+    state: persistedState(scenario.state ?? {}),
+    version: scenario.persistVersion ?? 2,
+  });
   await context.route(/https:\/\/(grok\.com|fonts\.(gstatic|googleapis)\.com)\//, async (route) => {
     const type = route.request().resourceType();
     await route.fulfill({
@@ -548,11 +676,15 @@ async function runScenario(browser, scenarioName, viewportName) {
       if (scenario.mode === "hold") {
         await new Promise((resolveHold) => held.push(resolveHold));
       }
+      const officialSequence = scenario.officialSequence;
+      const officialFixture = officialSequence?.length
+        ? officialSequence[Math.min(officialStage, officialSequence.length - 1)]
+        : (scenario.official ?? { claude: null, grok: null, codex: null });
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         headers: { "x-tss-serialized": "true" },
-        body: serialized(scenario.official ?? { claude: null, grok: null, codex: null }),
+        body: serialized(officialFixture),
       });
       return;
     }
@@ -600,11 +732,18 @@ async function runScenario(browser, scenarioName, viewportName) {
     if (response?.status() !== 200) throw new Error(`homepage status ${response?.status()}`);
     const card = cardAround(page, "Claude Code");
     await card.waitFor();
-    if (officialSeen < 1) {
+    if (scenario.expectOfficialRequest !== false && officialSeen < 1) {
       throw new Error(`official fixture was not intercepted: ${JSON.stringify(serverFnRequests)}`);
     }
     for (const text of scenario.present) {
-      await card.getByText(text, { exact: true }).first().waitFor();
+      try {
+        await card.getByText(text, { exact: true }).first().waitFor();
+      } catch (error) {
+        throw new Error(
+          `missing expected text ${JSON.stringify(text)}; card text=${JSON.stringify(await card.innerText())}`,
+          { cause: error },
+        );
+      }
     }
     for (const text of scenario.absent) {
       if (await card.getByText(text, { exact: true }).count()) {
@@ -618,39 +757,99 @@ async function runScenario(browser, scenarioName, viewportName) {
       });
       if (alertCount !== 0) throw new Error(`stale quota emitted ${alertCount} alerts`);
     }
-    if (scenario.expectSingleAlertAcrossReload) {
-      await page.waitForFunction(() => {
+    if (scenario.expectedAlertMessage && scenario.expectedAlertLatch) {
+      await page.waitForFunction((latchKey) => {
         const raw = localStorage.getItem("balance-quota-v8");
         if (!raw) return false;
         const state = JSON.parse(raw).state;
-        return state.alerts?.length === 1;
-      });
+        return state.alerts?.length === 1 && state.alertLatches?.[latchKey] === true;
+      }, scenario.expectedAlertLatch);
       const firstMessage = await page.evaluate(() => {
         const raw = localStorage.getItem("balance-quota-v8");
         return raw ? JSON.parse(raw).state.alerts[0]?.message : null;
       });
-      assert.equal(firstMessage, "Claude Code 5 小时窗已用 90%");
+      assert.equal(firstMessage, scenario.expectedAlertMessage);
       const firstToast = page.locator("[data-sonner-toast]").first();
       await firstToast.waitFor({ state: "visible" });
+      if (scenario.stepOfficialSequenceBeforeReload) {
+        for (let stage = 1; stage < scenario.officialSequence.length; stage += 1) {
+          const seenBeforeStage = officialSeen;
+          officialStage = stage;
+          const deadline = Date.now() + 20_000;
+          while (officialSeen <= seenBeforeStage) {
+            if (Date.now() >= deadline) {
+              throw new Error(`official sequence stage ${stage} was not requested`);
+            }
+            await page.waitForTimeout(250);
+          }
+          await page.waitForTimeout(500);
+        }
+      }
       await firstToast.waitFor({ state: "detached", timeout: 10_000 });
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await card.waitFor();
       await page.waitForTimeout(3_000);
-      const afterReload = await page.evaluate(() => {
+      const afterReload = await page.evaluate(({ activeKey, inactiveKey }) => {
         const raw = localStorage.getItem("balance-quota-v8");
         const state = raw ? JSON.parse(raw).state : null;
         return {
           alerts: state?.alerts?.length ?? 0,
-          warned: state?.alertLatches?.claudeWin ?? false,
+          activeWarned: state?.alertLatches?.[activeKey] ?? false,
+          inactiveWarned: inactiveKey
+            ? (state?.alertLatches?.[inactiveKey] ?? false)
+            : false,
           toastMessages: [...document.querySelectorAll("[data-sonner-toast]")].map((toast) => ({
             text: toast.textContent,
             removed: toast.getAttribute("data-removed"),
             mounted: toast.getAttribute("data-mounted"),
           })),
         };
+      }, {
+        activeKey: scenario.expectedAlertLatch,
+        inactiveKey: scenario.expectedInactiveAlertLatch ?? null,
       });
-      assert.deepEqual(afterReload, { alerts: 1, warned: true, toastMessages: [] });
+      assert.deepEqual(afterReload, {
+        alerts: 1,
+        activeWarned: true,
+        inactiveWarned: false,
+        toastMessages: [],
+      });
+    }
+    if (scenario.expectPreservedAlertLatch) {
+      await page.waitForTimeout(3_000);
+      const beforeReload = await page.evaluate((latchKey) => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        const state = raw ? JSON.parse(raw).state : null;
+        return {
+          latch: state?.alertLatches?.[latchKey] ?? false,
+          alerts: state?.alerts?.length ?? 0,
+          toastMessages: [...document.querySelectorAll("[data-sonner-toast]")].map((toast) =>
+            toast.textContent
+          ),
+        };
+      }, scenario.expectPreservedAlertLatch);
+      assert.deepEqual(beforeReload, {
+        latch: true,
+        alerts: scenario.expectedPreservedAlertCount,
+        toastMessages: [],
+      });
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await card.waitFor();
+      await page.waitForTimeout(3_000);
+      const afterReload = await page.evaluate((latchKey) => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        const state = raw ? JSON.parse(raw).state : null;
+        return {
+          latch: state?.alertLatches?.[latchKey] ?? false,
+          alerts: state?.alerts?.length ?? 0,
+          toastMessages: [...document.querySelectorAll("[data-sonner-toast]")].map((toast) =>
+            toast.textContent
+          ),
+        };
+      }, scenario.expectPreservedAlertLatch);
+      assert.deepEqual(afterReload, beforeReload);
     }
     for (const name of scenario.accessibilityNames ?? []) {
       await page.getByLabel(name, { exact: true }).waitFor({ state: "visible" });

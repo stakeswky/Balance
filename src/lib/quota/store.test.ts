@@ -114,7 +114,7 @@ test("minimal mode defaults on, geek toggle persists, and v0 storage migrates to
   assert.ok(partialize);
   const persisted = partialize(state) as Partial<typeof state>;
   assert.equal(persisted.minimalMode, false);
-  assert.equal(useQuota.persist.getOptions().version, 1);
+  assert.equal(useQuota.persist.getOptions().version, 2);
 
   const fromV0False = migrateQuotaPersist({ minimalMode: false, demoMode: true }, 0);
   assert.equal(fromV0False.minimalMode, true);
@@ -123,6 +123,14 @@ test("minimal mode defaults on, geek toggle persists, and v0 storage migrates to
   assert.equal(fromV0Missing.minimalMode, true);
   const fromV1Geek = migrateQuotaPersist({ minimalMode: false }, 1);
   assert.equal(fromV1Geek.minimalMode, false);
+  assert.deepEqual(
+    migrateQuotaPersist({ alertLatches: { claudeWin: true } }, 1).alertLatches,
+    { ...emptyAlertLatches(), claudeWin: true },
+  );
+  assert.deepEqual(
+    migrateQuotaPersist({}, 1).alertLatches,
+    emptyAlertLatches(),
+  );
 });
 
 test("alert latch persists one warning until usage drops or threshold changes", () => {
@@ -149,6 +157,105 @@ test("alert latch persists one warning until usage drops or threshold changes", 
 
   useQuota.getState().setAlertWindow(90);
   assert.deepEqual(useQuota.getState().alertLatches, emptyAlertLatches());
+});
+
+test("alert latch normalizes corrupt persisted state before claiming", () => {
+  useQuota.setState({ alertLatches: null as unknown as QuotaState["alertLatches"] });
+  assert.equal(useQuota.getState().claimAlertLatch("claudeWin", 90, 80), true);
+  assert.deepEqual(useQuota.getState().alertLatches, {
+    ...emptyAlertLatches(),
+    claudeWin: true,
+  });
+
+  useQuota.setState({ alertLatches: null as unknown as QuotaState["alertLatches"] });
+  const partialize = useQuota.persist.getOptions().partialize;
+  assert.ok(partialize);
+  const persisted = partialize(useQuota.getState()) as Partial<QuotaState>;
+  assert.deepEqual(persisted.alertLatches, emptyAlertLatches());
+});
+
+test("plan changes clear only that agent's latches and same plan preserves them", () => {
+  const currentClaudePlan = useQuota.getState().claudePlanId;
+  const seeded = {
+    ...emptyAlertLatches(),
+    claudeWin: true,
+    claudeWeek: true,
+    claudeFable: true,
+    grokWin: true,
+  };
+  useQuota.setState({ alertLatches: seeded });
+
+  useQuota.getState().setPlan("claude", currentClaudePlan);
+  assert.deepEqual(useQuota.getState().alertLatches, seeded);
+
+  useQuota.getState().setPlan("claude", `${currentClaudePlan}-changed`);
+  assert.deepEqual(useQuota.getState().alertLatches, {
+    ...emptyAlertLatches(),
+    grokWin: true,
+  });
+});
+
+test("official plan changes clear matching latches while same plans preserve them", () => {
+  const now = Date.now();
+  const base = officialClaude(now);
+  const official = {
+    claude: null,
+    grok: { ...base, agent: "grok" as const, planLabel: "Heavy" },
+    codex: { ...base, agent: "codex" as const, planLabel: "ChatGPT Pro 20×" },
+  };
+  useQuota.setState({
+    demoMode: false,
+    grokPlanId: "grok-super",
+    codexPlanId: "chatgpt-plus",
+    alertLatches: {
+      ...emptyAlertLatches(),
+      claudeWin: true,
+      grokWin: true,
+      grokWeek: true,
+      codexWin: true,
+      codexWeek: true,
+    },
+  });
+
+  useQuota.getState().setOfficial(official);
+  assert.equal(useQuota.getState().grokPlanId, "grok-heavy");
+  assert.equal(useQuota.getState().codexPlanId, "chatgpt-pro-20x");
+  assert.deepEqual(useQuota.getState().alertLatches, {
+    ...emptyAlertLatches(),
+    claudeWin: true,
+  });
+
+  assert.equal(useQuota.getState().claimAlertLatch("grokWin", 90, 80), true);
+  assert.equal(useQuota.getState().claimAlertLatch("codexWin", 90, 80), true);
+  useQuota.getState().setOfficial(official);
+  assert.equal(useQuota.getState().alertLatches.grokWin, true);
+  assert.equal(useQuota.getState().alertLatches.codexWin, true);
+});
+
+test("mode transitions clear latches while same mode and demo reset preserve them", () => {
+  useQuota.setState({
+    demoMode: false,
+    alertLatches: { ...emptyAlertLatches(), claudeWin: true },
+  });
+
+  useQuota.getState().setDemoMode(false);
+  assert.equal(useQuota.getState().alertLatches.claudeWin, true);
+
+  useQuota.getState().setDemoMode(true);
+  assert.deepEqual(useQuota.getState().alertLatches, emptyAlertLatches());
+
+  assert.equal(useQuota.getState().claimAlertLatch("claudeWin", 90, 80), true);
+  useQuota.getState().resetDemo();
+  assert.equal(useQuota.getState().alertLatches.claudeWin, true);
+  useQuota.getState().setDemoMode(true);
+  assert.equal(useQuota.getState().alertLatches.claudeWin, true);
+
+  useQuota.getState().setDemoMode(false);
+  assert.deepEqual(useQuota.getState().alertLatches, emptyAlertLatches());
+
+  assert.equal(useQuota.getState().claimAlertLatch("grokWin", 90, 80), true);
+  useQuota.getState().setDemoMode(false);
+  assert.equal(useQuota.getState().alertLatches.grokWin, true);
 });
 
 test("demo can be enabled and disabled without losing real events or calibration samples", () => {

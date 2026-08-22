@@ -190,7 +190,7 @@ async function persistedMinimalMode(page) {
     return raw ? JSON.parse(raw).state?.minimalMode : undefined;
   });
 }
-async function newSeededPage(browser, { state, availability, viewport, persistVersion = 1 }) {
+async function newSeededPage(browser, { state, availability, viewport, persistVersion = 2 }) {
   const context = await browser.newContext({ viewport, locale: "zh-CN" });
   const diagnostics = { consoleErrors: [], pageErrors: [], requestFailures: [], httpErrors: [] };
   context.on("page", (openedPage) => attachDiagnostics(openedPage, diagnostics));
@@ -383,7 +383,7 @@ try {
     const raw = localStorage.getItem("balance-quota-v8");
     if (!raw) return false;
     const parsed = JSON.parse(raw);
-    return parsed.version === 1 && parsed.state?.minimalMode === true;
+    return parsed.version === 2 && parsed.state?.minimalMode === true;
   });
   await assertMinimalMode(page);
   await assertAdvicePlanOneLine(page);
