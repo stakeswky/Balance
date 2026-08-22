@@ -909,6 +909,7 @@ pub fn run() {
     let sidecar_state = SidecarState::default();
     let bootstrap_state = BootstrapState::default();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar_state.clone())
         .manage(TrayPopupState::default())

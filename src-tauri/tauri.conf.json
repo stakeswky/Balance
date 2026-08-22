@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Balance",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.balance.desktop",
   "build": {
     "beforeBuildCommand": "npm run desktop:prepare",
@@ -15,6 +15,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg"],
     "category": "DeveloperTool",
     "externalBin": ["binaries/balance-node"],
@@ -29,6 +30,14 @@
       "infoPlist": "Info.plist",
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM1QUFDRTYyM0E0QkIxREMKUldUY3NVczZZczZxTlE1M1Q0TFZsZ25teFY1a3hhQU9tQWc3QzhLdGYvVmU3STd4Q2RsVUZkaFcK",
+      "endpoints": [
+        "https://github.com/stakeswky/Balance/releases/latest/download/latest.json"
+      ]
     }
   }
 }

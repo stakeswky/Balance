@@ -21,8 +21,9 @@ test("hot-update path stays allowlisted, guarded, and capability-minimal", () =>
   assert.match(manifest, /isAllowedInstallerUrl/);
   assert.match(apply, /MAX_PACK_BYTES = 80 \* 1024 \* 1024/);
   assert.match(apply, /timingSafeEqual/);
-  assert.deepEqual(capability.permissions, ["core:default"]);
+  assert.deepEqual(capability.permissions, ["core:default", "updater:default"]);
   assert.doesNotMatch(JSON.stringify(capability), /shell:allow|fs:allow/);
+  assert.equal(packageJson.dependencies?.["@tauri-apps/plugin-updater"], "2.10.1");
   assert.equal(packageJson.dependencies?.["@tauri-apps/api"], undefined);
   assert.equal(packageJson.devDependencies?.["@tauri-apps/api"], undefined);
 });

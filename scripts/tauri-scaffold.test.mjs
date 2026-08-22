@@ -23,7 +23,7 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.equal(config.bundle.macOS.signingIdentity, "-");
   assert.equal(config.bundle.macOS.infoPlist, "Info.plist");
   assert.equal(config.bundle.resources["resources/sidecar-watchdog.cjs"], "sidecar-watchdog.cjs");
-  assert.deepEqual(capability.permissions, ["core:default"]);
+  assert.deepEqual(capability.permissions, ["core:default", "updater:default"]);
   assert.doesNotMatch(JSON.stringify(capability), /shell:allow|fs:allow/);
   assert.match(infoPlist, /<key>NSAppTransportSecurity<\/key>/);
   assert.match(infoPlist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/);
