@@ -76,6 +76,7 @@ export function Dashboard() {
 
   const events = useQuota((s) => s.events);
   const realEvents = useQuota((s) => s.realEvents);
+  const calibrationEvents = useQuota((s) => s.calibrationEvents);
   const agentAvailability = useQuota((s) => s.agentAvailability);
   const liveClaude = useQuota((s) => s.liveClaude);
   const liveGrok = useQuota((s) => s.liveGrok);
@@ -107,6 +108,10 @@ export function Dashboard() {
     () => eventsForAgents(events, visibleAgents),
     [events, visibleAgents],
   );
+  const analyticsEvents = useMemo(
+    () => eventsForAgents(demoMode ? events : calibrationEvents, visibleAgents),
+    [demoMode, events, calibrationEvents, visibleAgents],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +123,10 @@ export function Dashboard() {
         state.demoMode,
         state.realEvents,
       );
-      const activeEvents = eventsForAgents(state.events, activeAgents);
+      const activeEvents = eventsForAgents(
+        state.demoMode ? state.events : state.calibrationEvents,
+        activeAgents,
+      );
       const check = (
         agent: "claude" | "grok" | "codex",
         meter: ReturnType<typeof meterFor>,
@@ -323,10 +331,10 @@ export function Dashboard() {
   const claudeMeter = useMemo(
     () =>
       applyOfficial(
-        meterFor(visibleEvents, "claude", claudePlan, now, weekBoostPct),
+        meterFor(analyticsEvents, "claude", claudePlan, now, weekBoostPct),
         official.claude,
       ),
-    [visibleEvents, claudePlan, now, weekBoostPct, official.claude],
+    [analyticsEvents, claudePlan, now, weekBoostPct, official.claude],
   );
   const claudeFableLimit = useMemo(
     () => modelWeekLimitFor(claudePlan, official.claude, "fable"),
@@ -334,13 +342,13 @@ export function Dashboard() {
   );
   const grokMeter = useMemo(
     () =>
-      applyOfficial(meterFor(visibleEvents, "grok", grokPlan, now, weekBoostPct), official.grok),
-    [visibleEvents, grokPlan, now, weekBoostPct, official.grok],
+      applyOfficial(meterFor(analyticsEvents, "grok", grokPlan, now, weekBoostPct), official.grok),
+    [analyticsEvents, grokPlan, now, weekBoostPct, official.grok],
   );
   const codexMeter = useMemo(
     () =>
-      applyOfficial(meterFor(visibleEvents, "codex", codexPlan, now, weekBoostPct), official.codex),
-    [visibleEvents, codexPlan, now, weekBoostPct, official.codex],
+      applyOfficial(meterFor(analyticsEvents, "codex", codexPlan, now, weekBoostPct), official.codex),
+    [analyticsEvents, codexPlan, now, weekBoostPct, official.codex],
   );
   const claudeSources = meterDataSources(official.claude);
   const grokSources = meterDataSources(official.grok);
@@ -351,30 +359,30 @@ export function Dashboard() {
   );
   const claudeWeekVal = useMemo(
     () =>
-      quotaValueFor(visibleEvents, "claude", official.claude, "weekly", now, quotaSamples ?? []),
-    [visibleEvents, official.claude, now, quotaSamples],
+      quotaValueFor(analyticsEvents, "claude", official.claude, "weekly", now, quotaSamples ?? []),
+    [analyticsEvents, official.claude, now, quotaSamples],
   );
   const claudeWinVal = useMemo(
     () =>
-      quotaValueFor(visibleEvents, "claude", official.claude, "five_hour", now, quotaSamples ?? []),
-    [visibleEvents, official.claude, now, quotaSamples],
+      quotaValueFor(analyticsEvents, "claude", official.claude, "five_hour", now, quotaSamples ?? []),
+    [analyticsEvents, official.claude, now, quotaSamples],
   );
   const grokWeekVal = useMemo(
-    () => quotaValueFor(visibleEvents, "grok", official.grok, "weekly", now, quotaSamples ?? []),
-    [visibleEvents, official.grok, now, quotaSamples],
+    () => quotaValueFor(analyticsEvents, "grok", official.grok, "weekly", now, quotaSamples ?? []),
+    [analyticsEvents, official.grok, now, quotaSamples],
   );
   const grokWinVal = useMemo(
-    () => quotaValueFor(visibleEvents, "grok", official.grok, "five_hour", now, quotaSamples ?? []),
-    [visibleEvents, official.grok, now, quotaSamples],
+    () => quotaValueFor(analyticsEvents, "grok", official.grok, "five_hour", now, quotaSamples ?? []),
+    [analyticsEvents, official.grok, now, quotaSamples],
   );
   const codexWeekVal = useMemo(
-    () => quotaValueFor(visibleEvents, "codex", official.codex, "weekly", now, quotaSamples ?? []),
-    [visibleEvents, official.codex, now, quotaSamples],
+    () => quotaValueFor(analyticsEvents, "codex", official.codex, "weekly", now, quotaSamples ?? []),
+    [analyticsEvents, official.codex, now, quotaSamples],
   );
   const codexWinVal = useMemo(
     () =>
-      quotaValueFor(visibleEvents, "codex", official.codex, "five_hour", now, quotaSamples ?? []),
-    [visibleEvents, official.codex, now, quotaSamples],
+      quotaValueFor(analyticsEvents, "codex", official.codex, "five_hour", now, quotaSamples ?? []),
+    [analyticsEvents, official.codex, now, quotaSamples],
   );
   const combinedUsd = visibleAgents.reduce((sum, agent) => {
     if (agent === "claude") return sum + claudeWeekVal.l1Usd;
@@ -607,7 +615,7 @@ export function Dashboard() {
                   weekValue={claudeWeekVal}
                   windowValue={claudeWinVal}
                   weekResetsAt={official.claude?.weekResetsAt ?? null}
-                  events={visibleEvents}
+                  events={analyticsEvents}
                   now={now}
                   onToggle={() => useQuota.getState().toggleLive("claude")}
                 />
@@ -642,7 +650,7 @@ export function Dashboard() {
                   weekValue={grokWeekVal}
                   windowValue={grokWinVal}
                   weekResetsAt={official.grok?.weekResetsAt ?? null}
-                  events={visibleEvents}
+                  events={analyticsEvents}
                   now={now}
                   onToggle={() => useQuota.getState().toggleLive("grok")}
                 />
@@ -677,7 +685,7 @@ export function Dashboard() {
                   weekValue={codexWeekVal}
                   windowValue={codexWinVal}
                   weekResetsAt={official.codex?.weekResetsAt ?? null}
-                  events={visibleEvents}
+                  events={analyticsEvents}
                   now={now}
                   onToggle={() => useQuota.getState().toggleLive("codex")}
                 />
@@ -712,7 +720,7 @@ export function Dashboard() {
         {view === "report" ? (
           <ReportPanel
             agents={visibleAgents}
-            events={visibleEvents}
+            events={analyticsEvents}
             now={now}
             claudeMeter={claudeMeter}
             grokMeter={grokMeter}
