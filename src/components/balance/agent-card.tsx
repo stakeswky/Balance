@@ -253,7 +253,7 @@ export function AgentCard({
         </p>
       ) : null}
 
-      <div className="mt-5 space-y-3">
+      <div className="mt-3 space-y-3">
         {weeklyView ? (
           <MeterBar
             value={meter.weekPct}
@@ -330,7 +330,7 @@ export function AgentCard({
         </div>
       ) : null}
 
-      <dl className="mt-5 grid grid-cols-2 gap-3 text-xs">
+      <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
         {minimalMode ? (
           <>
             <Stat label="本周已用 token" value={formatTokens(meter.weekTokens)} />
@@ -456,7 +456,7 @@ export function AgentCard({
           </p>
 
           {parallel ? (
-            <div className="mt-5 rounded-md bg-raised px-3 py-3">
+            <div className="mt-3 rounded-md bg-raised px-3 py-3">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs tracking-wide text-faint uppercase">并行任务</p>
                 <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-xs text-mute">
@@ -486,7 +486,7 @@ export function AgentCard({
               ) : null}
             </div>
           ) : session && live ? (
-            <div className="mt-5 rounded-md bg-raised px-3 py-3">
+            <div className="mt-3 rounded-md bg-raised px-3 py-3">
               <p className="text-xs tracking-wide text-faint uppercase">实时会话</p>
               <p className="mt-1 text-sm text-ink">{session.task}</p>
               <p className="mt-1 font-mono text-xs text-mute">
@@ -496,11 +496,11 @@ export function AgentCard({
               {liveNote ? <p className="mt-1 text-xs text-mute">{liveNote}</p> : null}
             </div>
           ) : live ? (
-            <div className="mt-5 rounded-md bg-raised px-3 py-3 text-sm text-mute">
+            <div className="mt-3 rounded-md bg-raised px-3 py-3 text-sm text-mute">
               {liveNote ?? "正在监听日志"}
             </div>
           ) : (
-            <div className="mt-5 rounded-md bg-raised px-3 py-3 text-sm text-mute">采集已暂停</div>
+            <div className="mt-3 rounded-md bg-raised px-3 py-3 text-sm text-mute">采集已暂停</div>
           )}
 
           <div className="mt-4 space-y-2">

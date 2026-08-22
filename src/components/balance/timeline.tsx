@@ -40,7 +40,7 @@ export function DualTimeline({
 }) {
   const ticks = [5, 4, 3, 2, 1, 0];
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex items-center justify-between text-xs text-mute">
         <span>5 小时滚动窗</span>
         <span className="font-mono tabular">现在</span>

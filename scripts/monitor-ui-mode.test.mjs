@@ -18,3 +18,20 @@ test("settings expose geek mode as the opt-in full dashboard", () => {
   assert.doesNotMatch(settings, /aria-label="简约模式"/);
   assert.doesNotMatch(settings, /完整模式/);
 });
+
+test("collaboration plan keeps title and tips on one row", () => {
+  const advice = read("src/components/balance/advice-card.tsx");
+  assert.match(advice, /flex min-w-0 items-center gap-3/);
+  assert.match(advice, /truncate text-sm/);
+  assert.doesNotMatch(advice, /sm:grid-cols-2/);
+  assert.doesNotMatch(advice, /CardHint/);
+});
+
+test("monitor cards and dashboard use compact spacing", () => {
+  const card = read("src/components/ui/card.tsx");
+  const dashboard = read("src/components/balance/dashboard.tsx");
+  assert.match(card, /p-3 shadow-\[var\(--shadow-border\)\] sm:p-4/);
+  assert.match(dashboard, /px-4 py-4 sm:px-6 sm:py-5/);
+  assert.match(dashboard, /space-y-3/);
+  assert.doesNotMatch(dashboard, /space-y-5/);
+});

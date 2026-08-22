@@ -4,14 +4,14 @@ import { cn } from "@/lib/utils";
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("min-w-0 rounded-2xl bg-surface p-4 shadow-[var(--shadow-border)] sm:p-5", className)}
+      className={cn("min-w-0 rounded-2xl bg-surface p-3 shadow-[var(--shadow-border)] sm:p-4", className)}
       {...props}
     />
   );
 }
 
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("mb-4 flex items-start justify-between gap-3", className)} {...props} />;
+  return <div className={cn("mb-3 flex items-start justify-between gap-3", className)} {...props} />;
 }
 
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {

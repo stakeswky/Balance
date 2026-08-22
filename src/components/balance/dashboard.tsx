@@ -516,9 +516,9 @@ export function Dashboard() {
         onClose={() => setSessionId(null)}
       />
 
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+      <main className="mx-auto max-w-6xl px-4 py-4 sm:px-6 sm:py-5">
         {adapterHint && !minimalMode && view === "monitor" && visibleAgents.length ? (
-          <div className="mb-5 flex flex-col gap-3 rounded-xl bg-surface px-4 py-3 shadow-[var(--shadow-border)] sm:flex-row sm:items-center">
+          <div className="mb-3 flex flex-col gap-3 rounded-xl bg-surface px-4 py-3 shadow-[var(--shadow-border)] sm:flex-row sm:items-center">
             <p className="flex-1 text-sm text-mute">
               {demoMode
                 ? "当前是演示数据。可在设置中关闭演示，恢复只读监听本机日志。"
@@ -537,15 +537,15 @@ export function Dashboard() {
               在这台机器上先运行一次 Claude Code、Grok 或
               Codex，然后到设置重新检测；也可以在设置开启演示数据。
             </CardHint>
-            <Button className="mt-5" onClick={() => setView("settings")}>
+            <Button className="mt-4" onClick={() => setView("settings")}>
               打开设置
             </Button>
           </Card>
         ) : null}
 
         {view === "monitor" && visibleAgents.length ? (
-          <div className="space-y-5">
-            <section className="grid gap-5 lg:grid-cols-[minmax(0,17rem)_1fr]">
+          <div className="space-y-3">
+            <section className="grid gap-3 lg:grid-cols-[minmax(0,17rem)_1fr]">
               {tighter ? (
                 <Card>
                   <p className="text-xs text-mute">更紧的窗口</p>
@@ -553,8 +553,8 @@ export function Dashboard() {
                     {Math.max(0, 100 - tighterPct).toFixed(0)}
                     <span className="ml-1 text-xl text-mute">%</span>
                   </p>
-                  <p className="mt-3 text-sm text-mute">{tighter.label} 先碰到上限</p>
-                  <dl className="mt-5 space-y-2 text-xs">
+                  <p className="mt-2 text-sm text-mute">{tighter.label} 先碰到上限</p>
+                  <dl className="mt-3 space-y-2 text-xs">
                     <div className="flex justify-between">
                       <dt className="text-faint">本周 API 等价</dt>
                       <dd className="font-mono tabular">{formatUsd(combinedUsd)}</dd>
@@ -574,7 +574,7 @@ export function Dashboard() {
                     <Button
                       variant="secondary"
                       size="sm"
-                      className="mt-5 w-full"
+                      className="mt-3 w-full"
                       onClick={() => {
                         useQuota.getState().resetDemo();
                         setNow(Date.now());
@@ -589,7 +589,7 @@ export function Dashboard() {
               ) : null}
 
               <Card>
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <CardTitle>协同时间线</CardTitle>
                     <CardHint className="mt-1">
@@ -609,7 +609,7 @@ export function Dashboard() {
               </Card>
             </section>
 
-            <section className="grid min-w-0 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            <section className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {visibleAgents.includes("claude") ? (
                 <AgentCard
                   name="Claude Code"
@@ -714,7 +714,7 @@ export function Dashboard() {
             </section>
 
             <section
-              className={minimalMode ? "grid gap-5" : "grid gap-5 lg:grid-cols-[1.2fr_0.8fr]"}
+              className={minimalMode ? "grid gap-3" : "grid gap-3 lg:grid-cols-[1.2fr_0.8fr]"}
             >
               <Card>
                 <CardTitle>近 24 小时 token</CardTitle>
