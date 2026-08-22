@@ -45,7 +45,7 @@ test("native UI, health, and startup error use the Balance identity", () => {
 
 test("desktop verification and CI use Balance artifact paths", () => {
   const packageJson = JSON.parse(read("package.json"));
-  assert.match(packageJson.scripts["desktop:verify:dmg"], /Balance_0\.1\.1_aarch64\.dmg/);
+  assert.match(packageJson.scripts["desktop:verify:dmg"], /Balance_0\.2\.0_aarch64\.dmg/);
 
   for (const script of [
     "scripts/verify-macos-app.sh",

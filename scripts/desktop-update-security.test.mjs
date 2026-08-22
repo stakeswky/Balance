@@ -27,10 +27,10 @@ test("hot-update path stays allowlisted, guarded, and capability-minimal", () =>
   assert.equal(packageJson.devDependencies?.["@tauri-apps/api"], undefined);
 });
 
-test("tracked docs tell 0.1.0 users to install 0.1.1 before hot updates", () => {
+test("tracked docs tell 0.1.0 users to install 0.2.0 before hot updates", () => {
   const readme = read("README.md");
   const macos = read("docs/macos-desktop.md");
-  const chickenEgg = /已经安装的 0\.1\.0 没有检查更新代码，必须先装 0\.1\.1 的 DMG；之后 sidecar 更新才能热更新。/;
+  const chickenEgg = /已经安装的 0\.1\.0 没有检查更新代码，必须先装 0\.2\.0 的 DMG；之后 sidecar 更新才能热更新。/;
   assert.match(readme, chickenEgg);
   assert.match(macos, chickenEgg);
   assert.match(readme, /设置/);

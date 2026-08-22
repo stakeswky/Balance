@@ -13,7 +13,7 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(join(root, relative), "utf8");
 
-test("desktop pack, Tauri, Cargo, and native lock share version 0.1.1", () => {
+test("desktop pack, Tauri, Cargo, and native lock share version 0.2.0", () => {
   const pack = JSON.parse(read("desktop-pack.json"));
   const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
   const lock = JSON.parse(read("desktop-native.lock"));
@@ -21,16 +21,16 @@ test("desktop pack, Tauri, Cargo, and native lock share version 0.1.1", () => {
 
   assert.equal(pack.schemaVersion, 1);
   assert.equal(pack.app, "balance");
-  assert.equal(pack.packVersion, "0.1.1");
-  assert.equal(pack.minNativeVersion, "0.1.1");
-  assert.equal(tauri.version, "0.1.1");
-  assert.equal(cargoVersion, "0.1.1");
-  assert.equal(lock.nativeVersion, "0.1.1");
+  assert.equal(pack.packVersion, "0.2.0");
+  assert.equal(pack.minNativeVersion, "0.2.0");
+  assert.equal(tauri.version, "0.2.0");
+  assert.equal(cargoVersion, "0.2.0");
+  assert.equal(lock.nativeVersion, "0.2.0");
   assert.equal(pack.minNativeVersion, tauri.version);
   assert.equal(pack.minNativeVersion, cargoVersion);
 });
 
-test("native fingerprint matches the committed lock after the 0.1.1 bump", () => {
+test("native fingerprint matches the committed lock after the 0.2.0 bump", () => {
   const lock = JSON.parse(read("desktop-native.lock"));
   assert.equal(nativeFingerprint(root), lock.fingerprint);
   assert.match(lock.fingerprint, /^[0-9a-f]{64}$/);
@@ -45,9 +45,9 @@ test("desktop prepare stamps pack.json into the Nitro output", () => {
       gitSha: "abc1234deadbeef",
     });
     const written = JSON.parse(readFileSync(join(outputDir, "pack.json"), "utf8"));
-    assert.equal(stamped.packVersion, "0.1.1");
-    assert.equal(stamped.minNativeVersion, "0.1.1");
-    assert.equal(stamped.nativeVersion, "0.1.1");
+    assert.equal(stamped.packVersion, "0.2.0");
+    assert.equal(stamped.minNativeVersion, "0.2.0");
+    assert.equal(stamped.nativeVersion, "0.2.0");
     assert.equal(stamped.gitSha, "abc1234deadbeef");
     assert.deepEqual(written, stamped);
   } finally {
@@ -55,8 +55,8 @@ test("desktop prepare stamps pack.json into the Nitro output", () => {
   }
 });
 
-test("desktop prepare and DMG verify use the stamped pack and 0.1.1 installer", () => {
+test("desktop prepare and DMG verify use the stamped pack and 0.2.0 installer", () => {
   const packageJson = JSON.parse(read("package.json"));
   assert.match(packageJson.scripts["desktop:prepare"], /prepare-desktop-pack\.mjs/);
-  assert.match(packageJson.scripts["desktop:verify:dmg"], /Balance_0\.1\.1_aarch64\.dmg/);
+  assert.match(packageJson.scripts["desktop:verify:dmg"], /Balance_0\.2\.0_aarch64\.dmg/);
 });
