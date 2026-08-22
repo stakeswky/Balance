@@ -1,20 +1,26 @@
-import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { WEEK_MS, latestActivities, type AgentLiveInfo, type UsageEvent } from "./types.ts";
 import { foldGrokTurns, parseGrokUpdateLine, type GrokSessionMeta } from "./grok-jsonl.ts";
+import {
+  type FileCursor,
+  type FileInventory,
+  EMPTY_FILE_CURSOR,
+  createFileInventory,
+  refreshFileInventory,
+  snapshotInventoryEntries,
+  readChunkFromEntry,
+} from "./file-inventory.server.ts";
 
 const GROW_MS = 30 * 60 * 1000;
 const WRITING_MS = 20 * 1000;
 
-export interface FileCursor {
-  size: number;
-  mtimeMs: number;
-  tail: string;
-}
+export type { FileCursor } from "./file-inventory.server.ts";
 
 export interface GrokScanState {
   files: Map<string, FileCursor>;
+  inventory: FileInventory;
   meta: Map<string, GrokSessionMeta>;
 }
 
@@ -27,7 +33,7 @@ export interface GrokScanResult {
 }
 
 export function createGrokScanState(): GrokScanState {
-  return { files: new Map(), meta: new Map() };
+  return { files: new Map(), inventory: createFileInventory(), meta: new Map() };
 }
 
 const defaultState = createGrokScanState();
@@ -36,63 +42,8 @@ function grokHomeOf(home: string, override?: string): string {
   return override || process.env.GROK_HOME || join(home, ".grok");
 }
 
-function listUpdates(root: string, out: string[]): void {
-  if (!existsSync(root)) return;
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop()!;
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
-      if (name.startsWith(".") || name.endsWith(".lock")) continue;
-      const p = join(dir, name);
-      let st;
-      try {
-        st = statSync(p);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) stack.push(p);
-      else if (st.isFile() && name === "updates.jsonl") out.push(p);
-    }
-  }
-}
-
-function readNewChunk(path: string, cursor: FileCursor): { text: string; next: FileCursor } {
-  let st;
-  try {
-    st = statSync(path);
-  } catch {
-    return { text: "", next: cursor };
-  }
-  let start = cursor.size;
-  let tail = cursor.tail;
-  if (st.size < cursor.size) {
-    start = 0;
-    tail = "";
-  }
-  if (st.size === start && st.mtimeMs === cursor.mtimeMs) {
-    return { text: "", next: cursor };
-  }
-  const len = st.size - start;
-  if (len <= 0) {
-    return { text: "", next: { size: st.size, mtimeMs: st.mtimeMs, tail } };
-  }
-  const buf = Buffer.alloc(len);
-  const fd = openSync(path, "r");
-  try {
-    readSync(fd, buf, 0, len, start);
-  } finally {
-    closeSync(fd);
-  }
-  return {
-    text: tail + buf.toString("utf8"),
-    next: { size: st.size, mtimeMs: st.mtimeMs, tail: "" },
-  };
+function acceptsGrokFile(name: string): boolean {
+  return name === "updates.jsonl";
 }
 
 function sessionIdFromPath(path: string): string {
@@ -136,12 +87,21 @@ export function scanGrokUsage(
   const state = opts?.state ?? defaultState;
   const sessionsRoot = join(grokHome, "sessions");
   const roots = existsSync(sessionsRoot) ? [sessionsRoot] : [];
-  const files: string[] = [];
-  for (const root of roots) listUpdates(root, files);
+
+  const inventory = refreshFileInventory({
+    roots,
+    now,
+    intervalMs: 15_000,
+    inventory: state.inventory,
+    accepts: acceptsGrokFile,
+  });
+  const files = inventory.refreshed
+    ? inventory.entries
+    : snapshotInventoryEntries(inventory.entries);
 
   if (since <= 0) {
     for (const [path] of state.files) {
-      state.files.set(path, { size: 0, mtimeMs: 0, tail: "" });
+      state.files.set(path, { ...EMPTY_FILE_CURSOR });
     }
   }
 
@@ -149,19 +109,12 @@ export function scanGrokUsage(
   const fresh: UsageEvent[] = [];
   let filesRead = 0;
 
-  for (const path of files) {
-    let st;
-    try {
-      st = statSync(path);
-    } catch {
-      continue;
-    }
-    if (st.mtimeMs < weekStart && (state.files.get(path)?.size ?? 0) === 0) continue;
+  for (const entry of files) {
+    const path = entry.path;
+    if (entry.mtimeMs < weekStart && (state.files.get(path)?.size ?? 0) === 0) continue;
 
-    const prev = state.files.get(path) ?? { size: 0, mtimeMs: 0, tail: "" };
-    if (st.size === prev.size && st.mtimeMs === prev.mtimeMs) continue;
-
-    const { text, next } = readNewChunk(path, prev);
+    const prev = state.files.get(path) ?? { ...EMPTY_FILE_CURSOR };
+    const { text, next } = readChunkFromEntry(entry, prev);
     const lines = text.split("\n");
     const tail = lines.pop() ?? "";
     state.files.set(path, { ...next, tail });
