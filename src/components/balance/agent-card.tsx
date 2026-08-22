@@ -72,7 +72,7 @@ export function AgentCard({
   meter,
   session,
   live,
-  minimalMode = false,
+  minimalMode = true,
   activeTasks,
   liveNote,
   windowLabel = "5 小时窗",
