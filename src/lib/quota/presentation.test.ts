@@ -90,6 +90,7 @@ function quotaValue(confidence: QuotaValue["confidence"] = "low"): QuotaValue {
     pricingVersion: "test",
     externalUsageDetected: false,
     anomalousPairs: 0,
+    historyComplete: true,
   };
 }
 

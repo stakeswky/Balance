@@ -1570,3 +1570,99 @@ test("exact quota rejects non-extra, stale, and missing amount branches", async 
     });
   }
 });
+
+// ── Step 5.5: calibration retention and history truncated fail-closed ──
+
+import { WEEK_MS as WEEK_MS_CONST, WINDOW_MS as WINDOW_MS_CONST } from "./types.ts";
+import { CALIBRATION_RETENTION_MS } from "./types.ts";
+
+test("history truncated: Grok monthly window start exceeds 8-day retention fails closed", () => {
+  // A Grok legacy monthly window (bounds.start = now - 30d) means the window
+  // start is before the 8-day calibration retention period.
+  // quotaValueFor must return historyComplete===false, confidence=none,
+  // calibrationSource==="none".
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60_000;
+  const grokMonthlySlice = slice({
+    agent: "grok",
+    weekPct: 40,
+    weekStartedAt: thirtyDaysAgo,
+    weekResetsAt: now + 60_000,
+    weekDurationMs: 30 * 24 * 60 * 60_000,
+    windowPct: null,
+    windowResetsAt: null,
+    fetchedAt: now,
+  });
+  // Build events spanning the month (all within the window)
+  const events = Array.from({ length: 50 }, (_, i) =>
+    ev({
+      id: `grok-month-${i}`,
+      agent: "grok",
+      model: "grok-4.6",
+      modelRaw: "grok-4.6",
+      ts: thirtyDaysAgo + i * 12 * 60 * 60_000,
+      tokensIn: 100_000,
+      tokensOut: 10_000,
+    }),
+  );
+  // Build valid calibration samples for this window
+  const windowId = officialWindowId("grok", "weekly", null, thirtyDaysAgo, now + 60_000);
+  const samples = Array.from({ length: 10 }, (_, i) =>
+    sample({
+      agent: "grok",
+      windowId,
+      timestampMs: thirtyDaysAgo + (i + 1) * 2 * 24 * 60 * 60_000,
+      usedPercent: (i + 1) * 4,
+      cumulativeObservedUsd: (i + 1) * 4 * 0.5,
+      modelMix: { "grok-4.6:standard": 1 },
+    }),
+  );
+
+  const value = quotaValueFor(events, "grok", grokMonthlySlice, "weekly", now, samples);
+  // Must fail closed: historyComplete=false, confidence=none, calibrationSource="none"
+  assert.equal(value.historyComplete, false);
+  assert.equal(value.confidence, "none");
+  assert.equal(value.calibrationSource, "none");
+  assert.equal(value.totalPointUsd, null);
+});
+
+test("history truncated: quotaValueForPool with start older than 8 days fails closed", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const tenDaysAgo = now - 10 * 24 * 60 * 60_000;
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const pool: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    startsAt: tenDaysAgo,
+    resetsAt: now + 60_000,
+    durationMs: 10 * 24 * 60 * 60_000 + 60_000,
+    usagePercent: 30,
+  };
+  const events = Array.from({ length: 20 }, (_, i) =>
+    ev({
+      id: `pool-old-${i}`,
+      agent: "claude",
+      model: "sonnet",
+      modelRaw: "claude-sonnet-5",
+      ts: tenDaysAgo + i * 12 * 60 * 60_000,
+      tokensIn: 100_000,
+      tokensOut: 10_000,
+    }),
+  );
+  const windowId = officialWindowId("claude", "product", pool.id, tenDaysAgo, now + 60_000);
+  const samples = Array.from({ length: 6 }, (_, i) =>
+    sample({
+      agent: "claude",
+      product: pool.id,
+      windowId,
+      timestampMs: tenDaysAgo + (i + 1) * 24 * 60 * 60_000,
+      usedPercent: (i + 1) * 5,
+      cumulativeObservedUsd: (i + 1) * 5 * 0.3,
+      modelMix: { "sonnet:standard": 1 },
+    }),
+  );
+  const result = quotaValueForPool(events, claude, pool, now, samples);
+  assert.ok(result != null && result.kind === "estimated");
+  assert.equal(result.value.historyComplete, false);
+  assert.equal(result.value.confidence, "none");
+  assert.equal(result.value.calibrationSource, "none");
+});

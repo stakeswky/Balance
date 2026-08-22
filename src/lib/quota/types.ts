@@ -171,3 +171,4 @@ export interface ModelShare {
 
 export const WINDOW_MS = 5 * 60 * 60 * 1000;
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+export const CALIBRATION_RETENTION_MS = WEEK_MS + 24 * 60 * 60_000;

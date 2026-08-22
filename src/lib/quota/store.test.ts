@@ -9,7 +9,9 @@ const initialEvents = [...initialState.events];
 const initialRealEvents = [...initialState.realEvents];
 const initialLive = [initialState.liveClaude, initialState.liveGrok, initialState.liveCodex];
 
-function event(agent: AgentId, id: string, ts = 1): UsageEvent {
+const RECENT_TS = Date.now() - 60_000;
+
+function event(agent: AgentId, id: string, ts = RECENT_TS): UsageEvent {
   return {
     id,
     agent,
@@ -137,7 +139,7 @@ test("manual import and bundled import update realEvents without leaving demo mo
     id: "manual-grok",
     agent: "grok",
     model: "grok-4.6",
-    timestamp: 2,
+    timestamp: RECENT_TS,
     session_id: "manual",
     usage: { input_tokens: 10, output_tokens: 2 },
   }), "grok");
@@ -338,4 +340,23 @@ test("empty incremental ingest preserves event-derived session (no live downgrad
   const after = useQuota.getState();
   // The event-derived session must not be downgraded to the live stub
   assert.strictEqual(after.claudeSession, derivedSession);
+});
+
+test("calibration retention keeps 20001 real events and trims display to 20000", () => {
+  const now = Date.now();
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  const events: UsageEvent[] = [];
+  for (let i = 0; i < 20_001; i++) {
+    events.push(event("claude", `ev-${i}`, now - WEEK_MS + i * 1000));
+  }
+  useQuota.getState().ingestClaudeLogs(events, { replace: true });
+  const state = useQuota.getState();
+  // realEvents must keep all 20001 for calibration
+  assert.equal(state.realEvents.length, 20_001);
+  // display events must be capped at 20k
+  assert.equal(state.events.length, 20_000);
+  // cumulative USD should not regress — ensure sorted ascending
+  for (let i = 1; i < state.realEvents.length; i++) {
+    assert.ok(state.realEvents[i]!.ts >= state.realEvents[i - 1]!.ts);
+  }
 });

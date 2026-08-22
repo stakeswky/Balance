@@ -16,10 +16,11 @@ import {
   type OfficialQuota,
   type OfficialSlice,
 } from "./official.ts";
-import { activityIdOf } from "./types.ts";
+import { activityIdOf, CALIBRATION_RETENTION_MS } from "./types.ts";
 import type { AgentId, AgentLiveInfo, ModelId, SessionState, UsageEvent } from "./types.ts";
 
-const MAX_EVENTS = 20000;
+const MAX_DISPLAY_EVENTS = 20_000;
+const MAX_CALIBRATION_EVENTS = 100_000;
 const MAX_ALERTS = 40;
 
 export interface QuotaAlert {
@@ -28,6 +29,35 @@ export interface QuotaAlert {
   agent: AgentId;
   kind: "window" | "week";
   message: string;
+}
+
+interface TrimmedEventState {
+  realEvents: UsageEvent[];
+  displayEvents: UsageEvent[];
+  truncatedBeforeMs: number | null;
+}
+
+function trimEventState(
+  events: UsageEvent[],
+  previousTruncatedBeforeMs: number | null,
+  now = Date.now(),
+): TrimmedEventState {
+  const recent = events
+    .filter((event) => event.ts >= now - CALIBRATION_RETENTION_MS)
+    .sort((left, right) => left.ts - right.ts);
+  const hardTrimmed = recent.length > MAX_CALIBRATION_EVENTS;
+  const realEvents = hardTrimmed ? recent.slice(-MAX_CALIBRATION_EVENTS) : recent;
+  const priorStillRelevant = previousTruncatedBeforeMs != null
+    && previousTruncatedBeforeMs >= now - CALIBRATION_RETENTION_MS;
+  return {
+    realEvents,
+    displayEvents: realEvents.slice(-MAX_DISPLAY_EVENTS),
+    truncatedBeforeMs: hardTrimmed
+      ? realEvents[0]!.ts
+      : priorStillRelevant
+        ? previousTruncatedBeforeMs
+        : null,
+  };
 }
 
 export interface QuotaState {
@@ -61,6 +91,7 @@ export interface QuotaState {
   codexSession: SessionState | null;
   official: OfficialQuota;
   quotaSamples: QuotaSample[];
+  calibrationTruncatedBeforeMs: number | null;
   lastBeat: number;
   adapterHint: boolean;
   alertWindowPct: number;
@@ -101,8 +132,8 @@ export interface QuotaState {
 }
 
 function trimEvents(events: UsageEvent[]) {
-  if (events.length <= MAX_EVENTS) return events;
-  return events.slice(events.length - MAX_EVENTS);
+  if (events.length <= MAX_DISPLAY_EVENTS) return events;
+  return events.slice(events.length - MAX_DISPLAY_EVENTS);
 }
 
 function startTrio(now: number) {
@@ -210,6 +241,7 @@ export const useQuota = create<QuotaState>()(
       codexSession: null,
       official: { claude: null, grok: null, codex: null },
       quotaSamples: [],
+      calibrationTruncatedBeforeMs: null,
       lastBeat: 0,
       adapterHint: true,
       alertWindowPct: 80,
@@ -381,10 +413,12 @@ export const useQuota = create<QuotaState>()(
         const parsed = parseUsagePayload(text, agent);
         if (!parsed.length) return 0;
         const state = get();
-        const realEvents = trimEvents([...state.realEvents, ...parsed].sort((a, b) => a.ts - b.ts));
+        const merged = [...state.realEvents, ...parsed].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
         });
         return parsed.length;
       },
@@ -405,14 +439,16 @@ export const useQuota = create<QuotaState>()(
           for (const ev of incoming) map.set(ev.id, ev);
           claude = [...map.values()];
         }
-        const realEvents = trimEvents([...others, ...claude].sort((a, b) => a.ts - b.ts));
+        const merged = [...others, ...claude].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
         const cursor = claude.reduce((m, e) => Math.max(m, e.ts), state.claudeCursor);
         const live = opts?.live;
         const active = opts?.active;
         const focus = eventsForLive(claude, live);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
           claudeCursor: cursor,
           claudeHydrated: state.claudeHydrated || incoming.length > 0,
           activeClaude: active ?? state.activeClaude,
@@ -443,14 +479,16 @@ export const useQuota = create<QuotaState>()(
           for (const ev of incoming) map.set(ev.id, ev);
           grok = [...map.values()];
         }
-        const realEvents = trimEvents([...others, ...grok].sort((a, b) => a.ts - b.ts));
+        const merged = [...others, ...grok].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
         const cursor = grok.reduce((m, e) => Math.max(m, e.ts), state.grokCursor);
         const live = opts?.live;
         const active = opts?.active;
         const focus = eventsForLive(grok, live);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
           grokCursor: cursor,
           grokHydrated: state.grokHydrated || incoming.length > 0,
           activeGrok: active ?? state.activeGrok,
@@ -481,14 +519,16 @@ export const useQuota = create<QuotaState>()(
           for (const ev of incoming) map.set(ev.id, ev);
           codex = [...map.values()];
         }
-        const realEvents = trimEvents([...others, ...codex].sort((a, b) => a.ts - b.ts));
+        const merged = [...others, ...codex].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
         const cursor = codex.reduce((m, e) => Math.max(m, e.ts), state.codexCursor);
         const live = opts?.live;
         const active = opts?.active;
         const focus = eventsForLive(codex, live);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
           codexCursor: cursor,
           codexHydrated: state.codexHydrated || incoming.length > 0,
           activeCodex: active ?? state.activeCodex,
@@ -539,13 +579,15 @@ export const useQuota = create<QuotaState>()(
         const parsed = importedClaudeEvents();
         if (!parsed.length) return 0;
         const state = get();
-        const realEvents = trimEvents([
+        const merged = [
           ...parsed,
           ...state.realEvents.filter((event) => event.agent !== "claude"),
-        ].sort((a, b) => a.ts - b.ts));
+        ].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
           claudeCursor: 0,
           claudeHydrated: false,
           claudeSession: state.demoMode ? state.claudeSession : sessionFromEvents(parsed),

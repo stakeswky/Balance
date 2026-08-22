@@ -2,7 +2,7 @@ import { costBreakdown, eventRawTokens } from "./cost.ts";
 import { OPENAI_CREDITS_PER_USD, PRICING_VERSION } from "./pricing.ts";
 import type { OfficialQuotaPool, OfficialSlice } from "./official.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
-import { WEEK_MS, WINDOW_MS } from "./types.ts";
+import { CALIBRATION_RETENTION_MS, WEEK_MS, WINDOW_MS } from "./types.ts";
 import {
   buildUsageCostIndex,
   deduplicateUsageEvents,
@@ -53,6 +53,7 @@ export interface QuotaValue {
   pricingVersion: string;
   externalUsageDetected: boolean;
   anomalousPairs: number;
+  historyComplete: boolean;
 }
 
 export interface ExactQuotaValue {
@@ -144,6 +145,7 @@ export function quotaValueForPool(
   pool: OfficialQuotaPool,
   now: number,
   samples: QuotaSample[],
+  dataFromMs: number | null = null,
 ): ProductQuotaValue | null {
   if (!validPoolMetadata(pool, now)) return null;
   if (pool.stale) {
@@ -186,11 +188,23 @@ export function quotaValueForPool(
   const compatibleSamples = samples.filter((sample) =>
     sameOfficialWindowId(sample.windowId, windowId),
   );
-  const calibration = calibrateFromSamples(
-    compatibleSamples,
-    pool.usagePercent,
-    false,
-  );
+
+  const historyComplete = (dataFromMs == null || start >= dataFromMs)
+    && start >= now - CALIBRATION_RETENTION_MS;
+  const calibration = historyComplete
+    ? calibrateFromSamples(compatibleSamples, pool.usagePercent, false)
+    : {
+        totalLowUsd: null,
+        totalPointUsd: null,
+        totalHighUsd: null,
+        remainingLowUsd: null,
+        remainingPointUsd: null,
+        remainingHighUsd: null,
+        confidence: "none" as const,
+        externalUsageDetected: false,
+        anomalousPairs: 0,
+      };
+
   const toCredits = (usd: number | null): number | null =>
     slice.agent === "codex" && usd != null ? usd * OPENAI_CREDITS_PER_USD : null;
   const value: QuotaValue = {
@@ -215,12 +229,15 @@ export function quotaValueForPool(
     remainingPointCredits: toCredits(calibration.remainingPointUsd),
     remainingHighCredits: toCredits(calibration.remainingHighUsd),
     confidence: calibration.confidence,
-    calibrationSource: calibration.confidence === "none" ? "none" : "current-window",
+    calibrationSource: historyComplete && calibration.confidence !== "none"
+      ? "current-window"
+      : "none",
     pricingVersion: PRICING_VERSION,
     externalUsageDetected:
       calibration.externalUsageDetected
       || (pool.usagePercent > 0 && observation.observedUsd === 0),
     anomalousPairs: calibration.anomalousPairs,
+    historyComplete,
   };
   return { kind: "estimated", value };
 }
@@ -999,6 +1016,7 @@ export function quotaValueFor(
   kind: "five_hour" | "weekly",
   now: number,
   samples: QuotaSample[],
+  dataFromMs?: number | null,
 ): QuotaValue {
   const usedPct = (kind === "weekly" ? official?.weekPct : official?.windowPct) ?? 0;
   const bounds = windowBounds(official, kind, now);
@@ -1050,6 +1068,17 @@ export function quotaValueFor(
     : cal.confidence === "none"
       ? "none"
       : "current-window";
+
+  // Fail-closed: if data from a truncation boundary is newer than window start,
+  // or the window start is older than the calibration retention period, history
+  // is incomplete and calibration cannot be trusted.
+  const historyComplete = (dataFromMs == null || bounds.start >= dataFromMs)
+    && bounds.start >= now - CALIBRATION_RETENTION_MS;
+  const effectiveCalibration = historyComplete ? cal : emptyCal;
+  const effectiveCalibrationSource: CalibrationSource = historyComplete
+    ? calibrationSource
+    : "none";
+
   const toCredits = (usd: number | null): number | null =>
     agent === "codex" && usd != null ? usd * OPENAI_CREDITS_PER_USD : null;
   return {
@@ -1061,15 +1090,16 @@ export function quotaValueFor(
     pricedEventCoverage: obs.pricedEventCoverage,
     rolling: bounds.rolling,
     windowId,
-    ...cal,
-    calibrationSource,
-    totalLowCredits: toCredits(cal.totalLowUsd),
-    totalPointCredits: toCredits(cal.totalPointUsd),
-    totalHighCredits: toCredits(cal.totalHighUsd),
-    remainingLowCredits: toCredits(cal.remainingLowUsd),
-    remainingPointCredits: toCredits(cal.remainingPointUsd),
-    remainingHighCredits: toCredits(cal.remainingHighUsd),
-    externalUsageDetected: cal.externalUsageDetected || (usedPct > 0 && obs.observedUsd === 0),
+    ...effectiveCalibration,
+    calibrationSource: effectiveCalibrationSource,
+    totalLowCredits: toCredits(effectiveCalibration.totalLowUsd),
+    totalPointCredits: toCredits(effectiveCalibration.totalPointUsd),
+    totalHighCredits: toCredits(effectiveCalibration.totalHighUsd),
+    remainingLowCredits: toCredits(effectiveCalibration.remainingLowUsd),
+    remainingPointCredits: toCredits(effectiveCalibration.remainingPointUsd),
+    remainingHighCredits: toCredits(effectiveCalibration.remainingHighUsd),
+    externalUsageDetected: effectiveCalibration.externalUsageDetected || (usedPct > 0 && obs.observedUsd === 0),
     pricingVersion: PRICING_VERSION,
+    historyComplete,
   };
 }
