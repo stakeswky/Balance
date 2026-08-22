@@ -68,6 +68,7 @@ export function AgentCard({
   meter,
   session,
   live,
+  minimalMode = false,
   activeTasks,
   liveNote,
   windowLabel = "5 小时窗",
@@ -90,6 +91,7 @@ export function AgentCard({
   meter: MeterSnapshot;
   session: SessionState | null;
   live: boolean;
+  minimalMode?: boolean;
   activeTasks?: AgentLiveInfo[];
   liveNote?: string;
   windowLabel?: string;
@@ -108,13 +110,15 @@ export function AgentCard({
 }) {
   const tone = meter.agent;
   const shares = modelShares(events, meter.agent, now, WEEK_MS);
-  const primaryPct = windowLabel === "本周额度" ? meter.weekPct : meter.windowPct;
+  const weeklyView = minimalMode || windowLabel === "本周额度";
+  const weekMeterLabel = minimalMode ? "本周额度" : quotaSourceLabel("本周额度", quotaSources.week);
+  const primaryPct = weeklyView ? meter.weekPct : meter.windowPct;
   const remain = Math.max(0, 100 - primaryPct);
   const weighted = inWindow(events, now, WINDOW_MS, meter.agent).reduce(
     (s, e) => s + weightedTokens(e),
     0,
   );
-  const primaryKind = windowLabel === "本周额度" ? "weekly" : "five_hour";
+  const primaryKind = weeklyView ? "weekly" : "five_hour";
   const primarySource = primaryKind === "weekly" ? quotaSources.week : quotaSources.window;
   const freshMeter = officialOnlyMeter(meter, quotaSources);
   const freshModelWeekLimit = modelWeekLimitStale ? null : modelWeekLimit;
@@ -135,8 +139,9 @@ export function AgentCard({
     : hasStaleSnapshot
       ? "官方快照"
       : "本地估算";
-  const primaryRemainingLabel =
-    primarySource === "official"
+  const primaryRemainingLabel = minimalMode
+    ? "本周额度剩余"
+    : primarySource === "official"
       ? primaryKind === "weekly"
         ? "官方周额度剩余"
         : "官方窗口剩余"
@@ -147,8 +152,9 @@ export function AgentCard({
         : primaryKind === "weekly"
           ? "本地估算周用量剩余"
           : "本地估算窗口剩余";
-  const primaryUsedLabel =
-    primarySource === "official"
+  const primaryUsedLabel = minimalMode
+    ? "已用"
+    : primarySource === "official"
       ? "已用"
       : primarySource === "official-stale"
         ? "快照已用"
@@ -175,7 +181,7 @@ export function AgentCard({
           </div>
           <CardHint className="mt-1 break-words">
             {plan.name} · {adapter}
-            {quotaNote ? ` · ${quotaNote}` : ""}
+            {!minimalMode && quotaNote ? ` · ${quotaNote}` : ""}
           </CardHint>
         </div>
         <Button variant="secondary" size="sm" onClick={onToggle} aria-pressed={live}>
@@ -193,14 +199,16 @@ export function AgentCard({
           </p>
         </div>
         <div className="text-right text-xs text-mute">
-          {windowLabel === "本周额度" ? (
+          {weeklyView ? (
             <>
               <p>
                 {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
                 <span className="text-faint"> %</span>
               </p>
               <p className="mt-1">
-                {meter.agent === "codex" ? "credit 按公开价等价折算" : "API 等价按公开价折算"}
+                {minimalMode || meter.agent !== "codex"
+                  ? "API 等价按公开价折算"
+                  : "credit 按公开价等价折算"}
               </p>
             </>
           ) : (
@@ -224,14 +232,14 @@ export function AgentCard({
         </div>
       </div>
 
-      {sourceMessage ? (
+      {!minimalMode && sourceMessage ? (
         <p className="mt-4 rounded-lg bg-raised px-3 py-2 text-xs leading-relaxed text-mute">
           {sourceMessage}
         </p>
       ) : null}
 
       <div className="mt-5 space-y-3">
-        {windowLabel === "本周额度" ? (
+        {weeklyView ? (
           <MeterBar
             value={meter.weekPct}
             tone={
@@ -243,7 +251,7 @@ export function AgentCard({
                     : tone
                 : tone
             }
-            label={quotaSourceLabel("本周额度", quotaSources.week)}
+            label={weekMeterLabel}
             detail={weekReset}
           />
         ) : (
@@ -272,7 +280,7 @@ export function AgentCard({
                       : tone
                   : tone
               }
-              label={quotaSourceLabel("本周额度", quotaSources.week)}
+              label={weekMeterLabel}
               detail={weekReset}
             />
             {modelWeekLimit ? (
@@ -304,7 +312,7 @@ export function AgentCard({
         )}
       </div>
 
-      {products?.some((p) => p.usagePercent != null) ? (
+      {!minimalMode && products?.some((p) => p.usagePercent != null) ? (
         <div className="mt-4 space-y-2">
           {meter.agent === "grok" ? (
             <p className="mb-2 text-xs text-faint">官方共享周池 · 下列为产品占用构成</p>
@@ -332,169 +340,185 @@ export function AgentCard({
       ) : null}
 
       <dl className="mt-5 grid grid-cols-2 gap-3 text-xs">
-        <Stat label="本窗 token" value={formatTokens(meter.windowTokens)} />
-        <Stat
-          label={meter.agent === "codex" ? "本窗推理" : "加权用量"}
-          value={
-            meter.agent === "codex"
-              ? `${meter.windowReasoningMin.toFixed(1)} 分`
-              : formatTokens(weighted)
-          }
-        />
-        <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
-        <Stat label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
-        {meter.agent === "codex" ? (
-          <Stat
-            label="本周 credit 等价"
-            value={creditL1.text}
-            dim={creditL1.dim}
-            hint={CREDIT_HINT}
-          />
-        ) : null}
-        {windowLabel !== "本周额度" ? (
-          <Stat label="5h API 等价" value={winL1.text} dim={winL1.dim} hint={VALUE_HINT} />
-        ) : null}
-        <Stat
-          label="本地价格覆盖率"
-          value={`${Math.round((weekValue?.pricedTokenCoverage ?? 0) * 100)}%`}
-        />
-        {valueSections.flatMap((section) => {
-          const hasRange = section.value.confidence !== "none";
-          return [
-            <Stat
-              key={`${section.key}-total`}
-              label={`估算${section.label}总 API 等价`}
-              value={
-                hasRange
-                  ? formatUsdRange(section.value.totalLowUsd, section.value.totalHighUsd)
-                  : "样本不足"
-              }
-              hint={VALUE_HINT}
-            />,
-            <Stat
-              key={`${section.key}-remaining`}
-              label={`估算${section.label}剩余 API 等价`}
-              value={
-                hasRange
-                  ? formatUsdRange(section.value.remainingLowUsd, section.value.remainingHighUsd)
-                  : "样本不足"
-              }
-              hint={VALUE_HINT}
-            />,
-            <Stat
-              key={`${section.key}-confidence`}
-              label={`${section.label}置信度`}
-              value={CONFIDENCE_LABEL[section.value.confidence]}
-            />,
-          ];
-        })}
-        {meter.agent === "codex" && weekValue ? (
+        {minimalMode ? (
           <>
-            <Stat
-              label="估算本周总 credit"
-              value={formatCreditRange(weekValue.totalLowCredits, weekValue.totalHighCredits)}
-              hint={CREDIT_HINT}
-            />
-            <Stat
-              label="估算本周剩余 credit"
-              value={formatCreditRange(
-                weekValue.remainingLowCredits,
-                weekValue.remainingHighCredits,
-              )}
-              hint={CREDIT_HINT}
-            />
+            <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
+            <Stat label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
           </>
-        ) : null}
-        {primary ? <Stat label="价格版本" value={primary.pricingVersion} /> : null}
-        {!valueSections.length ? (
-          <>
-            <Stat label="估算总 API 等价" value="样本不足" hint={VALUE_HINT} />
-            {meter.agent === "codex" ? (
-              <Stat label="估算整窗 credit" value="样本不足" hint={CREDIT_HINT} />
-            ) : null}
-            <Stat label="置信度" value="无" />
-          </>
-        ) : null}
-      </dl>
-      <p className="mt-3 text-[11px] leading-5 text-faint">
-        按当前片段模型组合校准 · 本地日志覆盖 · 不是账户现金余额
-        {valueSections.some((section) => section.value.rolling) ? " · 滚动窗口金额" : ""}
-        {valueSections.some((section) => section.value.externalUsageDetected)
-          ? " · 检测到本机以外用量"
-          : ""}
-      </p>
-
-      {parallel ? (
-        <div className="mt-5 rounded-md bg-raised px-3 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs tracking-wide text-faint uppercase">并行任务</p>
-            <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-xs text-mute">
-              {parallel.total} 个活跃
-            </span>
-          </div>
-          <ul className="mt-2 space-y-1.5">
-            {parallel.visible.map((task) => (
-              <li
-                key={task.actorId ?? task.sessionId}
-                className="flex min-w-0 items-center gap-2 text-xs"
-              >
-                <span className="size-1.5 shrink-0 rounded-full bg-ok" />
-                <span className="min-w-0 flex-1 truncate text-ink">{task.task}</span>
-                <span className="shrink-0 text-faint">
-                  {task.actorKind === "workflow-subagent"
-                    ? "工作流"
-                    : task.actorKind === "subagent"
-                      ? "子代理"
-                      : "会话"}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {parallel.overflow > 0 ? (
-            <p className="mt-2 text-xs text-faint">另有 {parallel.overflow} 个任务</p>
-          ) : null}
-        </div>
-      ) : session && live ? (
-        <div className="mt-5 rounded-md bg-raised px-3 py-3">
-          <p className="text-xs tracking-wide text-faint uppercase">实时会话</p>
-          <p className="mt-1 text-sm text-ink">{session.task}</p>
-          <p className="mt-1 font-mono text-xs text-mute">
-            {modelLabel(session.model, session.modelRaw)} · {session.events} 轮 ·{" "}
-            {formatTokens(session.tokens)}
-          </p>
-          {liveNote ? <p className="mt-1 text-xs text-mute">{liveNote}</p> : null}
-        </div>
-      ) : live ? (
-        <div className="mt-5 rounded-md bg-raised px-3 py-3 text-sm text-mute">
-          {liveNote ?? "正在监听日志"}
-        </div>
-      ) : (
-        <div className="mt-5 rounded-md bg-raised px-3 py-3 text-sm text-mute">采集已暂停</div>
-      )}
-
-      <div className="mt-4 space-y-2">
-        {shares.length ? (
-          shares.map((s) => (
-            <div key={s.label} className="flex items-center gap-3 text-xs">
-              <span className="w-28 truncate text-mute">{s.label}</span>
-              <div className="h-1 flex-1 overflow-hidden rounded-full bg-raised">
-                <div
-                  className={cn(
-                    "h-full rounded-full",
-                    tone === "claude" ? "bg-claude" : tone === "grok" ? "bg-grok" : "bg-codex",
-                  )}
-                  style={{ width: `${s.pct}%` }}
-                />
-              </div>
-              <span className="w-10 text-right font-mono tabular text-ink">
-                {s.pct.toFixed(0)}%
-              </span>
-            </div>
-          ))
         ) : (
-          <p className="text-xs text-mute">本周尚无模型拆分</p>
+          <>
+            <Stat label="本窗 token" value={formatTokens(meter.windowTokens)} />
+            <Stat
+              label={meter.agent === "codex" ? "本窗推理" : "加权用量"}
+              value={
+                meter.agent === "codex"
+                  ? `${meter.windowReasoningMin.toFixed(1)} 分`
+                  : formatTokens(weighted)
+              }
+            />
+            <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
+            <Stat label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
+            {meter.agent === "codex" ? (
+              <Stat
+                label="本周 credit 等价"
+                value={creditL1.text}
+                dim={creditL1.dim}
+                hint={CREDIT_HINT}
+              />
+            ) : null}
+            {windowLabel !== "本周额度" ? (
+              <Stat label="5h API 等价" value={winL1.text} dim={winL1.dim} hint={VALUE_HINT} />
+            ) : null}
+            <Stat
+              label="本地价格覆盖率"
+              value={`${Math.round((weekValue?.pricedTokenCoverage ?? 0) * 100)}%`}
+            />
+            {valueSections.flatMap((section) => {
+              const hasRange = section.value.confidence !== "none";
+              return [
+                <Stat
+                  key={`${section.key}-total`}
+                  label={`估算${section.label}总 API 等价`}
+                  value={
+                    hasRange
+                      ? formatUsdRange(section.value.totalLowUsd, section.value.totalHighUsd)
+                      : "样本不足"
+                  }
+                  hint={VALUE_HINT}
+                />,
+                <Stat
+                  key={`${section.key}-remaining`}
+                  label={`估算${section.label}剩余 API 等价`}
+                  value={
+                    hasRange
+                      ? formatUsdRange(
+                          section.value.remainingLowUsd,
+                          section.value.remainingHighUsd,
+                        )
+                      : "样本不足"
+                  }
+                  hint={VALUE_HINT}
+                />,
+                <Stat
+                  key={`${section.key}-confidence`}
+                  label={`${section.label}置信度`}
+                  value={CONFIDENCE_LABEL[section.value.confidence]}
+                />,
+              ];
+            })}
+            {meter.agent === "codex" && weekValue ? (
+              <>
+                <Stat
+                  label="估算本周总 credit"
+                  value={formatCreditRange(weekValue.totalLowCredits, weekValue.totalHighCredits)}
+                  hint={CREDIT_HINT}
+                />
+                <Stat
+                  label="估算本周剩余 credit"
+                  value={formatCreditRange(
+                    weekValue.remainingLowCredits,
+                    weekValue.remainingHighCredits,
+                  )}
+                  hint={CREDIT_HINT}
+                />
+              </>
+            ) : null}
+            {primary ? <Stat label="价格版本" value={primary.pricingVersion} /> : null}
+            {!valueSections.length ? (
+              <>
+                <Stat label="估算总 API 等价" value="样本不足" hint={VALUE_HINT} />
+                {meter.agent === "codex" ? (
+                  <Stat label="估算整窗 credit" value="样本不足" hint={CREDIT_HINT} />
+                ) : null}
+                <Stat label="置信度" value="无" />
+              </>
+            ) : null}
+          </>
         )}
-      </div>
+      </dl>
+      {!minimalMode ? (
+        <>
+          <p className="mt-3 text-[11px] leading-5 text-faint">
+            按当前片段模型组合校准 · 本地日志覆盖 · 不是账户现金余额
+            {valueSections.some((section) => section.value.rolling) ? " · 滚动窗口金额" : ""}
+            {valueSections.some((section) => section.value.externalUsageDetected)
+              ? " · 检测到本机以外用量"
+              : ""}
+          </p>
+
+          {parallel ? (
+            <div className="mt-5 rounded-md bg-raised px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs tracking-wide text-faint uppercase">并行任务</p>
+                <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-xs text-mute">
+                  {parallel.total} 个活跃
+                </span>
+              </div>
+              <ul className="mt-2 space-y-1.5">
+                {parallel.visible.map((task) => (
+                  <li
+                    key={task.actorId ?? task.sessionId}
+                    className="flex min-w-0 items-center gap-2 text-xs"
+                  >
+                    <span className="size-1.5 shrink-0 rounded-full bg-ok" />
+                    <span className="min-w-0 flex-1 truncate text-ink">{task.task}</span>
+                    <span className="shrink-0 text-faint">
+                      {task.actorKind === "workflow-subagent"
+                        ? "工作流"
+                        : task.actorKind === "subagent"
+                          ? "子代理"
+                          : "会话"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {parallel.overflow > 0 ? (
+                <p className="mt-2 text-xs text-faint">另有 {parallel.overflow} 个任务</p>
+              ) : null}
+            </div>
+          ) : session && live ? (
+            <div className="mt-5 rounded-md bg-raised px-3 py-3">
+              <p className="text-xs tracking-wide text-faint uppercase">实时会话</p>
+              <p className="mt-1 text-sm text-ink">{session.task}</p>
+              <p className="mt-1 font-mono text-xs text-mute">
+                {modelLabel(session.model, session.modelRaw)} · {session.events} 轮 ·{" "}
+                {formatTokens(session.tokens)}
+              </p>
+              {liveNote ? <p className="mt-1 text-xs text-mute">{liveNote}</p> : null}
+            </div>
+          ) : live ? (
+            <div className="mt-5 rounded-md bg-raised px-3 py-3 text-sm text-mute">
+              {liveNote ?? "正在监听日志"}
+            </div>
+          ) : (
+            <div className="mt-5 rounded-md bg-raised px-3 py-3 text-sm text-mute">采集已暂停</div>
+          )}
+
+          <div className="mt-4 space-y-2">
+            {shares.length ? (
+              shares.map((s) => (
+                <div key={s.label} className="flex items-center gap-3 text-xs">
+                  <span className="w-28 truncate text-mute">{s.label}</span>
+                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-raised">
+                    <div
+                      className={cn(
+                        "h-full rounded-full",
+                        tone === "claude" ? "bg-claude" : tone === "grok" ? "bg-grok" : "bg-codex",
+                      )}
+                      style={{ width: `${s.pct}%` }}
+                    />
+                  </div>
+                  <span className="w-10 text-right font-mono tabular text-ink">
+                    {s.pct.toFixed(0)}%
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-mute">本周尚无模型拆分</p>
+            )}
+          </div>
+        </>
+      ) : null}
     </Card>
   );
 }

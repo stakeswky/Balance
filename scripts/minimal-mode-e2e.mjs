@@ -100,6 +100,71 @@ function cardAround(page, heading) {
     .getByRole("heading", { name: heading, exact: true })
     .locator("xpath=ancestor::div[contains(@class,'rounded-2xl')][1]");
 }
+const AGENT_CARD_HEADINGS = ["Claude Code", "Grok", "Codex"];
+
+async function assertFullAgentCardDetails(page) {
+  for (const heading of AGENT_CARD_HEADINGS) {
+    const card = cardAround(page, heading);
+    const labels = await card.locator("dt").allTextContents();
+    const windowMetric = heading === "Codex" ? "本窗推理" : "加权用量";
+    assert.deepEqual(labels.slice(0, 4), [
+      "本窗 token",
+      windowMetric,
+      "本周 token",
+      "本周 API 等价",
+    ]);
+    assert.equal(await card.getByText("本周 token", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("本地价格覆盖率", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("价格版本", { exact: true }).count(), 1);
+    assert.ok((await card.locator("dt").count()) > 2, `${heading} should keep full details`);
+  }
+  const claude = cardAround(page, "Claude Code");
+  assert.equal(await claude.getByText("本窗 token", { exact: true }).count(), 1);
+  assert.equal(await claude.getByText("加权用量", { exact: true }).count(), 1);
+  assert.equal(await claude.getByText("5h API 等价", { exact: true }).count(), 1);
+  const grok = cardAround(page, "Grok");
+  assert.equal(await grok.getByText("本窗 token", { exact: true }).count(), 1);
+  assert.equal(await grok.getByText("加权用量", { exact: true }).count(), 1);
+  assert.equal(await grok.getByText("5h API 等价", { exact: true }).count(), 0);
+  const codex = cardAround(page, "Codex");
+  assert.equal(await codex.getByText("本窗 token", { exact: true }).count(), 1);
+  assert.equal(await codex.getByText("本窗推理", { exact: true }).count(), 1);
+  assert.equal(await codex.getByText("本周 credit 等价", { exact: true }).count(), 1);
+  assert.equal(await codex.getByText("5h API 等价", { exact: true }).count(), 1);
+}
+
+async function assertMinimalAgentCardDetails(page) {
+  const hiddenCopy = [
+    "本窗 token",
+    "本窗推理",
+    "加权用量",
+    "5h API 等价",
+    "本周 credit 等价",
+    "本地价格覆盖率",
+    "价格版本",
+    "并行任务",
+    "实时会话",
+    "本周尚无模型拆分",
+    "官方共享周池",
+  ];
+  for (const heading of AGENT_CARD_HEADINGS) {
+    const card = cardAround(page, heading);
+    assert.equal(await card.locator("dt").count(), 2);
+    assert.equal(await card.getByText("本周 token", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("本周额度", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("5 小时窗", { exact: false }).count(), 0);
+    assert.equal(await card.getByText(/燃烧|%\/时|预计.*耗尽/).count(), 0);
+    assert.equal(await card.getByText("本地日志覆盖", { exact: false }).count(), 0);
+    assert.equal(await card.getByText(/官方周额度|官方快照周额度|本地估算周用量/).count(), 0);
+    assert.equal(await card.getByText(/Claude Desktop 历史利用率|官方 OAuth 利用率/).count(), 0);
+    assert.equal(await card.getByText(/官方实时账单|官方账单日志/).count(), 0);
+    assert.equal(await card.getByText(/官方实时额度|官方会话额度/).count(), 0);
+    for (const copy of hiddenCopy)
+      assert.equal(await card.getByText(copy, { exact: true }).count(), 0, `${heading}: ${copy}`);
+  }
+}
 async function openView(page, name) {
   await page.getByRole("button", { name, exact: true }).click();
 }
@@ -148,11 +213,13 @@ async function assertFullMode(page) {
   assert.equal(await page.getByRole("heading", { name: "协同建议", exact: true }).count(), 0);
   assert.equal(await page.getByRole("heading", { name: "实时流水", exact: true }).count(), 1);
   assert.equal(await page.getByText("当前是演示数据", { exact: false }).count(), 1);
+  await assertFullAgentCardDetails(page);
 }
 async function assertMinimalMode(page) {
   await page.getByText("更紧的窗口", { exact: true }).waitFor();
   for (const heading of ["协同时间线", "Claude Code", "Grok", "Codex", "近 24 小时 token"])
     await page.getByRole("heading", { name: heading, exact: true }).waitFor();
+  await assertMinimalAgentCardDetails(page);
   const timeline = cardAround(page, "协同时间线");
   await timeline.getByRole("heading", { name: "协同计划", exact: true }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "协同建议", exact: true }).count(), 0);

@@ -593,6 +593,7 @@ export function Dashboard() {
                   meter={claudeMeter}
                   session={claudeSession}
                   live={liveClaude}
+                  minimalMode={minimalMode}
                   activeTasks={activeClaude}
                   quotaNote={claudeQuotaNote(official.claude)}
                   quotaSources={claudeSources}
@@ -622,6 +623,7 @@ export function Dashboard() {
                   meter={grokMeter}
                   session={grokSession}
                   live={liveGrok}
+                  minimalMode={minimalMode}
                   activeTasks={activeGrok}
                   windowLabel="本周额度"
                   quotaSources={grokSources}
@@ -657,6 +659,7 @@ export function Dashboard() {
                   meter={codexMeter}
                   session={codexSession}
                   live={liveCodex}
+                  minimalMode={minimalMode}
                   activeTasks={activeCodex}
                   windowLabel={official.codex?.windowKind === "weekly" ? "本周额度" : "5 小时窗"}
                   quotaSources={codexSources}
