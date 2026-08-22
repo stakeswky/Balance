@@ -751,4 +751,44 @@ export function parseCodexRateLimitLog(text: string): OfficialSlice | null {
   return last;
 }
 
+export function parseClaudeStatuslinePayload(
+  raw: unknown,
+  opts?: { fetchedAt?: number; source?: string },
+): OfficialSlice | null {
+  const root = record(raw);
+  const limits = record(root?.rate_limits);
+  if (!limits) return null;
+  const parseWindow = (value: unknown) => {
+    const row = record(value);
+    if (!row) return null;
+    const used = nullableNumber(row.used_percentage ?? row.utilization);
+    const resetsAt = timestampMs(row.resets_at);
+    if (used == null || resetsAt == null) return null;
+    return { usedPct: clampPct(used), resetsAt };
+  };
+  const fiveHour = parseWindow(limits.five_hour);
+  const sevenDay = parseWindow(limits.seven_day);
+  if (!fiveHour && !sevenDay) return null;
+  const fetchedAt = opts?.fetchedAt ?? Date.now();
+  return {
+    agent: "claude",
+    windowPct: fiveHour?.usedPct ?? null,
+    weekPct: sevenDay?.usedPct ?? null,
+    windowResetsAt: fiveHour?.resetsAt ?? null,
+    weekResetsAt: sevenDay?.resetsAt ?? null,
+    weekStartedAt: sevenDay?.resetsAt == null ? null : sevenDay.resetsAt - WEEK_MS,
+    windowDurationMs: FIVE_HOUR_MS,
+    weekDurationMs: WEEK_MS,
+    burnPctPerHour: 0,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    source: opts?.source ?? "claude-statusline",
+    fetchedAt,
+    windowKind: "five_hour",
+  };
+}
+
 export { unwrapVal };

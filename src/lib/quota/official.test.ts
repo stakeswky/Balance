@@ -8,6 +8,7 @@ import {
   nextCodexPlanId,
   parseClaudeHistoryPoints,
   parseClaudePlanHistory,
+  parseClaudeStatuslinePayload,
   parseClaudeUsagePayload,
   quotaPoolsWithStale,
   slicesFromClaudeHistory,
@@ -526,4 +527,37 @@ test("legacy Grok billing periods remain monthly", () => {
   })!;
   assert.equal(parsed.weekPeriodKind, "monthly");
   assert.equal(parsed.weekDurationMs, 31 * 24 * 60 * 60_000);
+});
+
+/**
+ * Evidence-URL: https://github.com/ohugonnot/claude-code-statusline
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: stdin rate_limits 五小时/周窗，小数 utilization/reset
+ * Sanitized-Fixture: {"rate_limits":{"five_hour":{"utilization":12.5,"resets_at":"2026-08-21T15:00:00Z"},"seven_day":{"utilization":34.25,"resets_at":"2026-08-25T00:00:00Z"}}}
+ */
+test("Claude statusline rate limits preserve decimals and epoch resets", () => {
+  const parsed = parseClaudeStatuslinePayload({
+    rate_limits: {
+      five_hour: { used_percentage: 12.5, resets_at: 1_725_018_000 },
+      seven_day: { used_percentage: 34.25, resets_at: 1_725_604_800 },
+    },
+  }, { fetchedAt: 1_725_000_000_000 })!;
+  assert.equal(parsed.windowPct, 12.5);
+  assert.equal(parsed.windowResetsAt, 1_725_018_000_000);
+  assert.equal(parsed.weekPct, 34.25);
+});
+
+test("Claude statusline ignores windows without a valid reset", () => {
+  const partial = parseClaudeStatuslinePayload({
+    rate_limits: {
+      five_hour: { used_percentage: 12.5 },
+      seven_day: { used_percentage: 34.25, resets_at: 1_725_604_800 },
+    },
+  }, { fetchedAt: 1_725_000_000_000 })!;
+  assert.equal(partial.windowPct, null);
+  assert.equal(partial.windowResetsAt, null);
+  assert.equal(partial.weekPct, 34.25);
+  assert.equal(parseClaudeStatuslinePayload({
+    rate_limits: { five_hour: { used_percentage: 12.5 } },
+  }), null);
 });
