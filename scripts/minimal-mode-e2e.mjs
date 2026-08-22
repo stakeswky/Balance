@@ -150,9 +150,23 @@ async function assertMinimalAgentCardDetails(page) {
   ];
   for (const heading of AGENT_CARD_HEADINGS) {
     const card = cardAround(page, heading);
-    assert.equal(await card.locator("dt").count(), 2);
-    assert.equal(await card.getByText("本周 token", { exact: true }).count(), 1);
-    assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 1);
+    const labels = await card.locator("dt").allTextContents();
+    assert.deepEqual(labels, ["本周已用 token", "本周用量", "本周预估总 token", "本周预估总用量"]);
+    assert.equal(await card.locator("dd").count(), 4);
+    for (const value of await card.locator("dd").allTextContents())
+      assert.match(value.trim(), /\S+/, `${heading} should render every weekly value`);
+    assert.equal(
+      (
+        await card
+          .getByText("本周预估总用量", { exact: true })
+          .locator("xpath=..")
+          .locator("dd")
+          .textContent()
+      )?.trim(),
+      "样本不足",
+    );
+    assert.equal(await card.getByText("本周 token", { exact: true }).count(), 0);
+    assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 0);
     assert.equal(await card.getByText("本周额度", { exact: true }).count(), 1);
     assert.equal(await card.getByText("5 小时窗", { exact: false }).count(), 0);
     assert.equal(await card.getByText(/燃烧|%\/时|预计.*耗尽/).count(), 0);
@@ -178,6 +192,9 @@ async function newSeededPage(browser, { state, availability, viewport }) {
   const context = await browser.newContext({ viewport, locale: "zh-CN" });
   const diagnostics = { consoleErrors: [], pageErrors: [], requestFailures: [], httpErrors: [] };
   context.on("page", (openedPage) => attachDiagnostics(openedPage, diagnostics));
+  await context.route("https://fonts.googleapis.com/**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/css", body: "" }),
+  );
   await context.route("**/_serverFn/**", async (route) => {
     const request = route.request();
     if (isAvailabilityRequest(request)) {

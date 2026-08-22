@@ -169,6 +169,10 @@ export function AgentCard({
   const creditL1 = formatCreditL1(weekValue);
   const parallel = parallelTaskSummary(activeTasks ?? [], live);
   const weekReset = formatWeekResetLabel(weekResetsAt, now);
+  const estimatedWeekUsage =
+    weekValue && weekValue.confidence !== "none"
+      ? formatUsdRange(weekValue.totalLowUsd, weekValue.totalHighUsd)
+      : "样本不足";
 
   return (
     <Card>
@@ -342,8 +346,10 @@ export function AgentCard({
       <dl className="mt-5 grid grid-cols-2 gap-3 text-xs">
         {minimalMode ? (
           <>
-            <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
-            <Stat label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
+            <Stat label="本周已用 token" value={formatTokens(meter.weekTokens)} />
+            <Stat label="本周用量" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
+            <Stat label="本周预估总 token" value={formatTokens(meter.weekBudget)} />
+            <Stat label="本周预估总用量" value={estimatedWeekUsage} hint={VALUE_HINT} />
           </>
         ) : (
           <>
