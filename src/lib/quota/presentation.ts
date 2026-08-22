@@ -1,6 +1,22 @@
 import { formatDuration } from "./engine.ts";
-import type { QuotaValue } from "./quota-value.ts";
+import type { OfficialQuotaPool } from "./official.ts";
+import type { ProductQuotaValue, QuotaValue } from "./quota-value.ts";
 import type { AgentId, MeterSnapshot } from "./types.ts";
+
+export interface QuotaPoolView {
+  pool: OfficialQuotaPool;
+  valuation: ProductQuotaValue;
+}
+
+export function quotaPoolLabel(pool: Pick<OfficialQuotaPool, "id" | "kind">): string {
+  if (pool.id === "seven_day_fable") return "Fable 5 周池";
+  if (pool.id === "seven_day_sonnet") return "Sonnet 周池";
+  if (pool.id === "seven_day_opus") return "Opus 周池";
+  if (pool.id === "extra_usage") return "额外用量";
+  if (pool.kind === "model-week") return `${pool.id} 周池`;
+  if (pool.kind === "extra-usage") return `${pool.id} 额度`;
+  return pool.id;
+}
 
 export type PrimaryWindowKind = "five_hour" | "weekly";
 

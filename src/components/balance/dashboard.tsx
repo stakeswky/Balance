@@ -33,8 +33,9 @@ import {
   quotaAlertLatch,
   tightestQuota,
   type PrimaryWindowKind,
+  type QuotaPoolView,
 } from "@/lib/quota/presentation";
-import { quotaValueFor } from "@/lib/quota/quota-value";
+import { quotaValueFor, quotaValueForPool } from "@/lib/quota/quota-value";
 import type { OfficialLoadState } from "@/lib/quota/quota-label";
 import { useQuota } from "@/lib/quota/store";
 import { useTheme } from "@/lib/theme";
@@ -384,6 +385,20 @@ export function Dashboard() {
       quotaValueFor(analyticsEvents, "codex", official.codex, "five_hour", now, quotaSamples ?? []),
     [analyticsEvents, official.codex, now, quotaSamples],
   );
+  const claudePoolViews = useMemo<QuotaPoolView[]>(() => {
+    const slice = official.claude;
+    if (!slice) return [];
+    return (slice.quotaPools ?? []).flatMap((pool) => {
+      const valuation = quotaValueForPool(
+        analyticsEvents,
+        slice,
+        pool,
+        now,
+        quotaSamples ?? [],
+      );
+      return valuation ? [{ pool, valuation }] : [];
+    });
+  }, [official.claude, analyticsEvents, now, quotaSamples]);
   const combinedUsd = visibleAgents.reduce((sum, agent) => {
     if (agent === "claude") return sum + claudeWeekVal.l1Usd;
     if (agent === "grok") return sum + grokWeekVal.l1Usd;
@@ -610,8 +625,7 @@ export function Dashboard() {
                         ? "jsonl 正在写入"
                         : "已接上日志，等待新回合"
                   }
-                  modelWeekLimit={claudeFableLimit}
-                  modelWeekLimitStale={official.claude?.modelWeekLimitsStale}
+                  quotaPools={claudePoolViews}
                   weekValue={claudeWeekVal}
                   windowValue={claudeWinVal}
                   weekResetsAt={official.claude?.weekResetsAt ?? null}

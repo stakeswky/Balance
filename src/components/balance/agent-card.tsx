@@ -25,6 +25,8 @@ import {
   formatCreditRange,
   formatCredits,
   formatWeekResetLabel,
+  quotaPoolLabel,
+  type QuotaPoolView,
 } from "@/lib/quota/presentation";
 import type { QuotaValue } from "@/lib/quota/quota-value";
 import {
@@ -35,9 +37,9 @@ import {
   type OfficialLoadState,
 } from "@/lib/quota/quota-label";
 import type {
+  AgentId,
   AgentLiveInfo,
   MeterSnapshot,
-  ModelWeekLimitSnapshot,
   PlanDef,
   SessionState,
   UsageEvent,
@@ -75,8 +77,7 @@ export function AgentCard({
   windowLabel = "5 小时窗",
   quotaNote,
   products,
-  modelWeekLimit,
-  modelWeekLimitStale = false,
+  quotaPools,
   quotaSources = { window: "local-estimate", week: "local-estimate" },
   officialLoadState,
   weekValue,
@@ -97,8 +98,7 @@ export function AgentCard({
   windowLabel?: string;
   quotaNote?: string;
   products?: OfficialProductShare[];
-  modelWeekLimit?: ModelWeekLimitSnapshot | null;
-  modelWeekLimitStale?: boolean;
+  quotaPools?: QuotaPoolView[];
   quotaSources?: MeterDataSources;
   officialLoadState?: OfficialLoadState;
   weekValue?: QuotaValue;
@@ -119,18 +119,24 @@ export function AgentCard({
   const primaryKind = windowLabel === "本周额度" ? "weekly" : "five_hour";
   const primarySource = primaryKind === "weekly" ? quotaSources.week : quotaSources.window;
   const freshMeter = officialOnlyMeter(meter, quotaSources);
-  const freshModelWeekLimit = modelWeekLimitStale ? null : modelWeekLimit;
-  const hasFreshOfficial = Boolean(freshMeter || freshModelWeekLimit);
+  const freshPoolPcts = (quotaPools ?? []).flatMap(({ valuation }) => {
+    if (valuation.kind === "stale") return [];
+    if (valuation.kind === "exact") return [valuation.value.usedPercent];
+    return [valuation.value.usedPct];
+  });
+  const hasFreshPool = freshPoolPcts.length > 0;
+  const freshPoolPct = Math.max(0, ...freshPoolPcts);
+  const hasFreshOfficial = Boolean(freshMeter || hasFreshPool);
   const hasLocalEstimate = Object.values(quotaSources).includes("local-estimate");
   const hasStaleSnapshot =
     Object.values(quotaSources).includes("official-stale") ||
-    Boolean(modelWeekLimit && modelWeekLimitStale);
+    (quotaPools ?? []).some(({ valuation }) => valuation.kind === "stale");
   const sourceMessage = officialLoadState
     ? quotaSourceMessage(officialLoadState, hasFreshOfficial, hasLocalEstimate, hasStaleSnapshot)
     : null;
   const effectiveStatus = effectiveQuotaStatus(
     freshMeter?.status ?? "ok",
-    freshModelWeekLimit?.usedPct,
+    hasFreshPool ? freshPoolPct : null,
   );
   const statusLabel = hasFreshOfficial
     ? statusCopy[effectiveStatus]
@@ -280,31 +286,7 @@ export function AgentCard({
               label={quotaSourceLabel("本周额度", quotaSources.week)}
               detail={weekReset}
             />
-            {modelWeekLimit ? (
-              <>
-                <MeterBar
-                  value={modelWeekLimit.usedPct}
-                  tone={
-                    modelWeekLimit.usedPct >= 88
-                      ? "crit"
-                      : modelWeekLimit.usedPct >= 72
-                        ? "warn"
-                        : tone
-                  }
-                  label={quotaSourceLabel(
-                    "Fable 5 周额度",
-                    modelWeekLimitStale ? "official-stale" : "official",
-                  )}
-                />
-                <p className="text-xs leading-relaxed text-faint">
-                  {`Claude Max 的 Fable 5 套餐上限为总周额度的 ${modelWeekLimit.limitPctOfWeek}%；${
-                    modelWeekLimitStale
-                      ? "当前显示上次成功读取的官方利用率。"
-                      : "当前利用率来自 Claude Code。"
-                  }`}
-                </p>
-              </>
-            ) : null}
+            <QuotaPoolRows rows={quotaPools ?? []} tone={tone} />
           </>
         )}
       </div>
@@ -541,6 +523,61 @@ function formatCreditL1(value?: QuotaValue): { text: string; dim: boolean } {
   const credits = formatCredits(value.l1Credits);
   if (value.pricedTokenCoverage < 0.95) return { text: `≥ ${credits}`, dim: false };
   return { text: credits, dim: false };
+}
+
+function QuotaPoolRows({ rows, tone }: { rows: QuotaPoolView[]; tone: AgentId }) {
+  if (!rows.length) return null;
+  return (
+    <div className="mt-4 space-y-3" aria-label="独立额度池">
+      {rows.map(({ pool, valuation }) => {
+        const label = quotaPoolLabel(pool);
+        const suffix = pool.stale ? "（官方快照）" : "（官方）";
+        if (valuation.kind === "stale") {
+          return (
+            <div key={pool.id} className="rounded-lg bg-raised px-3 py-2 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-mute">{label}{suffix}</span>
+                <span className="font-mono tabular text-ink">
+                  {valuation.value.usedPercent == null
+                    ? "—"
+                    : `${valuation.value.usedPercent.toFixed(1)}%`}
+                </span>
+              </div>
+              <p className="mt-1 text-faint">快照仅供参考，不参与校准或告警</p>
+            </div>
+          );
+        }
+        if (valuation.kind === "exact") {
+          return (
+            <div key={pool.id} className="rounded-lg bg-raised px-3 py-2 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-mute">{label}{suffix}</span>
+                <span className="font-mono tabular text-ink">
+                  {valuation.value.usedPercent.toFixed(1)}%
+                </span>
+              </div>
+              <p className="mt-1 text-faint">
+                已用 {formatUsd(valuation.value.usedUsd)} / 上限 {formatUsd(valuation.value.limitUsd)}
+                {` · 精确剩余 ${formatUsd(valuation.value.remainingUsd)}`}
+              </p>
+            </div>
+          );
+        }
+        const value = valuation.value;
+        return (
+          <div key={pool.id} className="space-y-1.5">
+            <MeterBar value={value.usedPct} tone={tone} label={`${label}${suffix}`} />
+            <p className="text-[11px] text-faint">
+              {value.confidence === "none"
+                ? "API 等价样本不足"
+                : `剩余 API 等价 ${formatUsdRange(value.remainingLowUsd, value.remainingHighUsd)}`}
+              {` · ${calibrationSourceLabel(value.calibrationSource)}`}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function Stat({
