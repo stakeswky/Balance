@@ -28,6 +28,7 @@ import {
   parseGrokBillingLog,
   parseGrokBillingLogAll,
   parseGrokBillingPayload,
+  quotaPoolsWithStale,
   slicesFromClaudeHistory,
   type OfficialQuota,
   type OfficialSlice,
@@ -298,6 +299,7 @@ function staleOfficial(slice: OfficialSlice | null): OfficialSlice | null {
     windowStale: slice.windowPct != null,
     weekStale: slice.weekPct != null,
     modelWeekLimitsStale: Boolean(slice.modelWeekLimits),
+    quotaPools: quotaPoolsWithStale(slice.quotaPools, true),
   } : null;
 }
 
@@ -391,6 +393,9 @@ function mergeClaudeOfficial(
     onDemandUsed: live.onDemandUsed ?? history.onDemandUsed,
     onDemandCap: live.onDemandCap ?? history.onDemandCap,
     modelWeekLimits: liveModelLimits ? live.modelWeekLimits : history.modelWeekLimits,
+    quotaPools: live?.quotaPools
+      ? live.quotaPools
+      : quotaPoolsWithStale(history?.quotaPools, true),
     windowStale: useHistoryWindow
       ? history.windowStale
       : live.windowPct != null ? live.windowStale : history.windowStale,

@@ -813,3 +813,44 @@ test("linux snapshot path prefers XDG Balance over the legacy synq directory", (
   assert.equal(current, join(home, "xdg", "balance", "official-quota.json"));
   assert.equal(legacy, join(home, "xdg", "synq", "official-quota.json"));
 });
+
+test("Claude 429 backoff quota pools go stale in the cached slice", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  let claudeCalls = 0;
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      claudeCalls += 1;
+      if (claudeCalls === 1) {
+        return new Response(JSON.stringify({
+          five_hour: { utilization: 24, resets_at: "2026-08-20T15:00:00Z" },
+          seven_day: { utilization: 34.25, resets_at: "2026-08-25T00:00:00Z" },
+          seven_day_sonnet: { utilization: 75.5, resets_at: "2026-08-25T00:00:00Z" },
+          extra_usage: { is_enabled: true, used_credits: 42.5, monthly_limit: 100 },
+        }), { status: 200 });
+      }
+      return new Response("rate limited", { status: 429 });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome,
+    snapshotPath,
+    now: at,
+    fetchImpl,
+    skipCache: true,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+
+  const fresh = await readAt(now);
+  assert.equal(fresh.claude?.quotaPools?.length, 2);
+  assert.ok(fresh.claude?.quotaPools?.every((pool) => pool.stale === false));
+
+  const backedOff = await readAt(now + 30_001);
+  assert.equal(claudeCalls, 2);
+  assert.equal(backedOff.claude?.quotaPools?.length, 2);
+  assert.ok(backedOff.claude?.quotaPools?.every((pool) => pool.stale === true));
+});

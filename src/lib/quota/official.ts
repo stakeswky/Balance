@@ -12,6 +12,20 @@ export interface OfficialModelWeekLimit {
 
 export type OfficialModelWeekLimits = Partial<Record<ModelId, OfficialModelWeekLimit>>;
 
+export interface OfficialQuotaPool {
+  id: string;
+  kind: "model-week" | "extra-usage" | "product-share";
+  usagePercent: number | null;
+  startsAt: number | null;
+  resetsAt: number | null;
+  durationMs: number | null;
+  models: ModelId[];
+  exactUsedUsd: number | null;
+  exactLimitUsd: number | null;
+  fetchedAt: number;
+  stale?: boolean;
+}
+
 export interface OfficialSlice {
   agent: "claude" | "grok" | "codex";
   windowPct: number | null;
@@ -28,6 +42,7 @@ export interface OfficialSlice {
   onDemandUsed: number | null;
   onDemandCap: number | null;
   modelWeekLimits?: OfficialModelWeekLimits;
+  quotaPools?: OfficialQuotaPool[];
   windowStale?: boolean;
   weekStale?: boolean;
   modelWeekLimitsStale?: boolean;
@@ -90,6 +105,70 @@ function claudeWindow(
   };
 }
 
+const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+function nullableNumber(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const value = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function claudeModelPool(
+  root: Record<string, unknown>,
+  field: "seven_day_sonnet" | "seven_day_opus",
+  model: ModelId,
+  fetchedAt: number,
+): OfficialQuotaPool | null {
+  const parsed = claudeWindow(root[field], "utilization");
+  if (!parsed) return null;
+  return {
+    id: field,
+    kind: "model-week",
+    usagePercent: parsed.usedPct,
+    startsAt: parsed.resetsAt == null ? null : parsed.resetsAt - WEEK_MS,
+    resetsAt: parsed.resetsAt,
+    durationMs: WEEK_MS,
+    models: [model],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt,
+    stale: false,
+  };
+}
+
+function claudeExtraUsage(
+  root: Record<string, unknown>,
+  fetchedAt: number,
+): OfficialQuotaPool | null {
+  const extra = record(root.extra_usage);
+  if (!extra || extra.is_enabled === false) return null;
+  const used = nullableNumber(extra.used_credits);
+  const limit = nullableNumber(extra.monthly_limit);
+  const utilization = nullableNumber(extra.utilization);
+  if (used == null && limit == null && utilization == null) return null;
+  return {
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: utilization == null ? null : clampPct(utilization),
+    startsAt: null,
+    resetsAt: timestampMs(extra.resets_at),
+    durationMs: null,
+    models: [],
+    exactUsedUsd: used,
+    exactLimitUsd: limit,
+    fetchedAt,
+    stale: false,
+  };
+}
+
+export function quotaPoolsWithStale(
+  pools: OfficialQuotaPool[] | undefined,
+  stale: boolean,
+): OfficialQuotaPool[] | undefined {
+  return pools?.map((pool) => ({ ...pool, stale }));
+}
+
 function claudeLimit(
   root: Record<string, unknown>,
   kind: "session" | "weekly_all",
@@ -128,9 +207,43 @@ export function parseClaudeUsagePayload(
   const fiveHour = claudeLimit(root, "session") ?? claudeWindow(root.five_hour, "utilization");
   const sevenDay = claudeLimit(root, "weekly_all") ?? claudeWindow(root.seven_day, "utilization");
   const fable = fableLimit(root);
-  if (!fiveHour && !sevenDay && !fable) return null;
   const fetchedAt = opts?.fetchedAt ?? Date.now();
-  const weekResetsAt = sevenDay?.resetsAt ?? fable?.resetsAt ?? null;
+  const sonnetPool = claudeModelPool(root, "seven_day_sonnet", "sonnet", fetchedAt);
+  const opusPool = claudeModelPool(root, "seven_day_opus", "opus", fetchedAt);
+  const extraUsage = claudeExtraUsage(root, fetchedAt);
+  const fablePool: OfficialQuotaPool | null = fable
+    ? {
+        id: "seven_day_fable",
+        kind: "model-week",
+        usagePercent: fable.usedPct,
+        startsAt: fable.resetsAt == null ? null : fable.resetsAt - WEEK_MS,
+        resetsAt: fable.resetsAt,
+        durationMs: WEEK_MS,
+        models: ["fable"],
+        exactUsedUsd: null,
+        exactLimitUsd: null,
+        fetchedAt,
+        stale: false,
+      }
+    : null;
+  const quotaPools = [fablePool, sonnetPool, opusPool, extraUsage].filter(
+    (pool): pool is OfficialQuotaPool => pool != null,
+  );
+  if (!fiveHour && !sevenDay && quotaPools.length === 0) return null;
+  const weekResetsAt = sevenDay?.resetsAt
+    ?? fable?.resetsAt
+    ?? sonnetPool?.resetsAt
+    ?? opusPool?.resetsAt
+    ?? null;
+  const modelWeekLimitEntries: OfficialModelWeekLimits = {
+    ...(fable ? { fable } : {}),
+    ...(sonnetPool?.usagePercent != null
+      ? { sonnet: { usedPct: sonnetPool.usagePercent, resetsAt: sonnetPool.resetsAt } }
+      : {}),
+    ...(opusPool?.usagePercent != null
+      ? { opus: { usedPct: opusPool.usagePercent, resetsAt: opusPool.resetsAt } }
+      : {}),
+  };
   return {
     agent: "claude",
     windowPct: fiveHour?.usedPct ?? null,
@@ -146,7 +259,10 @@ export function parseClaudeUsagePayload(
     prepaidBalance: null,
     onDemandUsed: null,
     onDemandCap: null,
-    modelWeekLimits: fable ? { fable } : undefined,
+    modelWeekLimits: Object.keys(modelWeekLimitEntries).length
+      ? modelWeekLimitEntries
+      : undefined,
+    quotaPools,
     source: opts?.source ?? "oauth-usage",
     fetchedAt,
     windowKind: "five_hour",
@@ -169,9 +285,6 @@ export function parseClaudeHistoryPoints(raw: unknown): ClaudeHistoryPoint[] {
   parsed.sort((a, b) => a.t - b.t);
   return parsed;
 }
-
-const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function slicesFromClaudeHistory(points: ClaudeHistoryPoint[]): OfficialSlice[] {
   const out: OfficialSlice[] = [];

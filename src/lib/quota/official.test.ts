@@ -9,6 +9,7 @@ import {
   parseClaudeHistoryPoints,
   parseClaudePlanHistory,
   parseClaudeUsagePayload,
+  quotaPoolsWithStale,
   slicesFromClaudeHistory,
   parseCodexRateLimitLog,
   parseCodexRateLimits,
@@ -473,4 +474,44 @@ test("Codex preserves an explicit zero-second reset boundary", () => {
   }, { fetchedAt, source: "session-rate-limits", planType: "plus" })!;
   assert.equal(result.windowResetsAt, fetchedAt);
   assert.equal(windowBounds(result, "five_hour", fetchedAt).rolling, true);
+});
+
+/**
+ * Evidence-URL: https://github.com/anthropics/claude-code/issues/31637
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: seven_day_sonnet/seven_day_opus/extra_usage 与小数 utilization
+ * Sanitized-Fixture: {"seven_day_sonnet":{"utilization":12.5},"seven_day_opus":{"utilization":7.25},"extra_usage":{"used_credits":42.5,"monthly_limit":100}}
+ */
+test("Claude parses model weekly pools and exact extra usage", () => {
+  const parsed = parseClaudeUsagePayload({
+    five_hour: { utilization: 20.5, resets_at: "2026-08-21T15:00:00Z" },
+    seven_day: { utilization: 40.25, resets_at: "2026-08-25T00:00:00Z" },
+    seven_day_sonnet: { utilization: 75.5, resets_at: "2026-08-25T00:00:00Z" },
+    seven_day_opus: { utilization: 10.25, resets_at: "2026-08-25T00:00:00Z" },
+    extra_usage: {
+      is_enabled: true,
+      used_credits: 42.5,
+      monthly_limit: 100,
+      utilization: 42.5,
+    },
+  })!;
+  assert.equal(parsed.modelWeekLimits!.sonnet!.usedPct, 75.5);
+  assert.equal(parsed.modelWeekLimits!.opus!.usedPct, 10.25);
+  assert.deepEqual(parsed.quotaPools!.find((pool) => pool.id === "extra_usage"), {
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: 42.5,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    fetchedAt: parsed.fetchedAt,
+    stale: false,
+  });
+  assert.ok(parsed.quotaPools!.every((pool) => pool.stale === false));
+  assert.ok(
+    quotaPoolsWithStale(parsed.quotaPools, true)!.every((pool) => pool.stale === true),
+  );
 });
