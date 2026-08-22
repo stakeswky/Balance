@@ -43,6 +43,7 @@ export interface OfficialSlice {
   onDemandCap: number | null;
   modelWeekLimits?: OfficialModelWeekLimits;
   quotaPools?: OfficialQuotaPool[];
+  weekPeriodKind?: "weekly" | "monthly";
   windowStale?: boolean;
   weekStale?: boolean;
   modelWeekLimitsStale?: boolean;
@@ -421,6 +422,12 @@ export function parseGrokBillingPayload(
       : cfg.subscription_tier != null
         ? String(cfg.subscription_tier)
         : null);
+  const durationMs = Number.isFinite(start) && Number.isFinite(end) && end > start
+    ? end - start
+    : null;
+  const weekPeriodKind = durationMs != null && durationMs > 8 * 24 * 60 * 60_000
+    ? "monthly"
+    : "weekly";
   return {
     agent: "grok",
     windowPct: null,
@@ -429,7 +436,8 @@ export function parseGrokBillingPayload(
     weekResetsAt: Number.isFinite(end) ? end : null,
     weekStartedAt: Number.isFinite(start) ? start : null,
     windowDurationMs: null,
-    weekDurationMs: Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : null,
+    weekDurationMs: durationMs,
+    weekPeriodKind,
     burnPctPerHour: 0,
     planLabel: tier,
     products: parseGrokProducts(cfg),

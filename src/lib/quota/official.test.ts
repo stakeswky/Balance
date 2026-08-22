@@ -515,3 +515,15 @@ test("Claude parses model weekly pools and exact extra usage", () => {
     quotaPoolsWithStale(parsed.quotaPools, true)!.every((pool) => pool.stale === true),
   );
 });
+
+test("legacy Grok billing periods remain monthly", () => {
+  const parsed = parseGrokBillingPayload({
+    creditUsagePercent: 25,
+    currentPeriod: {
+      start: "2026-08-01T00:00:00Z",
+      end: "2026-09-01T00:00:00Z",
+    },
+  })!;
+  assert.equal(parsed.weekPeriodKind, "monthly");
+  assert.equal(parsed.weekDurationMs, 31 * 24 * 60 * 60_000);
+});
