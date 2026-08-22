@@ -1,6 +1,6 @@
 # 订阅额度算法审计报告（2026-08-21）
 
-状态：调研完成，修复计划见 `docs/plans/2026-08-21-quota-algorithm-optimization.md`
+状态：调研完成；实施计划冻结；实现结果见对应 milestone commit（`feat/quota-algorithm-optimization`）
 方法：14 个并行 agent（3 研究员 + 5 维度分析员 + 6 对抗验证员），36 条原始发现 → 去重 25 条 → top 6 经对抗验证（5 CONFIRMED / 1 PARTIAL）。
 原始资料：`2026-08-21-quota-algorithm-audit-raw.json`（全部发现、验证 verdict、研究员 key facts 与 URL）；
 数值模拟与基准脚本：`2026-08-21-quota-algorithm-audit-sims/`（均直接 import 仓库真实导出函数运行，可复现）。

@@ -505,12 +505,14 @@ observedUsd = Σ event.cost.totalUsd
 observedTokens = Σ event.rawTokens
 ```
 
-同时计算覆盖率：
+同时计算可计价事件覆盖率（token/event 双 coverage）：
 
 ```text
 pricedTokenCoverage = pricedTokens / allObservedTokens
 pricedEventCoverage = pricedEvents / allObservedEvents
 ```
+
+图片 token、未知模型事件和异常 token（NaN/负值/无限）事件计入未覆盖部分，执行 fail-closed 规则：宁可降低覆盖率也不产生伪金额。
 
 推荐展示规则：
 
@@ -525,7 +527,9 @@ pricedEventCoverage = pricedEvents / allObservedEvents
 
 ## 11. L2/L3：整窗与剩余价值估算
 
-### 11.1 为什么使用差分
+### 11.1 为什么使用差分（锚点链式差分）
+
+校准采用锚点链式差分：每次官方百分比刷新建立锚点，相邻锚点的 `Δpct / Δusd` 构成一条片段链。5h 窗口过期后锚点降为 rolling，不平铺；周窗口 cadence 保留。fetchedAt 对齐确保只比较时序一致的锚点对；stale 候选直接拒绝。
 
 不直接使用：
 
@@ -571,13 +575,13 @@ usdPerPct = Δusd / Δpct
 
 只有 1% 变化的片段受百分比取整影响很大，只能用于低置信度估算。
 
-### 11.3 稳健聚合
+### 11.3 稳健聚合（加权 MAD）
 
-设有效斜率为 `r1...rn`：
+设有效斜率为 `r1...rn`，使用加权 MAD（weighted Median Absolute Deviation）进行离群过滤。cheap 片段（Δpct < 2）不参与 MAD 计算，避免取整噪声污染离散度；动态量化带根据样本数量自动收窄：
 
 ```text
-m   = median(r)
-mad = median(abs(ri - m))
+m   = weightedMedian(r, weight = Δpct)
+mad = weightedMedian(abs(ri - m), weight = Δpct)
 ```
 
 过滤异常值：
@@ -641,7 +645,16 @@ modelMixDrift = 0.5 × Σ abs(currentShare(model) - baselineShare(model))
 | medium | 至少 3 个有效片段，累计 `Δpct ≥ 5`，coverage ≥ 90%，漂移 ≤ 0.35 |
 | high | 至少 6 个有效片段，累计 `Δpct ≥ 15`，coverage ≥ 95%，漂移 < 0.15，斜率离散度 ≤ 20% |
 
-`none` 时 UI 保留窗口位置并显示“样本不足”，不显示伪金额。`low` 可以在主卡展示，但必须同时展示区间和低置信度标签。
+`none` 时 UI 保留窗口位置并显示”样本不足”，不显示伪金额。`low` 可以在主卡展示，但必须同时展示区间和低置信度标签。
+
+### 11.7 历史窗口先验
+
+当同一 agent/kind 的前一个或多个已关闭窗口已完成校准（至少 medium 置信度），其稳健 `usdPerPct` 可作为历史窗口先验（historical window-level low prior）。先验只允许在当前窗口样本不足时提供 `low` 置信度的宽区间参考，不能替代当前窗口的实际差分校准。具体规则：
+
+- 先验仅取最近 8 天内且窗口级别一致的历史窗口；
+- 先验 `usdPerPct` 按历史置信度加权平均；
+- 当前窗口有 ≥3 有效片段后先验自动失效；
+- 先验不得提升当前窗口置信度超过 `low`。
 
 ## 12. 跨设备与漏采检测
 
@@ -688,9 +701,11 @@ GrokBuild events ↔ GrokBuild official percent
 - 禁止把合计金额除以某一个产品百分比；
 - L2/L3 只使用共享周池总百分比与同一周窗口的历史样本。
 
-### 13.2 Codex 附加额度
+### 13.2 Codex 附加额度与 extra_usage
 
 Codex `additional_rate_limits` 必须独立成产品窗口。普通 Codex token 不得自动归入 Spark、特殊模型或 credits 池，除非事件模型和官方产品可明确匹配。
+
+Claude 的 `extra_usage`（付费加量包）同理：当官方返回 `extra_usage.used_credits` 和 `extra_usage.monthly_limit` 时，必须作为独立的月度产品窗口处理，不得与标准 5h/7d 窗口混合校准。extra_usage 的利用率为 `used_credits / monthly_limit × 100`，其 L2/L3 估算独立于主窗口。
 
 ### 13.3 Claude Sonnet 周池
 
@@ -920,3 +935,13 @@ src/lib/quota/quota-value.ts
 ```
 
 在阶段 3 完成前，不应继续扩展当前的一次性百分比反推算法。
+
+## 22. 候选估计器：Theil–Sen 离线 shadow
+
+Theil–Sen 回归是一种对离群值鲁棒的斜率估计方法，取所有采样对斜率的中位数。当前生产估计器使用加权 MAD 过滤后的 weighted median；Theil–Sen 离线 shadow 作为后续候选，仅在开发环境中 shadow-run，用于收集与当前估计器的偏差统计，不进入当前生产估计器或 telemetry。
+
+启用条件：
+
+- 仅在 `NODE_ENV=development` 或 `SYNQ_SHADOW_ESTIMATORS=1` 时计算；
+- 结果写入诊断日志，不影响 L2/L3 展示值；
+- 当偏差统计积累足够且证明 Theil–Sen 在边界条件（少样本、高漂移）下表现更好时，可考虑提升为生产候选。
