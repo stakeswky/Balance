@@ -3,20 +3,30 @@ import { test } from "node:test";
 import {
   calibrateFromSamples,
   eventsInWindow,
+  exactQuotaValue,
+  historicalWindowPrior,
   makeSample,
   mergeSamples,
   normalizeWindowSamples,
   observeWindow,
   officialWindowId,
   quotaValueFor,
+  quotaValueForPool,
+  sameOfficialWindowId,
   samplesFromOfficialHistory,
   samplesFromOfficial,
   validSlopes,
+  weightedMedian,
   windowBounds,
+  type ExactQuotaValue,
+  type ProductQuotaValue,
   type QuotaSample,
 } from "./quota-value.ts";
-import type { OfficialSlice } from "./official.ts";
+import { costBreakdown } from "./cost.ts";
+import type { OfficialSlice, OfficialQuotaPool } from "./official.ts";
 import type { UsageEvent } from "./types.ts";
+import { WINDOW_MS } from "./types.ts";
+import { PRICING_VERSION } from "./pricing.ts";
 
 function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
   return {
@@ -33,7 +43,11 @@ function ev(partial: Partial<UsageEvent> & { ts: number }): UsageEvent {
     cacheWrite: partial.cacheWrite ?? 0,
     cacheWrite1h: partial.cacheWrite1h,
     cacheWriteUnsplit: partial.cacheWriteUnsplit,
+    imageInputTokens: partial.imageInputTokens,
+    imageOutputTokens: partial.imageOutputTokens,
     reasoningMin: 0,
+    anomalies: partial.anomalies,
+    speed: partial.speed,
   };
 }
 
@@ -46,8 +60,9 @@ function sample(partial: Partial<QuotaSample> & Pick<QuotaSample, "usedPercent" 
     usedPercent: partial.usedPercent,
     cumulativeObservedUsd: partial.cumulativeObservedUsd,
     pricedTokenCoverage: partial.pricedTokenCoverage ?? 1,
-    modelMix: partial.modelMix ?? { "gpt-5.4": 1 },
-    pricingVersion: partial.pricingVersion ?? "2026-08-21-balance-1",
+    modelMix: partial.modelMix ?? { "gpt-5.4:standard": 1 },
+    pricingVersion: partial.pricingVersion ?? PRICING_VERSION,
+    planLabel: partial.planLabel ?? null,
   };
 }
 
@@ -87,6 +102,16 @@ test("unsplit Claude cache writes lower priced token coverage", () => {
   assert.equal(observed.observedTokens, 1000);
   assert.equal(observed.pricedTokens, 100);
   assert.equal(observed.pricedTokenCoverage, 0.1);
+});
+
+test("anomalous token events remain observable and are not priced", () => {
+  const event = ev({
+    ts: 1,
+    tokensIn: 10,
+    anomalies: [{ code: "negative-token", field: "output_tokens", rawValue: "-1" }],
+  });
+  assert.equal(costBreakdown(event).priced, false);
+  assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });
 
 test("same-window differential yields usdPerPct", () => {
@@ -288,7 +313,7 @@ test("only resetsAt infers 5h start", () => {
   assert.equal(bounds.rolling, false);
 });
 
-test("expired 5h resetsAt rolls forward to the current window", () => {
+test("expired 5h resetsAt falls back to rolling instead of tiling forward", () => {
   const span = 5 * 60 * 60 * 1000;
   const firstReset = 2_000_000;
   const now = firstReset + span * 2 + 10_000;
@@ -297,10 +322,23 @@ test("expired 5h resetsAt rolls forward to the current window", () => {
     "five_hour",
     now,
   );
-  assert.equal(bounds.rolling, false);
-  assert.equal(bounds.start, firstReset + span * 2);
-  assert.equal(bounds.resetsAt, firstReset + span * 3);
-  assert.ok(bounds.start <= now && now < bounds.resetsAt!);
+  assert.equal(bounds.rolling, true);
+  assert.equal(bounds.resetsAt, null);
+  assert.equal(bounds.start, now - span);
+});
+
+test("expired five-hour reset becomes rolling instead of a tiled window", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const official = slice({
+    fetchedAt: now - 26 * 60 * 60_000,
+    windowPct: 63,
+    windowResetsAt: now - 24 * 60 * 60_000,
+    windowDurationMs: 5 * 60 * 60_000,
+  });
+  const bounds = windowBounds(official, "five_hour", now);
+  assert.equal(bounds.rolling, true);
+  assert.equal(bounds.resetsAt, null);
+  assert.equal(bounds.start, now - WINDOW_MS);
 });
 
 test("windowBounds uses the official duration", () => {
@@ -339,31 +377,37 @@ test("provider reset jitter keeps one quota window identity", () => {
     Date.parse("2026-08-17T21:00:00.416Z"),
     Date.parse("2026-08-24T21:00:00.416Z"),
   );
-  assert.equal(claudeA, claudeB);
+  assert.equal(sameOfficialWindowId(claudeA, claudeB), true);
 
   const codexResetA = 1_787_815_628_000;
   const codexResetB = 1_787_815_629_000;
   const week = 7 * 24 * 60 * 60 * 1000;
   assert.equal(
-    officialWindowId("codex", "weekly", null, codexResetA - week, codexResetA),
-    officialWindowId("codex", "weekly", null, codexResetB - week, codexResetB),
+    sameOfficialWindowId(
+      officialWindowId("codex", "weekly", null, codexResetA - week, codexResetA),
+      officialWindowId("codex", "weekly", null, codexResetB - week, codexResetB),
+    ),
+    true,
   );
 
   assert.equal(
-    officialWindowId(
-      "grok",
-      "weekly",
-      null,
-      Date.parse("2026-08-18T13:28:17.000Z"),
-      Date.parse("2026-08-25T13:28:17.000Z"),
+    sameOfficialWindowId(
+      officialWindowId(
+        "grok",
+        "weekly",
+        null,
+        Date.parse("2026-08-18T13:28:17.000Z"),
+        Date.parse("2026-08-25T13:28:17.000Z"),
+      ),
+      officialWindowId(
+        "grok",
+        "weekly",
+        null,
+        Date.parse("2026-08-18T13:28:17.911Z"),
+        Date.parse("2026-08-25T13:28:17.911Z"),
+      ),
     ),
-    officialWindowId(
-      "grok",
-      "weekly",
-      null,
-      Date.parse("2026-08-18T13:28:17.911Z"),
-      Date.parse("2026-08-25T13:28:17.911Z"),
-    ),
+    true,
   );
 });
 
@@ -376,35 +420,57 @@ test("real quota resets still create a new window identity", () => {
   );
 });
 
+test("window ids one second apart are equivalent", () => {
+  const left = officialWindowId("claude", "five_hour", null, 1_725_000_029_500, 1_725_018_029_500);
+  const right = officialWindowId("claude", "five_hour", null, 1_725_000_030_500, 1_725_018_030_500);
+  assert.equal(sameOfficialWindowId(left, right), true);
+});
+
+test("window ids outside tolerance remain isolated", () => {
+  const left = officialWindowId("claude", "five_hour", null, 1_725_000_000_000, 1_725_018_000_000);
+  const right = officialWindowId("claude", "five_hour", null, 1_725_000_003_000, 1_725_018_003_000);
+  assert.equal(sameOfficialWindowId(left, right), false);
+});
+
+test("nearby but distinct resets are never merged", () => {
+  const left = officialWindowId("claude", "five_hour", null, 1_725_000_000_000, 1_725_018_000_000);
+  const right = officialWindowId("claude", "five_hour", null, 1_725_000_089_000, 1_725_018_089_000);
+  assert.equal(sameOfficialWindowId(left, right), false);
+});
+
 test("legacy jittered sample ids coalesce without losing observations", () => {
   const firstId = "claude:weekly:_:1787000399901:1787605199901";
   const secondId = "claude:weekly:_:1787000400416:1787605200416";
-  const rows = normalizeWindowSamples([
+  let rows: QuotaSample[] = [];
+  rows = mergeSamples(
+    rows,
     sample({
       agent: "claude",
       windowId: firstId,
       timestampMs: 1,
       usedPercent: 10,
       cumulativeObservedUsd: 1,
-      modelMix: { opus: 1 },
+      modelMix: { "opus:standard": 1 },
     }),
+  );
+  rows = mergeSamples(
+    rows,
     sample({
       agent: "claude",
       windowId: secondId,
       timestampMs: 2,
       usedPercent: 12,
       cumulativeObservedUsd: 2,
-      modelMix: { opus: 1 },
+      modelMix: { "opus:standard": 1 },
     }),
-  ]);
+  );
   assert.equal(rows.length, 2);
   assert.equal(new Set(rows.map((row) => row.windowId)).size, 1);
-  assert.equal(
-    rows[0]?.windowId,
-    officialWindowId("claude", "weekly", null, 1_787_000_400_416, 1_787_605_200_416),
-  );
+  assert.equal(sameOfficialWindowId(rows[0]!.windowId, secondId), true);
 
-  const codexRows = normalizeWindowSamples([
+  let codexRows: QuotaSample[] = [];
+  codexRows = mergeSamples(
+    codexRows,
     sample({
       agent: "codex",
       windowId: "codex:weekly:_:1787210828000:1787815628000",
@@ -412,6 +478,9 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       usedPercent: 5,
       cumulativeObservedUsd: 1,
     }),
+  );
+  codexRows = mergeSamples(
+    codexRows,
     sample({
       agent: "codex",
       windowId: "codex:weekly:_:1787210829000:1787815629000",
@@ -419,31 +488,38 @@ test("legacy jittered sample ids coalesce without losing observations", () => {
       usedPercent: 7,
       cumulativeObservedUsd: 2,
     }),
-  ]);
+  );
+  assert.equal(codexRows.length, 2);
   assert.equal(new Set(codexRows.map((row) => row.windowId)).size, 1);
 
   const grokStartA = Date.parse("2026-08-18T13:28:17.000Z");
   const grokStartB = Date.parse("2026-08-18T13:28:17.911Z");
   const grokEndA = Date.parse("2026-08-25T13:28:17.000Z");
   const grokEndB = Date.parse("2026-08-25T13:28:17.911Z");
-  const grokRows = normalizeWindowSamples([
+  let grokRows: QuotaSample[] = [];
+  grokRows = mergeSamples(
+    grokRows,
     sample({
       agent: "grok",
       windowId: `grok:weekly:_:${grokStartA}:${grokEndA}`,
       timestampMs: 1,
       usedPercent: 8,
       cumulativeObservedUsd: 1,
-      modelMix: { "grok-4.6": 1 },
+      modelMix: { "grok-4.6:standard": 1 },
     }),
+  );
+  grokRows = mergeSamples(
+    grokRows,
     sample({
       agent: "grok",
       windowId: `grok:weekly:_:${grokStartB}:${grokEndB}`,
       timestampMs: 2,
       usedPercent: 10,
       cumulativeObservedUsd: 2,
-      modelMix: { "grok-4.6": 1 },
+      modelMix: { "grok-4.6:standard": 1 },
     }),
-  ]);
+  );
+  assert.equal(grokRows.length, 2);
   assert.equal(new Set(grokRows.map((row) => row.windowId)).size, 1);
 });
 
@@ -466,7 +542,7 @@ test("quotaValueFor reuses legacy jittered samples immediately", () => {
         timestampMs: 1,
         usedPercent: 10,
         cumulativeObservedUsd: 1,
-        modelMix: { opus: 1 },
+        modelMix: { "opus:standard": 1 },
       }),
       sample({
         agent: "claude",
@@ -474,7 +550,7 @@ test("quotaValueFor reuses legacy jittered samples immediately", () => {
         timestampMs: 2,
         usedPercent: 12,
         cumulativeObservedUsd: 2,
-        modelMix: { opus: 1 },
+        modelMix: { "opus:standard": 1 },
       }),
     ],
   );
@@ -510,7 +586,7 @@ test("mergeSamples replaces same percent and caps windows per agent", () => {
     rows = mergeSamples(
       rows,
       sample({
-        windowId: `codex:weekly:_:${w}:${w + 1}`,
+        windowId: `codex:weekly:_:${w * 10_000}:${w * 10_000 + 5_000}`,
         timestampMs: w,
         usedPercent: 10,
         cumulativeObservedUsd: w,
@@ -550,7 +626,7 @@ test("Claude weekly window survives more than eight five-hour windows", () => {
       rows,
       sample({
         agent: "claude",
-        windowId: `claude:five_hour:_:${index}:${index + 1}`,
+        windowId: `claude:five_hour:_:${index * 10_000}:${index * 10_000 + 5_000}`,
         timestampMs: index + 2,
         usedPercent: 1,
         cumulativeObservedUsd: index + 2,
@@ -688,29 +764,43 @@ test("official history backfills same-window cumulative observations", () => {
 
 test("calibration ignores partial first and current percent plateaus", () => {
   const rows = [
-    sample({ timestampMs: 1, usedPercent: 54, cumulativeObservedUsd: 0.48, modelMix: { "gpt-5.6-sol": 1 } }),
-    sample({ timestampMs: 2, usedPercent: 56, cumulativeObservedUsd: 0.72, modelMix: { "gpt-5.6-sol": 1 } }),
-    sample({ timestampMs: 3, usedPercent: 57, cumulativeObservedUsd: 5.56, modelMix: { "gpt-5.6-sol": 0.51, "gpt-5.4": 0.49 } }),
-    sample({ timestampMs: 4, usedPercent: 58, cumulativeObservedUsd: 13.52, modelMix: { "gpt-5.6-sol": 0.53, "gpt-5.4": 0.47 } }),
-    sample({ timestampMs: 5, usedPercent: 59, cumulativeObservedUsd: 21.99, modelMix: { "gpt-5.6-sol": 0.63, "gpt-5.4": 0.37 } }),
-    sample({ timestampMs: 6, usedPercent: 60, cumulativeObservedUsd: 31.22, modelMix: { "gpt-5.6-sol": 0.61, "gpt-5.4": 0.39 } }),
-    sample({ timestampMs: 7, usedPercent: 61, cumulativeObservedUsd: 35.82, modelMix: { "gpt-5.6-sol": 0.65, "gpt-5.4": 0.35 } }),
+    sample({ timestampMs: 1, usedPercent: 54, cumulativeObservedUsd: 0.48, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 2, usedPercent: 56, cumulativeObservedUsd: 0.72, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 3, usedPercent: 57, cumulativeObservedUsd: 5.56, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 4, usedPercent: 58, cumulativeObservedUsd: 13.52, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 5, usedPercent: 59, cumulativeObservedUsd: 21.99, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 6, usedPercent: 60, cumulativeObservedUsd: 31.22, modelMix: { "gpt-5.6-sol:standard": 1 } }),
+    sample({ timestampMs: 7, usedPercent: 61, cumulativeObservedUsd: 35.82, modelMix: { "gpt-5.6-sol:standard": 1 } }),
   ];
   const cal = calibrateFromSamples(rows, 61, false);
   assert.equal(cal.confidence, "low");
-  assert.ok(cal.totalLowUsd != null && cal.totalLowUsd > 700);
-  assert.ok(cal.totalHighUsd != null && cal.totalHighUsd < 1_100);
-  assert.ok(cal.remainingLowUsd != null && cal.remainingLowUsd > 250);
+  assert.ok(cal.totalPointUsd != null && Math.abs(cal.totalPointUsd - 847) < 1e-9);
+  assert.ok(cal.totalLowUsd != null && cal.totalLowUsd > 500);
+  assert.ok(cal.totalHighUsd != null && cal.totalHighUsd < 1_200);
+  assert.ok(cal.remainingLowUsd != null && cal.remainingLowUsd > 200);
+});
+
+test("external use in the first censored interval is still detected", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 10, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 20, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 5 }),
+    sample({ timestampMs: 4, usedPercent: 40, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 5, usedPercent: 45, cumulativeObservedUsd: 12.5 }),
+  ];
+  const result = calibrateFromSamples(rows, 45, false);
+  assert.equal(result.externalUsageDetected, true);
+  assert.notEqual(result.confidence, "high");
 });
 
 test("calibration ignores an empty bootstrap model mix", () => {
   const rows = [
     sample({ agent: "grok", timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0, modelMix: {} }),
-    sample({ agent: "grok", timestampMs: 2, usedPercent: 2, cumulativeObservedUsd: 6, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 3, usedPercent: 4, cumulativeObservedUsd: 12, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 4, usedPercent: 6, cumulativeObservedUsd: 18, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 5, usedPercent: 8, cumulativeObservedUsd: 24, modelMix: { "grok-4.6": 1 } }),
-    sample({ agent: "grok", timestampMs: 6, usedPercent: 10, cumulativeObservedUsd: 30, modelMix: { "grok-4.6": 1 } }),
+    sample({ agent: "grok", timestampMs: 2, usedPercent: 2, cumulativeObservedUsd: 6, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 3, usedPercent: 4, cumulativeObservedUsd: 12, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 4, usedPercent: 6, cumulativeObservedUsd: 18, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 5, usedPercent: 8, cumulativeObservedUsd: 24, modelMix: { "grok-4.6:standard": 1 } }),
+    sample({ agent: "grok", timestampMs: 6, usedPercent: 10, cumulativeObservedUsd: 30, modelMix: { "grok-4.6:standard": 1 } }),
   ];
   const cal = calibrateFromSamples(rows, 10, false);
   assert.equal(cal.confidence, "medium");
@@ -750,4 +840,829 @@ test("non-Codex quota does not claim OpenAI credits", () => {
   assert.equal(value.l1Credits, null);
   assert.equal(value.totalLowCredits, null);
   assert.equal(value.remainingHighCredits, null);
+});
+
+test("official samples align cumulative cost to fetchedAt", () => {
+  const fetchedAt = Date.parse("2026-08-21T10:00:00Z");
+  const before = ev({
+    id: "before",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: fetchedAt - 1_000,
+    tokensIn: 1_000_000,
+  });
+  const after = ev({
+    id: "after",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: fetchedAt + 1_000,
+    tokensIn: 1_000_000,
+  });
+  const official = slice({
+    agent: "claude",
+    fetchedAt,
+    windowPct: 20,
+    weekPct: null,
+    windowResetsAt: fetchedAt + 60_000,
+    weekResetsAt: null,
+    weekStartedAt: null,
+  });
+  const rows = samplesFromOfficial(
+    [before, after],
+    { claude: official, grok: null, codex: null },
+    fetchedAt + 30_000,
+    [],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.timestampMs, fetchedAt);
+  assert.equal(rows[0]!.cumulativeObservedUsd, costBreakdown(before).totalUsd);
+});
+
+test("stale fields cannot create quota samples", () => {
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const official = slice({
+    agent: "claude",
+    fetchedAt: now - 40 * 60_000,
+    windowPct: 80,
+    weekPct: 30,
+    windowStale: true,
+    weekStale: true,
+  });
+  const rows = samplesFromOfficial(
+    [],
+    { claude: official, grok: null, codex: null },
+    now,
+    [],
+  );
+  assert.deepEqual(rows, []);
+});
+
+test("future official timestamps cannot pull future events into a sample", () => {
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const official = slice({
+    agent: "claude",
+    fetchedAt: now + 1,
+    windowPct: 20,
+    windowResetsAt: now + 60_000,
+  });
+  assert.deepEqual(
+    samplesFromOfficial(
+      [],
+      { claude: official, grok: null, codex: null },
+      now,
+      [],
+    ),
+    [],
+  );
+});
+
+test("a large same-window percentage drop starts a new calibration segment", () => {
+  const rows = normalizeWindowSamples([
+    sample({ timestampMs: 1, usedPercent: 55, cumulativeObservedUsd: 80 }),
+    sample({ timestampMs: 2, usedPercent: 60, cumulativeObservedUsd: 88 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 96 }),
+    sample({ timestampMs: 4, usedPercent: 45, cumulativeObservedUsd: 118 }),
+    sample({ timestampMs: 5, usedPercent: 62, cumulativeObservedUsd: 144 }),
+  ]);
+  assert.deepEqual(rows.map((row) => row.usedPercent), [55, 60, 30, 45, 62]);
+  assert.deepEqual(
+    validSlopes(rows).map((row) => [row.segmentId, Number(row.value.toFixed(2))]),
+    [[0, 1.6], [1, 1.47], [1, 1.53]],
+  );
+});
+
+test("drops up to two points are treated as concurrent snapshot jitter", () => {
+  const rows = normalizeWindowSamples([
+    sample({ timestampMs: 1, usedPercent: 57, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 2, usedPercent: 60, cumulativeObservedUsd: 18 }),
+    sample({ timestampMs: 3, usedPercent: 58, cumulativeObservedUsd: 19 }),
+    sample({ timestampMs: 4, usedPercent: 61, cumulativeObservedUsd: 28 }),
+  ]);
+  assert.deepEqual(rows.map((row) => row.usedPercent), [57, 60, 61]);
+});
+
+test("a reset followed by less than one point cannot reuse an older segment", () => {
+  const result = calibrateFromSamples([
+    sample({ timestampMs: 1, usedPercent: 55, cumulativeObservedUsd: 80 }),
+    sample({ timestampMs: 2, usedPercent: 60, cumulativeObservedUsd: 88 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 96 }),
+    sample({ timestampMs: 4, usedPercent: 30.2, cumulativeObservedUsd: 96.3 }),
+    sample({ timestampMs: 5, usedPercent: 30.8, cumulativeObservedUsd: 97.2 }),
+  ], 30.8, false);
+  assert.equal(result.confidence, "none");
+  assert.equal(result.totalPointUsd, null);
+});
+
+test("cumulative usd regressions are dropped but counted as anomalies", () => {
+  const result = calibrateFromSamples([
+    sample({ timestampMs: 1, usedPercent: 10, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 2, usedPercent: 20, cumulativeObservedUsd: 8 }),
+    sample({ timestampMs: 3, usedPercent: 30, cumulativeObservedUsd: 13 }),
+  ], 30, false);
+  assert.equal(result.anomalousPairs, 1);
+  assert.equal(result.confidence, "low");
+});
+
+test("fractional percentages accumulate into valid anchor-chain slopes", () => {
+  const rows: QuotaSample[] = [];
+  for (let index = 0; index <= 200; index += 1) {
+    const usedPercent = Number((index * 0.2).toFixed(4));
+    rows.push(sample({
+      timestampMs: index * 30_000,
+      usedPercent,
+      cumulativeObservedUsd: usedPercent * 0.5,
+    }));
+  }
+  const slopes = validSlopes(rows);
+  assert.ok(slopes.length >= 30);
+  assert.ok(slopes.every((row) => row.weight >= 1));
+  assert.ok(slopes.every((row) => Math.abs(row.value - 0.5) < 1e-9));
+  assert.notEqual(calibrateFromSamples(rows, 40, false).confidence, "none");
+});
+
+test("coverage failure breaks an anchor chain", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 0.6, cumulativeObservedUsd: 0.3 }),
+    sample({ timestampMs: 3, usedPercent: 1.2, cumulativeObservedUsd: 0.6, pricedTokenCoverage: 0.5 }),
+    sample({ timestampMs: 4, usedPercent: 1.8, cumulativeObservedUsd: 0.9 }),
+    sample({ timestampMs: 5, usedPercent: 2.9, cumulativeObservedUsd: 1.45 }),
+  ];
+  const slopes = validSlopes(rows);
+  assert.equal(slopes.length, 1);
+  assert.equal(slopes[0]!.segmentId, 1);
+  assert.ok(Math.abs(slopes[0]!.weight - 1.1) < 1e-9);
+  assert.equal(slopes[0]!.value, 0.5);
+});
+
+test("weighted median interpolates an exact half-weight boundary", () => {
+  assert.equal(weightedMedian([
+    { value: 0.4, weight: 10 },
+    { value: 0.6, weight: 10 },
+  ]), 0.5);
+});
+
+test("weighted MAD keeps high-weight accurate slopes", () => {
+  const rows = [sample({ timestampMs: 0, usedPercent: 0, cumulativeObservedUsd: 0 })];
+  let pct = 0;
+  let usd = 0;
+  for (let index = 1; index <= 8; index += 1) {
+    pct += 1;
+    usd += 0.2;
+    rows.push(sample({ timestampMs: index, usedPercent: pct, cumulativeObservedUsd: usd }));
+  }
+  for (let index = 9; index <= 11; index += 1) {
+    pct += 10;
+    usd += 5;
+    rows.push(sample({ timestampMs: index, usedPercent: pct, cumulativeObservedUsd: usd }));
+  }
+  const result = calibrateFromSamples(rows, pct, false);
+  assert.equal(result.totalPointUsd, 50);
+  assert.equal(result.confidence, "low");
+});
+
+test("a comparable cheap interval is excluded from the point estimate", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 10, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 3, usedPercent: 20, cumulativeObservedUsd: 20 }),
+    sample({ timestampMs: 4, usedPercent: 30, cumulativeObservedUsd: 23.5 }),
+    sample({ timestampMs: 5, usedPercent: 40, cumulativeObservedUsd: 33.5 }),
+    sample({ timestampMs: 6, usedPercent: 50, cumulativeObservedUsd: 43.5 }),
+  ];
+  const result = calibrateFromSamples(rows, 50, false);
+  assert.equal(result.totalPointUsd, 100);
+  assert.notEqual(result.confidence, "high");
+});
+
+test("a cheap interval with a changed model mix is not labeled external", () => {
+  const cheapMix = { "claude-haiku-4-5:standard": 1 };
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 10, cumulativeObservedUsd: 10 }),
+    sample({ timestampMs: 3, usedPercent: 20, cumulativeObservedUsd: 13.5, modelMix: cheapMix }),
+    sample({ timestampMs: 4, usedPercent: 30, cumulativeObservedUsd: 23.5, modelMix: cheapMix }),
+  ];
+  const result = calibrateFromSamples(rows, 30, false);
+  assert.equal(result.externalUsageDetected, false);
+});
+
+test("a cheap interval with unknown model mix is retained but capped low", () => {
+  const cumulative = [0, 10, 20, 23.5, 33.5, 43.5, 53.5];
+  const rows = [0, 10, 20, 30, 40, 50, 60].map((usedPercent, index) =>
+    sample({
+      timestampMs: index + 1,
+      usedPercent,
+      cumulativeObservedUsd: cumulative[index]!,
+      modelMix: {},
+    }),
+  );
+  const result = calibrateFromSamples(rows, 60, false);
+  assert.equal(result.externalUsageDetected, false);
+  assert.equal(result.confidence, "low");
+});
+
+test("low-confidence quantization band is at least one over cumulative percent", () => {
+  const rows = [
+    sample({ timestampMs: 1, usedPercent: 0, cumulativeObservedUsd: 0 }),
+    sample({ timestampMs: 2, usedPercent: 2, cumulativeObservedUsd: 1 }),
+  ];
+  const result = calibrateFromSamples(rows, 2, false);
+  assert.equal(result.confidence, "low");
+  assert.equal(result.totalPointUsd, 50);
+  assert.equal(result.totalLowUsd, 25);
+  assert.equal(result.totalHighUsd, 75);
+});
+
+test("a stable previous window supplies only a low-confidence prior", () => {
+  const previousId = "codex:five_hour:_:1000000000000:1000018000000";
+  const previous = [0, 5, 10, 15].map((usedPercent, index) => sample({
+    windowId: previousId,
+    timestampMs: index + 1,
+    usedPercent,
+    cumulativeObservedUsd: usedPercent * 0.5,
+    modelMix: { "gpt-5.6-sol:standard": 1 },
+    planLabel: "ChatGPT Plus",
+  }));
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const official = slice({
+    agent: "codex",
+    planLabel: "ChatGPT Plus",
+    fetchedAt: now,
+    windowPct: 1,
+    windowResetsAt: now + WINDOW_MS,
+    windowDurationMs: WINDOW_MS,
+  });
+  const current = ev({
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    modelRaw: "gpt-5.6-sol",
+    tokensIn: 1_000_000,
+    ts: now,
+  });
+  const result = quotaValueFor([current], "codex", official, "five_hour", now, previous);
+  assert.equal(result.calibrationSource, "historical-prior");
+  assert.equal(result.confidence, "low");
+  assert.equal(result.totalPointUsd, 50);
+});
+
+test("historical prior selects the three newest windows regardless of input order", () => {
+  // Window ID anchors must differ by more than WINDOW_ID_TOLERANCE_MS (2000)
+  // so sameOfficialWindowId treats them as distinct windows.
+  const rows = (windowId: string, at: number, usdPerPct: number) =>
+    [0, 5, 10, 15].map((usedPercent, index) => sample({
+      windowId,
+      timestampMs: at + index,
+      usedPercent,
+      cumulativeObservedUsd: usedPercent * usdPerPct,
+      modelMix: { "gpt-5.6-sol:standard": 1 },
+      planLabel: "ChatGPT Plus",
+    }));
+  const samples = [
+    rows("codex:five_hour:_:50000:60000", 50000, 0.5),
+    rows("codex:five_hour:_:40000:49900", 40000, 0.5),
+    rows("codex:five_hour:_:30000:39900", 30000, 0.5),
+    rows("codex:five_hour:_:10000:19900", 10000, 0.1),
+    rows("codex:five_hour:_:20000:29900", 20000, 0.1),
+  ].flat();
+  const result = historicalWindowPrior(
+    samples,
+    "codex:five_hour:_:70000:80000",
+    70000,
+    "codex",
+    "five_hour",
+    "ChatGPT Plus",
+    1,
+    { "gpt-5.6-sol:standard": 1 },
+  );
+  assert.equal(result!.totalPointUsd, 50);
+});
+
+test("historical prior rejects open windows and incompatible model mix", () => {
+  // Window ID anchors must differ by more than WINDOW_ID_TOLERANCE_MS (2000)
+  // so sameOfficialWindowId treats them as distinct windows.
+  const rows = (windowId: string, mix: Record<string, number>) =>
+    [0, 5, 10, 15].map((usedPercent, index) => sample({
+      windowId,
+      timestampMs: 10000 + index,
+      usedPercent,
+      cumulativeObservedUsd: usedPercent * 0.5,
+      modelMix: mix,
+      planLabel: "Claude Max",
+    }));
+  const compatible = { "claude-sonnet-5:standard": 1 };
+  // Open window: resetsAt (90000) > currentWindowStartMs (70000) → rejected
+  assert.equal(historicalWindowPrior(
+    rows("claude:five_hour:_:10000:90000", compatible),
+    "claude:five_hour:_:70000:100000",
+    70000,
+    "claude",
+    "five_hour",
+    "Claude Max",
+    1,
+    compatible,
+  ), null);
+  // Incompatible model mix → rejected
+  assert.equal(historicalWindowPrior(
+    rows("claude:five_hour:_:10000:60000", { "claude-haiku-4-5:standard": 1 }),
+    "claude:five_hour:_:70000:100000",
+    70000,
+    "claude",
+    "five_hour",
+    "Claude Max",
+    1,
+    compatible,
+  ), null);
+});
+
+test("external usage in the current window blocks historical priors", () => {
+  const now = Date.parse("2026-08-21T10:00:00Z");
+  const previous = [0, 5, 10, 15].map((usedPercent, index) => sample({
+    windowId: "codex:five_hour:_:1000000000000:1000018000000",
+    timestampMs: index + 1,
+    usedPercent,
+    cumulativeObservedUsd: usedPercent * 0.5,
+    modelMix: { "gpt-5.6-sol:standard": 1 },
+    planLabel: "ChatGPT Plus",
+  }));
+  const currentId = officialWindowId("codex", "five_hour", null, now, now + WINDOW_MS);
+  const currentWindow = [
+    sample({
+      windowId: currentId,
+      timestampMs: now + 1_000,
+      usedPercent: 0,
+      cumulativeObservedUsd: 0,
+      modelMix: { "gpt-5.6-sol:standard": 1 },
+      planLabel: "ChatGPT Plus",
+    }),
+    sample({
+      windowId: currentId,
+      timestampMs: now + 2_000,
+      usedPercent: 4,
+      cumulativeObservedUsd: 0,
+      modelMix: {},
+      planLabel: "ChatGPT Plus",
+    }),
+  ];
+  const official = slice({
+    agent: "codex",
+    planLabel: "ChatGPT Plus",
+    fetchedAt: now,
+    windowPct: 4,
+    windowResetsAt: now + WINDOW_MS,
+    windowDurationMs: WINDOW_MS,
+  });
+  const local = ev({
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    modelRaw: "gpt-5.6-sol",
+    tokensIn: 1_000_000,
+    ts: now,
+  });
+  const result = quotaValueFor(
+    [local],
+    "codex",
+    official,
+    "five_hour",
+    now,
+    [...previous, ...currentWindow],
+  );
+  assert.equal(result.externalUsageDetected, true);
+  assert.equal(result.calibrationSource, "none");
+  assert.equal(result.totalPointUsd, null);
+});
+
+test("unknown image prices reduce coverage without discarding text cost", () => {
+  const event = ev({
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: 1,
+    tokensIn: 1_000,
+    imageInputTokens: 1_000,
+  });
+  const observed = observeWindow([event]);
+  assert.equal(observed.pricedTokenCoverage, 0.5);
+});
+
+/**
+ * Evidence-URL: https://help.openai.com/en/articles/20001106-codex-rate-card；https://github.com/ryoppippi/ccusage（fast-multiplier-overrides.json）
+ * Evidence-Checked: 2026-08-21
+ * Evidence-Fields: Codex/Claude fast 倍率
+ * Sanitized-Fixture: {"codex":{"gpt-5.6":2.5,"gpt-5.5":2.5,"gpt-5.4":2},"claude":{"opus-4-6":6,"opus-4-7":6,"opus-4-8":2}}
+ */
+test("fast model mix separates fast and standard usage of one model", () => {
+  const observed = observeWindow([
+    ev({ id: "std", ts: 1, tokensIn: 1_000_000, speed: "standard" }),
+    ev({ id: "fast", ts: 2, tokensIn: 1_000_000, speed: "fast" }),
+    ev({ id: "missing", ts: 3, tokensIn: 1_000_000 }),
+  ]);
+  assert.ok(Math.abs((observed.modelMix["gpt-5.4:standard"] ?? 0) - 2 / 3) < 1e-9);
+  assert.ok(Math.abs((observed.modelMix["gpt-5.4:fast"] ?? 0) - 1 / 3) < 1e-9);
+});
+
+// ── Step 4.3: Independent pool sampling & exact quota ──
+
+const POOL_WEEK_MS = 7 * 24 * 60 * 60_000;
+
+function modelWeekPoolFixture(now: number): OfficialQuotaPool {
+  return {
+    id: "seven_day_sonnet",
+    kind: "model-week",
+    usagePercent: 12.5,
+    startsAt: now,
+    resetsAt: now + POOL_WEEK_MS,
+    durationMs: POOL_WEEK_MS,
+    models: ["sonnet"],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt: now,
+    stale: false,
+  };
+}
+
+interface InvalidPoolMetadataCase {
+  name: string;
+  callNow: number;
+  patch: Partial<OfficialQuotaPool>;
+}
+
+function invalidPoolMetadataCases(now: number): InvalidPoolMetadataCase[] {
+  const reset = now + POOL_WEEK_MS;
+  return [
+    { name: "now is NaN", callNow: Number.NaN, patch: {} },
+    { name: "now is infinite", callNow: Number.POSITIVE_INFINITY, patch: {} },
+    { name: "now is negative", callNow: -1, patch: {} },
+    { name: "fetchedAt is NaN", callNow: now, patch: { fetchedAt: Number.NaN } },
+    { name: "fetchedAt is infinite", callNow: now, patch: { fetchedAt: Number.POSITIVE_INFINITY } },
+    { name: "fetchedAt is negative", callNow: now, patch: { fetchedAt: -1 } },
+    { name: "fetchedAt is in the future", callNow: now, patch: { fetchedAt: now + 1 } },
+    { name: "startsAt is NaN", callNow: now, patch: { startsAt: Number.NaN } },
+    { name: "startsAt is infinite", callNow: now, patch: { startsAt: Number.POSITIVE_INFINITY } },
+    { name: "startsAt is negative", callNow: now, patch: { startsAt: -1 } },
+    { name: "resetsAt is NaN", callNow: now, patch: { resetsAt: Number.NaN } },
+    { name: "resetsAt is infinite", callNow: now, patch: { resetsAt: Number.POSITIVE_INFINITY } },
+    { name: "resetsAt is negative", callNow: now, patch: { resetsAt: -1 } },
+    { name: "durationMs is NaN", callNow: now, patch: { durationMs: Number.NaN } },
+    { name: "durationMs is infinite", callNow: now, patch: { durationMs: Number.POSITIVE_INFINITY } },
+    { name: "durationMs is negative", callNow: now, patch: { durationMs: -1 } },
+    {
+      name: "startsAt exceeds resetsAt",
+      callNow: now,
+      patch: { startsAt: reset + 1, resetsAt: reset },
+    },
+    { name: "usagePercent is NaN", callNow: now, patch: { usagePercent: Number.NaN } },
+    { name: "usagePercent is infinite", callNow: now, patch: { usagePercent: Number.POSITIVE_INFINITY } },
+    { name: "usagePercent is negative", callNow: now, patch: { usagePercent: -1 } },
+    { name: "usagePercent exceeds 100", callNow: now, patch: { usagePercent: 100.01 } },
+    { name: "exactUsedUsd is NaN", callNow: now, patch: { exactUsedUsd: Number.NaN } },
+    { name: "exactUsedUsd is infinite", callNow: now, patch: { exactUsedUsd: Number.POSITIVE_INFINITY } },
+    { name: "exactUsedUsd is negative", callNow: now, patch: { exactUsedUsd: -1 } },
+    { name: "exactLimitUsd is NaN", callNow: now, patch: { exactLimitUsd: Number.NaN } },
+    { name: "exactLimitUsd is infinite", callNow: now, patch: { exactLimitUsd: Number.POSITIVE_INFINITY } },
+    { name: "exactLimitUsd is negative", callNow: now, patch: { exactLimitUsd: -1 } },
+  ];
+}
+
+test("samplesFromOfficial rejects every invalid pool metadata branch", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const basePool = modelWeekPoolFixture(now);
+  for (const invalid of invalidPoolMetadataCases(now)) {
+    await t.test(invalid.name, () => {
+      const pool: OfficialQuotaPool = { ...basePool, ...invalid.patch };
+    const claude = slice({
+      agent: "claude",
+      windowPct: null,
+      weekPct: null,
+      fetchedAt: now,
+      quotaPools: [pool],
+    });
+    assert.deepEqual(samplesFromOfficial(
+      [],
+      { claude, grok: null, codex: null },
+        invalid.callNow,
+      [],
+      ), []);
+    });
+  }
+});
+
+test("samplesFromOfficial samples a fresh model pool with scoped events", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const pool = modelWeekPoolFixture(now);
+  const sonnetEvent = ev({
+    id: "sonnet-pool-sample-event",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const opusEvent = ev({
+    id: "opus-pool-sample-event",
+    agent: "claude",
+    model: "opus",
+    modelRaw: "claude-opus-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const claude = slice({
+    agent: "claude",
+    windowPct: null,
+    weekPct: null,
+    fetchedAt: now,
+    quotaPools: [pool],
+  });
+  const samples = samplesFromOfficial(
+    [sonnetEvent, opusEvent],
+    { claude, grok: null, codex: null },
+    now,
+    [],
+  );
+  assert.equal(samples.length, 1);
+  assert.equal(samples[0].product, pool.id);
+  assert.equal(samples[0].usedPercent, 12.5);
+  assert.equal(samples[0].timestampMs, now);
+  assert.equal(
+    samples[0].cumulativeObservedUsd,
+    observeWindow([sonnetEvent]).observedUsd,
+  );
+  assert.deepEqual(
+    samples[0].modelMix,
+    observeWindow([sonnetEvent]).modelMix,
+  );
+});
+
+test("quotaValueForPool rejects every invalid pool metadata branch", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const basePool = modelWeekPoolFixture(now);
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  for (const invalid of invalidPoolMetadataCases(now)) {
+    await t.test(invalid.name, () => {
+      const pool: OfficialQuotaPool = { ...basePool, ...invalid.patch };
+      assert.equal(quotaValueForPool([], claude, pool, invalid.callNow, []), null);
+      assert.equal(quotaValueForPool([], claude, {
+        ...pool,
+        stale: true,
+      }, invalid.callNow, []), null);
+    });
+  }
+});
+
+test("fresh model pool scopes L1 observation to its declared models", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const pool = modelWeekPoolFixture(now);
+  const sonnetEvent = ev({
+    id: "sonnet-pool-event",
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const opusEvent = ev({
+    id: "opus-pool-event",
+    agent: "claude",
+    model: "opus",
+    modelRaw: "claude-opus-5",
+    ts: now,
+    tokensIn: 1_000_000,
+  });
+  const fresh = quotaValueForPool(
+    [sonnetEvent, opusEvent],
+    claude,
+    pool,
+    now,
+    [],
+  );
+  assert.equal(fresh?.kind, "estimated");
+  assert.equal(
+    fresh?.kind === "estimated" ? fresh.value.l1Usd : null,
+    observeWindow([sonnetEvent]).observedUsd,
+  );
+});
+
+test("valid stale model pool returns a finite snapshot and never emits a sample", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const pool: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    stale: true,
+  };
+  const claude = slice({
+    agent: "claude",
+    windowPct: null,
+    weekPct: null,
+    fetchedAt: now,
+    quotaPools: [pool],
+  });
+  assert.deepEqual(samplesFromOfficial(
+    [],
+    { claude, grok: null, codex: null },
+    now,
+    [],
+  ), []);
+  assert.deepEqual(quotaValueForPool([], claude, pool, now, []), {
+    kind: "stale",
+    value: { usedPercent: 12.5 },
+  });
+});
+
+test("valid extra usage accepts null window metadata and returns exact dollars", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const validExtra: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: null,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    models: [],
+    fetchedAt: now,
+  };
+  const expectedExact: ExactQuotaValue = {
+    usedUsd: 42.5,
+    limitUsd: 100,
+    remainingUsd: 57.5,
+    usedPercent: 42.5,
+    source: "official-extra-usage",
+  };
+  assert.deepEqual(exactQuotaValue(validExtra, now), expectedExact);
+  assert.deepEqual(quotaValueForPool([], claude, validExtra, now, []), {
+    kind: "exact",
+    value: expectedExact,
+  });
+});
+
+test("exact quota rejects every invalid metadata branch and a zero limit", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const baseExtra: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: null,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    fetchedAt: now,
+    stale: false,
+  };
+  const cases: InvalidPoolMetadataCase[] = [
+    ...invalidPoolMetadataCases(now),
+    { name: "exactLimitUsd is zero", callNow: now, patch: { exactLimitUsd: 0 } },
+  ];
+  for (const invalid of cases) {
+    await t.test(invalid.name, () => {
+      const pool: OfficialQuotaPool = { ...baseExtra, ...invalid.patch };
+      assert.equal(exactQuotaValue(pool, invalid.callNow), null);
+      assert.equal(quotaValueForPool([], claude, pool, invalid.callNow, []), null);
+    });
+  }
+});
+
+test("exact quota rejects non-extra, stale, and missing amount branches", async (t) => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const baseExtra: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: null,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    fetchedAt: now,
+    stale: false,
+  };
+  const cases: Array<{ name: string; pool: OfficialQuotaPool }> = [
+    {
+      name: "pool kind is not extra usage",
+      pool: { ...baseExtra, kind: "model-week" },
+    },
+    {
+      name: "extra usage is stale",
+      pool: { ...baseExtra, stale: true },
+    },
+    {
+      name: "exact used amount is missing",
+      pool: { ...baseExtra, exactUsedUsd: null },
+    },
+    {
+      name: "exact limit amount is missing",
+      pool: { ...baseExtra, exactLimitUsd: null },
+    },
+  ];
+  for (const invalid of cases) {
+    await t.test(invalid.name, () => {
+      assert.equal(exactQuotaValue(invalid.pool, now), null);
+    });
+  }
+});
+
+// ── Step 5.5: calibration retention and history truncated fail-closed ──
+
+import { WEEK_MS as WEEK_MS_CONST, WINDOW_MS as WINDOW_MS_CONST } from "./types.ts";
+import { CALIBRATION_RETENTION_MS } from "./types.ts";
+
+test("history truncated: Grok monthly window start exceeds 8-day retention fails closed", () => {
+  // A Grok legacy monthly window (bounds.start = now - 30d) means the window
+  // start is before the 8-day calibration retention period.
+  // quotaValueFor must return historyComplete===false, confidence=none,
+  // calibrationSource==="none".
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60_000;
+  const grokMonthlySlice = slice({
+    agent: "grok",
+    weekPct: 40,
+    weekStartedAt: thirtyDaysAgo,
+    weekResetsAt: now + 60_000,
+    weekDurationMs: 30 * 24 * 60 * 60_000,
+    windowPct: null,
+    windowResetsAt: null,
+    fetchedAt: now,
+  });
+  // Build events spanning the month (all within the window)
+  const events = Array.from({ length: 50 }, (_, i) =>
+    ev({
+      id: `grok-month-${i}`,
+      agent: "grok",
+      model: "grok-4.6",
+      modelRaw: "grok-4.6",
+      ts: thirtyDaysAgo + i * 12 * 60 * 60_000,
+      tokensIn: 100_000,
+      tokensOut: 10_000,
+    }),
+  );
+  // Build valid calibration samples for this window
+  const windowId = officialWindowId("grok", "weekly", null, thirtyDaysAgo, now + 60_000);
+  const samples = Array.from({ length: 10 }, (_, i) =>
+    sample({
+      agent: "grok",
+      windowId,
+      timestampMs: thirtyDaysAgo + (i + 1) * 2 * 24 * 60 * 60_000,
+      usedPercent: (i + 1) * 4,
+      cumulativeObservedUsd: (i + 1) * 4 * 0.5,
+      modelMix: { "grok-4.6:standard": 1 },
+    }),
+  );
+
+  const value = quotaValueFor(events, "grok", grokMonthlySlice, "weekly", now, samples);
+  // Must fail closed: historyComplete=false, confidence=none, calibrationSource="none"
+  assert.equal(value.historyComplete, false);
+  assert.equal(value.confidence, "none");
+  assert.equal(value.calibrationSource, "none");
+  assert.equal(value.totalPointUsd, null);
+});
+
+test("history truncated: quotaValueForPool with start older than 8 days fails closed", () => {
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const tenDaysAgo = now - 10 * 24 * 60 * 60_000;
+  const claude = slice({ agent: "claude", fetchedAt: now });
+  const pool: OfficialQuotaPool = {
+    ...modelWeekPoolFixture(now),
+    startsAt: tenDaysAgo,
+    resetsAt: now + 60_000,
+    durationMs: 10 * 24 * 60 * 60_000 + 60_000,
+    usagePercent: 30,
+  };
+  const events = Array.from({ length: 20 }, (_, i) =>
+    ev({
+      id: `pool-old-${i}`,
+      agent: "claude",
+      model: "sonnet",
+      modelRaw: "claude-sonnet-5",
+      ts: tenDaysAgo + i * 12 * 60 * 60_000,
+      tokensIn: 100_000,
+      tokensOut: 10_000,
+    }),
+  );
+  const windowId = officialWindowId("claude", "product", pool.id, tenDaysAgo, now + 60_000);
+  const samples = Array.from({ length: 6 }, (_, i) =>
+    sample({
+      agent: "claude",
+      product: pool.id,
+      windowId,
+      timestampMs: tenDaysAgo + (i + 1) * 24 * 60 * 60_000,
+      usedPercent: (i + 1) * 5,
+      cumulativeObservedUsd: (i + 1) * 5 * 0.3,
+      modelMix: { "sonnet:standard": 1 },
+    }),
+  );
+  const result = quotaValueForPool(events, claude, pool, now, samples);
+  assert.ok(result != null && result.kind === "estimated");
+  assert.equal(result.value.historyComplete, false);
+  assert.equal(result.value.confidence, "none");
+  assert.equal(result.value.calibrationSource, "none");
 });

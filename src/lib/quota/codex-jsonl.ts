@@ -1,26 +1,25 @@
-import type { CodexModelId, UsageEvent } from "./types.ts";
+import type { CodexModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
 import { parseCodexRateLimits, type OfficialSlice } from "./official.ts";
-import { exclusiveCachedInput } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
 
 export interface CodexSessionMeta {
   sessionId: string;
   cwd: string;
   title: string;
-  model: string;
-}
-
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
+  model?: string;
 }
 
 export function asCodexModel(raw: string): CodexModelId {
-  const s = (raw || "").toLowerCase();
-  if (s.includes("luna") || s.includes("mini") || s.includes("spark")) return "gpt-5.6-luna";
-  if (s.includes("terra")) return "gpt-5.6-terra";
-  if (s.includes("sol") || s.includes("5.6")) return "gpt-5.6-sol";
-  if (s.includes("5.4")) return "gpt-5.4";
+  const value = (raw || "").toLowerCase();
+  if (value.includes("daybreak-red")) return "daybreak-red";
+  if (value.includes("daybreak-blue")) return "daybreak-blue";
+  if (value.includes("5.4-mini")) return "gpt-5.4-mini";
+  if (value.includes("5.5")) return "gpt-5.5";
+  if (value.includes("luna") || value.includes("mini") || value.includes("spark")) return "gpt-5.6-luna";
+  if (value.includes("terra")) return "gpt-5.6-terra";
+  if (value.includes("sol") || value.includes("5.6")) return "gpt-5.6-sol";
+  if (value.includes("5.4") || value.includes("o3")) return "gpt-5.4";
   return "gpt-5.6-sol";
 }
 
@@ -57,15 +56,33 @@ function usageFromLast(last: Record<string, unknown>): {
   cacheRead: number;
   cacheWrite: number;
   reasoningMin: number;
+  imageInputTokens: number;
+  imageOutputTokens: number;
+  anomalies: UsageAnomaly[];
 } {
-  const reasoning = num(last.reasoning_output_tokens);
-  const split = exclusiveCachedInput(num(last.input_tokens), num(last.cached_input_tokens));
+  const split = exclusiveCachedInput(last.input_tokens, last.cached_input_tokens);
+  const output = normalizeToken(last.output_tokens, "output_tokens");
+  const cacheWrite = normalizeToken(last.cache_write_input_tokens, "cache_write_input_tokens");
+  const reasoning = normalizeToken(last.reasoning_output_tokens, "reasoning_output_tokens");
+  const images = normalizeImageTokens(
+    last.image_input_tokens ?? last.imageInputTokens,
+    last.image_output_tokens ?? last.imageOutputTokens,
+  );
   return {
     tokensIn: split.uncachedInputTokens,
-    tokensOut: num(last.output_tokens),
+    tokensOut: output.value,
     cacheRead: split.cacheReadTokens,
-    cacheWrite: num(last.cache_write_input_tokens),
-    reasoningMin: reasoning > 0 ? reasoning / 800 : 0,
+    cacheWrite: cacheWrite.value,
+    reasoningMin: reasoning.value > 0 ? reasoning.value / 800 : 0,
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
+    anomalies: [
+      ...split.anomalies,
+      ...output.anomalies,
+      ...cacheWrite.anomalies,
+      ...reasoning.anomalies,
+      ...images.anomalies,
+    ],
   };
 }
 
@@ -100,19 +117,34 @@ export function parseCodexJsonlLine(
     });
   }
   if (!last) return { event: null, official };
+  const speed = usageSpeed(last.speed ?? info.speed ?? payload.speed);
   const counts = usageFromLast(last);
-  if (counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0) {
+  if (
+    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite
+      + counts.imageInputTokens + counts.imageOutputTokens <= 0
+    && counts.anomalies.length === 0
+  ) {
     return { event: null, official };
   }
+
+  const modelRaw = optionalModel(meta.model);
   const event: UsageEvent = {
     id: `${sessionId}:${ts}`,
     agent: "codex",
-    model: asCodexModel(meta.model),
-    modelRaw: meta.model,
+    model: asCodexModel(modelRaw ?? ""),
+    modelRaw,
     ts,
     sessionId,
     task: clipTask(meta.title || meta.cwd || sessionId),
-    ...counts,
+    tokensIn: counts.tokensIn,
+    tokensOut: counts.tokensOut,
+    cacheRead: counts.cacheRead,
+    cacheWrite: counts.cacheWrite,
+    imageInputTokens: counts.imageInputTokens,
+    imageOutputTokens: counts.imageOutputTokens,
+    reasoningMin: counts.reasoningMin,
+    speed,
+    anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };
   return { event, official };
 }

@@ -1,22 +1,49 @@
-import type { GrokModelId, UsageEvent } from "./types.ts";
+import type { GrokModelId, ProviderReportedCost, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
-import { exclusiveCachedInput } from "./tokens.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
+
+export const GROK_TICK_DIVISORS: Readonly<Record<string, number>> = {
+  "grok-cli-1.0.0": 10_000_000_000,
+};
+
+export function grokReportedCost(
+  totalRawValue: number,
+  byModelRawValue: Record<string, number>,
+  schemaVersion: string | null,
+): ProviderReportedCost {
+  const divisor = schemaVersion ? GROK_TICK_DIVISORS[schemaVersion] ?? null : null;
+  const validTotal = Number.isFinite(totalRawValue) && totalRawValue >= 0;
+  const validModels = Object.values(byModelRawValue).every(
+    (value) => Number.isFinite(value) && value >= 0,
+  );
+  const modelTotal = Object.values(byModelRawValue).reduce((sum, value) => sum + value, 0);
+  const reconciles = !Object.keys(byModelRawValue).length || Math.abs(modelTotal - totalRawValue) <= 1;
+  const verified = divisor != null && validTotal && validModels && reconciles;
+  return {
+    totalRawValue,
+    byModelRawValue,
+    rawUnit: "usd-ticks",
+    usdValue: verified ? totalRawValue / divisor : null,
+    divisor: verified ? divisor : null,
+    sourceField: "usage.costUsdTicks",
+    schemaVersion,
+    semantics: verified ? "api-equivalent" : "unverified",
+  };
+}
 
 export interface GrokSessionMeta {
   sessionId: string;
   cwd: string;
   title: string;
-  model: string;
-}
-
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
+  model?: string;
 }
 
 export function asGrokModel(raw: string): GrokModelId {
-  const s = (raw || "").toLowerCase();
-  if (s.includes("4.5")) return "grok-4.5";
+  const value = (raw || "").toLowerCase();
+  if (value.includes("4.20")) return "grok-4.20";
+  if (value.includes("4.6")) return "grok-4.6";
+  if (value.includes("4.5")) return "grok-4.5";
+  if (value.includes("4.3")) return "grok-4.3";
   return "grok-4.6";
 }
 
@@ -38,19 +65,38 @@ function usageFrom(u: Record<string, unknown>): {
   tokensOut: number;
   cacheRead: number;
   cacheWrite: number;
+  imageInputTokens: number;
+  imageOutputTokens: number;
+  anomalies: UsageAnomaly[];
 } {
-  const input = num(u.inputTokens ?? u.input_tokens ?? u.tokensIn);
-  const cached = num(u.cachedReadTokens ?? u.cache_read_input_tokens ?? u.cacheRead);
-  const split = exclusiveCachedInput(input, cached);
+  const split = exclusiveCachedInput(
+    u.inputTokens ?? u.input_tokens ?? u.tokensIn,
+    u.cachedReadTokens ?? u.cache_read_input_tokens ?? u.cacheRead,
+  );
+  const output = normalizeToken(
+    u.outputTokens ?? u.output_tokens ?? u.tokensOut,
+    "output_tokens",
+  );
+  const write = normalizeToken(
+    u.cacheCreationTokens ?? u.cache_creation_input_tokens ?? u.cacheWrite,
+    "cache_creation_input_tokens",
+  );
+  const images = normalizeImageTokens(
+    u.image_input_tokens ?? u.imageInputTokens,
+    u.image_output_tokens ?? u.imageOutputTokens,
+  );
   return {
     tokensIn: split.uncachedInputTokens,
-    tokensOut: num(u.outputTokens ?? u.output_tokens ?? u.tokensOut),
+    tokensOut: output.value,
     cacheRead: split.cacheReadTokens,
-    cacheWrite: num(u.cacheCreationTokens ?? u.cache_creation_input_tokens ?? u.cacheWrite),
+    cacheWrite: write.value,
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
+    anomalies: [...split.anomalies, ...output.anomalies, ...write.anomalies, ...images.anomalies],
   };
 }
 
-function modelFromUsage(usage: Record<string, unknown>, fallback: string): string {
+function modelFromUsage(usage: Record<string, unknown>, fallback: string | undefined): string | undefined {
   const models = usage.modelUsage;
   if (models && typeof models === "object") {
     const keys = Object.keys(models as Record<string, unknown>);
@@ -77,8 +123,13 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
   const usageRaw = update.usage;
   if (!usageRaw || typeof usageRaw !== "object") return null;
   const usage = usageRaw as Record<string, unknown>;
+  const speed = usageSpeed(usage.speed);
   const counts = usageFrom(usage);
-  if (counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite <= 0) return null;
+  if (
+    counts.tokensIn + counts.tokensOut + counts.cacheRead + counts.cacheWrite
+      + counts.imageInputTokens + counts.imageOutputTokens <= 0
+    && counts.anomalies.length === 0
+  ) return null;
 
   const metaBlock = (params._meta && typeof params._meta === "object" ? params._meta : obj._meta) as
     | Record<string, unknown>
@@ -87,8 +138,9 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
     parseGrokTs(metaBlock?.agentTimestampMs) ?? parseGrokTs(obj.timestamp) ?? parseGrokTs(update.timestamp) ?? Date.now();
   const sessionId = String(params.sessionId ?? meta.sessionId);
   const promptId = String(update.prompt_id ?? metaBlock?.eventId ?? `${sessionId}:${ts}`);
-  const modelRaw = modelFromUsage(usage, meta.model);
-  const ticks = typeof usage.costUsdTicks === "number" ? usage.costUsdTicks : null;
+  const modelRaw = modelFromUsage(usage, optionalModel(meta.model));
+  const ticksRaw = usage.costUsdTicks;
+  const ticks = typeof ticksRaw === "number" ? ticksRaw : null;
   const byModel: Record<string, number> = {};
   const models = usage.modelUsage;
   if (models && typeof models === "object") {
@@ -98,18 +150,25 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
       }
     }
   }
+  const schemaVersionRaw = usage.schemaVersion ?? update.schemaVersion ?? obj.schemaVersion;
+  const schemaVersion =
+    typeof schemaVersionRaw === "string" && schemaVersionRaw ? schemaVersionRaw : null;
+  const reportedCost = ticks == null
+    ? undefined
+    : grokReportedCost(ticks, byModel, schemaVersion);
   return {
     id: promptId,
     agent: "grok",
-    model: asGrokModel(modelRaw),
+    model: asGrokModel(modelRaw ?? ""),
     modelRaw,
     ts,
     sessionId,
     task: clipTask(meta.title || meta.cwd || sessionId),
     ...counts,
     reasoningMin: 0,
-    reportedCostTicks: ticks,
-    reportedCostByModel: Object.keys(byModel).length ? byModel : undefined,
+    reportedCost,
+    speed,
+    anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };
 }
 

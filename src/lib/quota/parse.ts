@@ -1,5 +1,5 @@
-import { exclusiveCachedInput } from "./tokens.ts";
-import type { AgentId, ModelId, UsageEvent } from "./types.ts";
+import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
+import type { AgentId, ModelId, UsageAnomaly, UsageEvent } from "./types.ts";
 
 function asModel(raw: string, agent: AgentId): ModelId {
   const s = raw.toLowerCase();
@@ -10,9 +10,16 @@ function asModel(raw: string, agent: AgentId): ModelId {
     return "sonnet";
   }
   if (agent === "grok") {
+    if (s.includes("4.20")) return "grok-4.20";
+    if (s.includes("4.6")) return "grok-4.6";
     if (s.includes("4.5")) return "grok-4.5";
+    if (s.includes("4.3")) return "grok-4.3";
     return "grok-4.6";
   }
+  if (s.includes("daybreak-red")) return "daybreak-red";
+  if (s.includes("daybreak-blue")) return "daybreak-blue";
+  if (s.includes("5.4-mini")) return "gpt-5.4-mini";
+  if (s.includes("5.5")) return "gpt-5.5";
   if (s.includes("luna") || s.includes("mini") || s.includes("spark")) return "gpt-5.6-luna";
   if (s.includes("terra")) return "gpt-5.6-terra";
   if (s.includes("sol") || s.includes("5.6")) return "gpt-5.6-sol";
@@ -39,37 +46,63 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
       ? "codex"
       : "claude";
 
-  const modelRaw = String(
-    o.model ?? msg.model ?? (agent === "claude" ? "sonnet" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol"),
-  );
+  const modelRaw = optionalModel(o.model ?? msg.model);
   const tsRaw = o.timestamp ?? o.ts ?? o.created_at ?? Date.now();
   const tsNum = typeof tsRaw === "number" ? tsRaw : Date.parse(String(tsRaw));
   const ts = Number.isFinite(tsNum) ? (tsNum > 0 && tsNum < 1e12 ? tsNum * 1000 : tsNum) : NaN;
   if (!Number.isFinite(ts)) return null;
 
-  let tokensIn = num(usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens ?? usage.tokensIn ?? o.tokensIn);
-  const tokensOut = num(
+  const inputRaw = usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens ?? usage.tokensIn ?? o.tokensIn;
+  const cachedRaw = usage.cache_read_input_tokens ?? usage.cache_read ?? usage.cachedReadTokens
+    ?? usage.cacheRead ?? o.cacheRead;
+  const output = normalizeToken(
     usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens ?? usage.tokensOut ?? o.tokensOut,
+    "output_tokens",
   );
-  let cacheRead = num(
-    usage.cache_read_input_tokens ?? usage.cache_read ?? usage.cachedReadTokens ?? usage.cacheRead ?? o.cacheRead,
+  const write = normalizeToken(
+    usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheCreationTokens
+      ?? usage.cacheWrite ?? o.cacheWrite,
+    "cache_creation_input_tokens",
   );
-  if (agent === "codex" || agent === "grok") {
-    const split = exclusiveCachedInput(tokensIn, cacheRead);
-    tokensIn = split.uncachedInputTokens;
-    cacheRead = split.cacheReadTokens;
-  }
-  const cacheWrite = num(
-    usage.cache_creation_input_tokens ?? usage.cache_write ?? usage.cacheCreationTokens ?? usage.cacheWrite ?? o.cacheWrite,
+  const input = normalizeToken(inputRaw, "input_tokens");
+  const cached = normalizeToken(cachedRaw, "cached_input_tokens");
+  const split = agent === "codex" || agent === "grok"
+    ? exclusiveCachedInput(inputRaw, cachedRaw)
+    : {
+        uncachedInputTokens: input.value,
+        cacheReadTokens: cached.value,
+        cachedExceedsInput: false,
+        anomalies: [...input.anomalies, ...cached.anomalies],
+      };
+  const images = normalizeImageTokens(
+    usage.image_input_tokens ?? usage.imageInputTokens
+      ?? o.image_input_tokens ?? o.imageInputTokens,
+    usage.image_output_tokens ?? usage.imageOutputTokens
+      ?? o.image_output_tokens ?? o.imageOutputTokens,
   );
+  const anomalies: UsageAnomaly[] = [
+    ...split.anomalies,
+    ...output.anomalies,
+    ...write.anomalies,
+    ...images.anomalies,
+  ];
+  const tokensIn = split.uncachedInputTokens;
+  const tokensOut = output.value;
+  const cacheRead = split.cacheReadTokens;
+  const cacheWrite = write.value;
   const reasoningMin = num(usage.reasoning_minutes ?? o.reasoningMin ?? o.reasoning_minutes);
+  const speed = usageSpeed(usage.speed ?? o.speed);
 
-  if (tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin <= 0) return null;
+  if (
+    tokensIn + tokensOut + cacheRead + cacheWrite + reasoningMin
+      + images.imageInputTokens + images.imageOutputTokens <= 0
+    && anomalies.length === 0
+  ) return null;
 
   return {
     id: String(o.id ?? `imp_${ts}_${index}`),
     agent,
-    model: asModel(modelRaw, agent),
+    model: asModel(modelRaw ?? "", agent),
     modelRaw,
     ts,
     sessionId: String(o.session_id ?? o.sessionId ?? o.conversation_id ?? `imp_sess_${index}`),
@@ -78,7 +111,11 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
     tokensOut,
     cacheRead,
     cacheWrite,
+    imageInputTokens: images.imageInputTokens,
+    imageOutputTokens: images.imageOutputTokens,
     reasoningMin,
+    speed,
+    anomalies: anomalies.length ? anomalies : undefined,
   };
 }
 

@@ -1,0 +1,499 @@
+{
+  "research": {
+    "stats": {
+      "summary": "结论:现算法(同窗相邻差分+Δpct加权中位数)方向正确——它是比率估计量的稳健化,相邻差分还能把外部用量污染局部化;但配对方式统计上次优。蒙特卡洛模拟(4000次/场景)显示:整数量化下,\"先按可疑台阶分段、段内全对 Theil-Sen\"比现管线 RMSE 低 2-7 倍;小数百分比+高频采样时现管线 validSlopes 恒为空(null率100%,置信度永远 none);外部台阶混入微量本地事件时点估计偏差约 -20%,cheap 门只降置信度不剔除、与文档第666行\"作为异常值排除\"不符。25-75 加权分位带不是置信区间:不随样本量收缩,覆盖率在 0.80→0.996 间漂移,应改用 Sen 斜率次序统计量分布自由 CI 加 1/ΣΔpct 量化下限,n<20 不宜 percentile bootstrap。跨窗经验贝叶斯收缩可消除每窗冷启动,所需 8 窗历史已在存储中。",
+      "key_facts": [
+        {
+          "fact": "Theil-Sen 估计量(所有配对斜率的中位数)崩溃点 29.3%、影响函数有界、渐近效率高;Siegel repeated median 崩溃点达 50%;robslopes 包提供 O(n log n) 随机化算法。对 synq n≤128 样本 O(n²) 直接可行。",
+          "source": "https://journal.r-project.org/articles/RJ-2023-012/"
+        },
+        {
+          "fact": "Sen 斜率的分布自由置信区间由配对斜率的次序统计量构造(Gilbert 1987 pp.217-218):按 Mann-Kendall 方差取秩选上下界;正态近似秩方法假设 n>10,n=10 及以下用 Helsel & Hirsch 的小样本方法。该 CI 随数据量收缩且有名义覆盖率。",
+          "source": "https://vsp.pnnl.gov/help/vsample/Nonparametric_Estimate_of_Trend.htm"
+        },
+        {
+          "fact": "Hesterberg (2015, The American Statistician 69(4)):percentile bootstrap 在小样本下严重欠覆盖('badly under-covers in small samples'),小样本时不如 t 区间/展开分位区间;Wilcox 亦指出对稳健估计量小 n 时 percentile bootstrap 不给出合理准确的置信区间。",
+          "source": "https://arxiv.org/abs/1411.5279 与 https://www.sciencedirect.com/topics/mathematics/sen-estimator"
+        },
+        {
+          "fact": "比率估计量(ratio-of-means 与 mean-of-ratios)均有 O(1/n) 偏差(Jensen 不等式);权重取 x 的加权均值比率恒等于 ratio-of-sums;Hartley-Ross (Nature 174:270, 1954) 用协方差项给出精确无偏修正。synq 的 Δpct 加权中位数正是 ratio-of-sums 的稳健化版本。",
+          "source": "https://en.wikipedia.org/wiki/Ratio_estimator"
+        },
+        {
+          "fact": "取整/量化误差通常与未取整原变量不独立,违反经典 errors-in-variables 假设;Sheppard 修正仅在正则条件下近似成立;取整会给回归系数引入偏差,非均匀分布下更显著。经典 EIV 衰减(regression dilution)修正需要重复测量/验证数据,synq 无此数据,更适合区间删失(true pct∈[k,k+1))建模或长基线配对摊薄量化噪声。",
+          "source": "https://ouci.dntb.gov.ua/en/works/l1Wa8x37/ 与 https://www.tandfonline.com/doi/full/10.3109/03009734.2012.668143"
+        },
+        {
+          "fact": "James-Stein/Efron-Morris:对 ≥3 个平行单元,向池化均值收缩总 MSE 严格更优;层级部分池化在单元数据少时由先验主导、数据多时趋向单元自身 MLE,是小样本冷启动的标准解。",
+          "source": "https://www2.stat.duke.edu/~pdh10/Teaching/732/Notes/shrinkage.pdf 与 https://mc-stan.org/learn-stan/case-studies/pool-binary-trials.html"
+        },
+        {
+          "fact": "对累计序列做水平回归会产生非平稳自相关残差、虚高 R² 与过窄标准误(Granger-Newbold 虚假回归);对增量建模能暴露被累计曲线掩盖的过程变化。synq 用差分而非水平回归是正确的,但差分后相邻斜率共享端点、误差负相关(MA(1)),不能当独立样本做离散度/MAD 推断。",
+          "source": "https://metricgate.com/blogs/spurious-regression-nonstationary-series/ 与 https://www.magesblog.com/post/2021-08-19-modelling-incremental-vs-cumulative-data-does-it-matter/"
+        },
+        {
+          "fact": "本地蒙特卡洛(4000 reps/场景,复刻 quota-value.ts 管线):整数量化燃至 5/10/25% 时现管线相对 RMSE 22.4%/11.6%/6.2%,全对 Theil-Sen 为 8.5%/3.4%/0.9%;±15% 下限带覆盖率 0.796→0.996 随 n 漂移;小数百分比+每步 Δpct∈[0.1,0.6] 时现管线有效斜率恒为 0(null 率 100%);+4% 外部台阶混入微量本地用量时现管线偏差 -19.8%、朴素全对 -31.4%、按台阶分段后全对 -1.1%。",
+          "source": "/tmp/synq-sim.mjs(本地数值模拟,可复现)"
+        }
+      ],
+      "ideas": [
+        "【correctness】修复小数百分比下 validSlopes 恒空:src/lib/quota/quota-value.ts:276 `if (dPct < 1) continue;` 直接丢弃相邻对且不与后续合并,而 Codex used_percent 未取整(src/lib/quota/official.ts:471-472;quota-value.ts:398 的 `usedPct % 1 !== 0` 分支也承认小数百分比存在)。失败场景:Codex 燃烧速率低于官方刷新率(每步 Δpct≈0.3-0.6)时,模拟 null 率 100%,L2/L3 永远'样本不足'。落地:贪心合并连续 Δpct<1 的相邻步直至累计 Δpct≥1(链式累计不重叠),或直接改配对方式(见下条)。",
+        "【efficiency】把相邻差分换成'分段全对'斜率:相邻对是量化噪声最大的配对(Δpct=1 时取整相对误差可达 ±100%)。先在相邻步检测可疑台阶(external/cheap)把窗口切段,段内取所有 Δpct≥1 配对的 Δpct 加权中位数(即分段 Theil-Sen)。模拟:燃至 5/10/25% 的 RMSE 从 22.4%/11.6%/6.2% 降到 8.5%/3.4%/0.9%(2-7 倍);分段是硬前提——朴素全对在 +4% 外部台阶下偏差 -31%(比现状 -20% 更差),分段后 -1%。证据:quota-value.ts:271-284、364。需要 50% 崩溃点时用 Siegel repeated median。",
+        "【correctness】外部用量检测的 Δusd===0 严格判等太脆:quota-value.ts:279 只有 Δusd 恰为 0 才标 external;同一采样间隔内哪怕 $0.001 本地事件,就把 +4% 外部跳变变成 weight=Δpct≈5 的稀释斜率进入 usable;cheap 门(quota-value.ts:380、394)只降置信度不剔除,与 docs/subscription-quota-value-algorithm.md:666'该片段作为异常值排除'不符。模拟 S6:点估计偏差 -19.8%。落地:cheap 斜率(value < 0.4×median)从 kept 剔除并与文档对齐;外部判定放宽为 Δusd < ε·Δpct·median 的近零阈值。fail-closed 方向不变(只会更保守)。",
+        "【interval】25-75 加权分位带换成 Sen 次序统计量 CI:现区间(quota-value.ts:365-366)估计的是'单对噪声离散度'(量化噪声主导),不随样本量收缩,覆盖率语义漂移(模拟:燃至 5% 覆盖 0.796,燃至 25% 达 0.996)。落地:对(分段后的)配对斜率排序,按 Mann-Kendall 方差取秩选上下界(Gilbert 1987 法,n>10 正态近似,n≤10 用 Helsel-Hirsch 小样本表),得到随数据收缩、有名义覆盖率的分布自由 CI;明确不要用 percentile bootstrap(n<20 严重欠覆盖,Hesterberg 2015)。",
+        "【interval】±15% 固定下限带改为随 ΣΔpct 缩放:整数取整的端点误差上界是相对 ±1/ΣΔpct——low 门槛 sumPct≥2(quota-value.ts:388)时真实量化误差可达 ±50%(模拟 S0:RMSE 22%、带覆盖仅 80%),而 sumPct≥15 时仅约 ±7%,现在的 0.10/0.15/0.25 硬编码档(quota-value.ts:397-398)两头都不匹配。落地:band 下限 = max(c/ΣΔpct, 0.05),c≈1;小数百分比(未取整)时 c 可减半。",
+        "【online】用跨窗经验贝叶斯收缩消除每窗冷启动:quota-value.ts:550-551 只取当前 windowId 采样,文档 489 行禁止跨窗混样,但 usdPerPct 是'套餐×模型组合'的稳定属性,且 mergeSamples 已按组保留最近 8 个窗口(quota-value.ts:467-469),数据现成。落地:只池化各历史窗口的'窗口级点估计'(非原始样本,不违反混样禁令),posterior = (k·prior + ΣΔpct·current)/(k+ΣΔpct),k≈5 个伪 Δpct;prior 仅在同 agent+kind+pricingVersion 且与当前 modelMix 漂移≤0.35 时启用,UI 标注'基于历史窗口先验'并单列置信级,pricingVersion 变化即失效。失败场景(现状):稳定使用数周的用户每次 5h reset 后头 1-2% 燃烧期都显示'样本不足'。",
+        "【small-sample】slice(1,-1) 删失修剪改为条件化:quota-value.ts:343 无条件丢首尾两条,但当窗口首样本 usedPercent≤1(从窗口开头观测)时首斜率并无左删失;rawSlopes=3 时修剪只剩 1 条,medium 需 kept≥3(quota-value.ts:386),干净数据也被压到 low。落地:仅首样本 pct>1 时丢首条;尾条只在窗口仍活跃时丢弃——keep-last 平台压缩(quota-value.ts:303-311)使尾对的 Δusd 随当前平台推进持续膨胀,窗口封闭后该偏差消失,可以回收。",
+        "【dispersion】单采样噪声被双重计入离散度门控:相邻差分共享端点,单个 cumulativeObservedUsd 坏采样(如 JSONL 刷盘中途扫描)同时把 slope_i 拉低、slope_{i+1} 拉高(误差负相关 MA(1)),slopeDispersion=(q75-q25)/point(quota-value.ts:367)被单点噪声放大,高置信门 ≤0.2(quota-value.ts:384)可能被一次坏采样长期阻断,MAD 也把同一噪声当两个独立离群处理。模拟 S4:单点 40% 低报使现管线 RMSE 9.0%(全对配对仅 1.9%)。落地:差分前先在样本水平做筛查(对 (pct,usd) 单调序列做保序回归残差检测,剔除坏样本再配对),或改全对配对天然稀释单点影响;dispersion 门控改在配对斜率去相关后计算。"
+      ]
+    },
+    "oss": {
+      "summary": "调研 ccusage、sub2api、Claude-Code-Usage-Monitor、CodexBar/codex-usage-bar、claude-powerline 及社区反推实验。结论:没有开源项目实现 synq 式同窗差分 usdPerPct 校准;最接近先例是 claudecodecamp 用「价格加权成本÷利用率增量」反推(5h 预算中位 $164、周 $1378,支持 quota≈API 美元近似线性,但方差大且高峰时段预算收紧)。生态主流:ccusage 纯本地重算(LiteLLM+models.dev 快照、5h floor-to-hour 块、线性外推、fast 倍率、Grok ticks=1e-10 USD 已实证);CCUM 用 192h 历史 P90 学个人限额;CodexBar/statusline 直读官方百分比。官方数据面:Claude OAuth /usage 有小数 utilization+seven_day_sonnet 但被强 429,statusline stdin 每回合注入 rate_limits;Codex used_percent 为 f64,credit 牌价=25 credits/USD、fast 模式 ×2–2.5。据此提出 8 条可落地改进。",
+      "key_facts": [
+        {
+          "fact": "ccusage 5h 块算法: 块起点=首条事件时间戳向下取整到 UTC 整点(floor_to_hour),距块首或距上条事件超过 5h 即开新块并插入 gap 块;burn rate = 块内总 token/(首末事件分钟差),另有排除缓存 token 的 indicator 口径与 cost_per_hour;projection = 当前累计 + burn×剩余分钟,线性外推到块尾;--token-limit max 用历史最大块作为限额基准(rust/crates/ccusage/src/blocks.rs L89-105, L567-601)",
+          "source": "https://github.com/ryoppippi/ccusage"
+        },
+        {
+          "fact": "ccusage 计价: 构建期内嵌 deflate 压缩的 LiteLLM model_prices_and_context_window.json + models.dev 双快照,运行时可在线刷新;三种 cost mode(display=只用 JSONL costUSD,auto=优先 costUSD 否则重算,calculate=总是重算);长上下文阈值按模型独立(OpenAI 272K);cache_create 无公开价时默认 input×1.25;并按 usage.speed==\"fast\" 应用每模型 fast 倍率(claude-opus-4-6/4-7=6x、opus-4-8=2x、gpt-5.4/5.6=2x、gpt-5.5=2.5x,见 ccusage-core/src/fast-multiplier-overrides.json 与 cost.rs L91-96)",
+          "source": "https://github.com/ryoppippi/ccusage/blob/main/rust/crates/ccusage-core/src/pricing.rs"
+        },
+        {
+          "fact": "ccusage Grok 适配器已实证 costUsdTicks 换算: 1 tick = 1e-10 USD,对 Grok CLI 1.0.0 的 58 个 turn 逐一验证 costUsdTicks/1e10 精确复现 xAI 牌价;并明确指出 turn_completed 聚合多个 API 请求,用 turn 总 token 重算无法复现 Grok 实际长上下文档位切分,ticks 是唯一在聚合后仍准确的金额(rust/adapters/grok/src/parser.rs L140-149);display/auto 模式直接把 ticks 当发票金额",
+          "source": "https://ccusage.com/guide/grok/"
+        },
+        {
+          "fact": "sub2api(synq 文档引用的参考)实际是订阅转 API 网关: 计费用逐模型价卡、解析链 Group→Channel→内置、分组级长上下文阶梯开关、从 Grok JWT tier claim 识别订阅档位;Grok 配额是被动记录上游白名单 rate-limit header,自称『不发明订阅配额值』——它没有做任何 配额百分比↔美元 校准,synq 的 L2/L3 差分校准无先例可抄",
+          "source": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.176"
+        },
+        {
+          "fact": "Claude-Code-Usage-Monitor 的额度估计: 不读官方百分比,而是对最近 192h(8 天)本地会话做 90 分位统计学习『个人化 token/成本限额』(自称 95% 准确),另有 Pro≈19k token/$18、Max5≈88k/$35、Max20≈220k/$140 的套餐预设;burn rate 取最近 1 小时跨会话 token 速度,再线性预测耗尽时刻并做 reset-aware 标注",
+          "source": "https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor"
+        },
+        {
+          "fact": "Claude 官方 OAuth 端点 GET https://api.anthropic.com/api/oauth/usage(需 anthropic-beta: oauth-2025-04-20)返回 five_hour/seven_day/seven_day_sonnet/seven_day_opus,utilization 为带小数百分比 + ISO resets_at;但该端点对 Pro/Max 强力 429(retry-after:0,30–120s 轮询全部被拒),多个 open issue 认定其不可靠",
+          "source": "https://github.com/anthropics/claude-code/issues/31637"
+        },
+        {
+          "fact": "Claude Code ≥1.2.80 每回合向自定义 statusline 命令 stdin 注入 rate_limits.five_hour/.seven_day(used_percentage 0-100 + epoch resets_at),仅 Pro/Max、首次响应后出现、无需网络;claude-powerline 与 ohugonnot/claude-code-statusline 均以此为首选数据源、OAuth 端点仅作 fallback(键名不同: stdin 用 used_percentage,OAuth 用 utilization)",
+          "source": "https://github.com/ohugonnot/claude-code-statusline"
+        },
+        {
+          "fact": "Codex CLI 的 ~/.codex/sessions JSONL token_count 事件内嵌 RateLimitSnapshot: used_percent 为 f64(小数精度)、window_minutes、resets_at(epoch 秒)、credits(CreditsSnapshot)、plan_type;codex-usage-bar/CodexBar/mryll-codexbar 等工具全部只展示这些官方值 + pace 指示,均不做美元折算",
+          "source": "https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs"
+        },
+        {
+          "fact": "Codex 官方 rate card(2026-04-02 起): credits 按每百万 input/cached/output token 逐模型定价,数值恰为 API 牌价×25(即 25 credits=$1,GPT-5.6 Sol 125/12.5/750,Terra 50/5/300,Luna 5/0.5/30);cache write 不收费;fast 模式按标准 credit 率 ×2.5(GPT-5.6/5.5)或 ×2(GPT-5.4)计费且模型名不变——synq『Codex 统一 25 credits/USD 故豁免漂移门控』的假设在 fast 模式下不成立",
+          "source": "https://help.openai.com/en/articles/20001106-codex-rate-card"
+        },
+        {
+          "fact": "claudecodecamp『反推 Claude Code 限额』是与 synq L2 同思路的唯一公开实验: 用代理截获 rate-limit 头,按公开价加权成本÷利用率增量反推预算;Max20 实测 5h 窗预算中位 $164(IQR $104–$272,极值 $3–$705)、周窗中位 $1,378($718–$2,659),证据支持配额≈API 美元线性(cache read 权重与公开价一致);已知陷阱: 高峰时段(5–11am PT)预算动态收紧、thinking token 不可见、utilization 更新滞后/批量化",
+          "source": "https://www.claudecodecamp.com/p/i-tried-to-reverse-engineer-claude-code-s-usage-limits"
+        },
+        {
+          "fact": "Anthropic 会做『补偿性 reset』: 长期 canary(30 分钟轮询 oauth/usage)实测三种模式——补偿 reset(used% 中窗大幅下降而 resets_at 不变)、正常周滚动(两者同时归零)、re-anchor(窗口整体平移),补偿 reset 与 status page 事故相关但从不公告;还存在单点异常读数(metering flicker)",
+          "source": "https://ajin.im/is/building/did-claude-just-reset-usage/"
+        },
+        {
+          "fact": "Grok 订阅额度是单一共享周池百分比(Chat/Imagine/Voice/Build/API 按算力折算共同扣减),xAI 不公开各动作到百分比的换算率,可购 Extra Usage Credits;这印证 synq 对 Grok 保留模型组合漂移门控是必要的(池按算力而非 API 美元计量,组合变化会直接改变 usdPerPct)",
+          "source": "https://ai-x.chat/guide/grok-usage-limits/"
+        }
+      ],
+      "ideas": [
+        "[Claude 每回合官方采样] synq 靠轮询 CLAUDE_USAGE_URL 取 Claude 百分比(src/lib/quota/official.server.ts:38),该端点已被官方强 429(claude-code#31637,retry-after:0);而校准只用当前 windowId 采样(src/lib/quota/quota-value.ts:550-552)且 low 档也需累计 Δpct≥2(quota-value.ts:388)。失败场景: 5h 窗口内轮询多数被 429 吞掉,只拿到 2 个样本且 Δpct=1 → 整窗 confidence=none,每个新窗口都显示『样本不足』。改进: 安装一个 statusline 命令,把 Claude Code ≥1.2.80 每回合注入 stdin 的 rate_limits.five_hour/.seven_day(used_percentage+resets_at,无网络、Pro/Max)append 到 synq 监视的文件,获得与本地 JSONL 时间对齐的每回合官方百分比——与 synq 已在 codex-jsonl.ts:94-101 从 token_count.rate_limits 就地采样 Codex 的做法完全同构。",
+        "[Grok ticks 换算落地] ccusage 已对 Grok CLI 1.0.0 的 58 个 turn 实证 costUsdTicks/1e10 精确等于 xAI 牌价,并指出 turn_completed 聚合多请求导致按 turn 重算长上下文档位必错(ccusage rust/adapters/grok/src/parser.rs:140-149)。synq 恰好踩中该错误: cost.ts:48-54 用整 turn 聚合的 contextTokens 与 200K 阈值比较(pricing-data.ts:85-87)。失败场景: 一个 turn 由 3 个各 120K context 的请求组成(Grok 实际全按标准价计费),synq 判 360K>200K 对全 turn 乘 2 倍 → L1 与 usdPerPct 斜率系统性高估约 2 倍。改进: 按 doc §8.4.1 的版本化验证流程(Grok CLI 1.0.0 schema + ccusage 实证 + 本地与重算值对账)确认 1e-10 后,把 grok-jsonl.ts:91-112 已保存的 reportedCostTicks 换算为 reportedUsd,Grok 的 L1/QuotaSample 优先用 ticks,重算值降为交叉校验。",
+        "[fast/speed 档位计价] Claude JSONL 的 usage 携带 speed:\"fast\" 字段,ccusage 据此按模型乘 fast 倍率(opus-4-6/4-7=6x、opus-4-8=2x,见其 fast-multiplier-overrides.json 与 cost.rs:91-96);Codex /fast 官方按 2.5x(GPT-5.6/5.5)/2x(GPT-5.4)credit 计费且模型名不变(developers.openai.com/codex/speed)。synq claude-jsonl.ts:100-104 不解析 speed,UsageEvent 无档位字段,且 Codex 以『统一 25 credits/USD』为由豁免漂移门控(quota-value.ts:352-355、373-379)。失败场景: 用户半窗开启 /fast,同模型名下每 API 美元的 quota 消耗 ×2.5 而 modelMix 零漂移,豁免使污染斜率全部入选 → remaining credits 最高高估 2.5 倍;Claude fast 事件 L1 低估至 1/6 且门控无法发现。改进: 解析 usage.speed(及 Codex 侧 fast 状态),fast 事件按版本化倍率表计价,并把 fast 占比纳入 intervalModelMix 维度使其受漂移门控约束。",
+        "[补偿性 reset 分段] canary 实测 Anthropic 会中窗把 used% 大幅下调而 resets_at 不变(ajin.im),此时 windowId 不变;synq 的 normalizeWindowSamples 对同窗单调压缩、静默丢弃回落后的样本(quota-value.ts:300-311),与 doc §14『百分比下降视为 reset 开新窗口』不一致。失败场景(已用 /tmp/comp-reset-sim.mjs 复现): 采样序列 55%/$80→60%/$88→(补偿)30%/$96→45%/$118(被丢弃)→62%/$144,跨补偿相邻对得 28 usd/pct(真值≈1.6),仅 2 条斜率时 MAD 阈值 39.6 拦不住 → totalHighUsd 高估约 17 倍。改进: 同 windowId 内 usedPercent 下降超过取整噪声(如 >2 个百分点)时不丢样本,而是切出新的校准 generation(windowId 加后缀),新旧段样本各自配对、不跨段差分。",
+        "[亚 1% 斜率链接] Codex used_percent 是 f64、Claude OAuth utilization 带小数,但 validSlopes 对相邻对硬性 dPct<1 即丢弃且不跨段合并(quota-value.ts:276)。失败场景: 轻量使用的 5h 窗口,10 个连续样本每步 +0.5%(累计 Δpct=5、本地成本 $2、无外部用量),有效斜率数=0 → confidence=none,而同样数据本可支撑一条 Δpct=5 的高权重斜率。改进: 相邻对 Δpct<1 时不直接丢弃,向后累积链接到 Δpct≥1 再生成一条 segment(链接过程中遇到 external 片段、coverage<0.8 或 reset 即中断链),其余门槛不变;这只是把『相邻』放宽为『连续无污染区间』,不违反禁止跨窗混样。",
+        "[跨窗先验解决冷启动] 校准只用当前 windowId(quota-value.ts:550-552),而 mergeSamples 每组明明保留最近 8 个窗口的样本(quota-value.ts:467-470)却从不参与估计;生态先例: Claude-Code-Usage-Monitor 用最近 192h 会话 P90 学个人限额,claudecodecamp 实测 5h 窗预算跨窗相对稳定(中位 $164、IQR $104–$272)。失败场景: 每个新 5h/7d 窗口在累计 Δpct<2 前 L2/L3 全空,按 5h 节奏用户每天多次回到『样本不足』,尽管昨天同模型组合已校准过。改进: 当前窗 confidence=none 时,用同 agent+kind+product 历史窗口的 kept 斜率(先经当前 modelMix 漂移门控过滤)输出『跨窗先验』区间: 置信度封顶 low、误差带 ≥±25%、UI 标注『基于历史窗口』,本窗样本达标后立即切换;历史斜率与本窗样本不进入同一次稳健聚合,故不违反 doc §9.3 禁混样条款。",
+        "[seven_day_sonnet 模型周池未解析] OAuth /usage 实际返回 seven_day_sonnet/seven_day_opus 模型限定周池(社区文档示例 39.0),synq doc §13.3 也已规定 Sonnet 周池应独立 windowId 并只聚合 Sonnet 事件,但 official.ts:107-120 的 fableLimit 只识别 display_name 为 fable/fable 5 的 weekly_scoped,顶层 seven_day_sonnet 无任何代码路径(official.ts:128-130 只读 session/weekly_all/five_hour/seven_day)。失败场景: 重度 Sonnet 用户 Sonnet 周池 95% 而总周池 40%,synq 只显示 40% 并按全模型口径估剩余价值 → 用户实际已被 Sonnet 池限流时仍显示大量『剩余 API 等价』。改进: 泛化为按 scope.model 解析全部 weekly_scoped + 顶层 seven_day_sonnet/seven_day_opus,每个模型池建 product 型 windowId,其 QuotaSample 只聚合对应模型事件。",
+        "[Codex cache-write 幽灵计价] 官方 rate card 明示『Codex does not charge for cache writes』,OpenAI API 价目也无缓存写入价;但 synq codex-jsonl.ts:67 解析 last.cache_write_input_tokens,而 perM 默认给所有模型 cacheWrite5m=input×1.25(pricing-data.ts:42),sol/terra/luna/gpt54 均未覆盖该默认值(pricing-data.ts:81-84),cost.ts:47 会对其计价。失败场景: 任一 Codex 日志版本开始输出该字段(字段名已被 synq 主动预期)时,这些 token 即按 $6.25/MTok(sol)计入 L1 与 credit 等价 → 与官方 credit 表系统性偏离,且同模型无漂移信号、门控无法发现。改进: Codex 模型的 cacheWrite5m/1h 价显式置 0 与 rate card 对齐,并加测试锁死『Codex cache write 恒为 $0』。"
+      ]
+    },
+    "official": {
+      "summary": "核实结论(以 2026-08 为准):三家现价与快照 2026-08-20-synq-3 逐项一致(Sonnet 5 $2/$10 已官宣转为长期价、7/30 Terra/Luna 降价后价、272k/200k 长上下文倍率均对);Codex「25 credits/USD 统一费率」在已同步更新的官方 rate card 上逐模型成立(GPT-5.5 例题 7.25 credits 可复算),drift 豁免当前安全。两个已过时/错误假设:① Claude 5h 窗口官方语义是\"从首条消息启动\",synq 的固定平铺推进(advanceWindow/历史锚点)在闲置后必然错切窗口、污染采样;② OAuth /usage 实际含 seven_day_sonnet、seven_day_opus、extra_usage 与小数 utilization,synq 全部未解析,违背自家文档 §13.3。其余缺口:快照缺 GPT-5.5/GPT-5.4-mini/Daybreak/grok-4.3 等在售模型(unknown→coverage 击穿);Codex session 日志只有 resets_in_seconds 被忽略,离线时永远 rolling;Codex 官方 cache write 免费但快照默认按 1.25x/2x 收费;Grok costUsdTicks 已有公开文档(1e-10 USD/tick)可做版本化验证。",
+      "key_facts": [
+        {
+          "fact": "[已过时] Claude 5h 窗口从用户首条消息开始(账户级,非固定时钟平铺);周池才是账户固定 cadence。synq 在 src/lib/quota/quota-value.ts:52-58(advanceWindow)/125-135(windowBounds) 对过期 resetsAt 按 5h 整数倍平铺,src/lib/quota/official.ts:186-193 对历史锚点同样固定推进。失败场景:上窗 02:00 reset、用户 09:00 才发首条消息(真实窗 09:00–14:00),synq 平铺出 07:00–12:00/12:00–17:00 两个虚构窗→事件劈错窗、样本 windowId 与下次 live /usage 真实 resets_at 不匹配、校准样本作废;且 official.ts:183 要求百分比降到 ≤1 才重锚,漏采低点即长期错位。7d 平铺仍成立。",
+          "source": "https://usagebar.com/blog/what-is-the-claude-session-limit + https://support.claude.com/en/articles/11049741-what-is-the-max-plan"
+        },
+        {
+          "fact": "[已证实+解析缺口] OAuth /api/oauth/usage 实际还返回 seven_day_sonnet(Sonnet 专属周池)、seven_day_opus(可空)、extra_usage{is_enabled,monthly_limit,used_credits,utilization},utilization 带小数(如 35.0)+ISO resets_at;extra usage 按标准 API 价计费、$2,000/日兑换上限。synq src/lib/quota/official.ts:107-154 只解析 five_hour/seven_day/limits[]+Fable weekly_scoped,丢弃 Sonnet 池与 extra_usage,违背 docs/subscription-quota-value-algorithm.md §13.3。失败场景:Sonnet-heavy 用户 Sonnet 池先耗尽而 synq 总池仍显富余无预警;进入 extra usage 后 pct 冻结、L2/L3 停摆,且放弃了 used_credits 这个天然美元口径对账源。",
+          "source": "https://pypi.org/project/ccusage/"
+        },
+        {
+          "fact": "[已证实] Codex 25 credits/USD 统一费率在当前官方 rate card 成立:Sol 125/12.5/750、Terra 50/5/300、Luna 5/0.5/30、GPT-5.5 125/12.5/750、GPT-5.4 62.5/6.25/375 credits/MTok,全为现行 API 价×25(官方例题 20k in+80k cached+5k out=7.25 credits 可复算);credit 购买价 $0.04。故 pricing-data.ts:24 OPENAI_CREDITS_PER_USD=25 与 quota-value.ts:370-378 的 Codex drift 豁免当前正确。但 7/30 API 降价(Terra $2.5/$15→$2/$12、Luna $1/$6→$0.2/$1.2)前后第三方仍引用旧卡值(62.5/375、25/150),说明比率仅因 OpenAI 手动同步而成立——豁免与 l1Credits=usd×25 需持续核对该前提。",
+          "source": "https://learn.chatgpt.com/docs/pricing"
+        },
+        {
+          "fact": "[已证实] 快照 2026-08-20-synq-3 与三家现价逐项一致(pricing-data.ts:70-107):Claude Fable 5 $10/$50(cache 1/12.5/20)、Opus 5/4.8/4.7/4.6 $5/$25、Sonnet 5 $2/$10(官方已宣布取消原定 2026-09-01 涨至 $3/$15,转长期价)、Sonnet 4.6 $3/$15、Haiku 4.5 $1/$5;Claude ≥4.6 的 1M 长上下文标准价不加价→快照对 Claude 不设长上下文倍率正确;xAI grok-4.6 $2/$6 cached $0.5、4.5 cached $0.3、build-0.1 $1/$2 cached $0.2、≥200k 全量 2x;OpenAI Sol $5/$30、Terra $2/$12、Luna $0.2/$1.2、>272k 请求级 2x input(含 cached)/1.5x output——与 codexLongContext{272k,2,1.5} 吻合。未建模项:Opus 5/4.8 fast mode $10/$50。",
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing + https://docs.x.ai/developers/pricing"
+        },
+        {
+          "fact": "[已过时/快照缺口] rate card 在售但 PRICING_TABLE(pricing-data.ts:89-107)缺失:GPT-5.5(≙$5/$30)、GPT-5.4-mini(18.75/1.875/113 credits≙约 $0.75/$4.5;与 GPT-5.4 一起 2026-08-31 在 Codex 退役)、Daybreak Blue(125/750)、Daybreak Red(312.5/1875≙$12.5/$75)、xAI grok-4.3/grok-4.20 系($1.25/$2.5 cached $0.2)。codex-jsonl.ts:18-24 asCodexModel 把这些猜到 luna/sol 家族,但 pricing.ts:36-41 familyFromRaw 守卫使其全落 unknown。失败场景:用户当日主用 gpt-5.5/daybreak-red → pricedTokenCoverage<0.8 → L1 置灰、L2/L3 全封,而其价格可由 rate card÷25 精确得出。",
+          "source": "https://learn.chatgpt.com/docs/pricing"
+        },
+        {
+          "fact": "[已证实] 官方明文 Codex 不收 cache write 费(fast mode 按更高 credits 计)。但 perM 默认(pricing-data.ts:41-43)给 sol/terra/luna/gpt54(pricing-data.ts:81-84)生成 cacheWrite5m=1.25×input、cacheWrite1h=2×input,且 codex-jsonl.ts:67 会读 cache_write_input_tokens。失败场景(潜伏):任一 Codex 日志版本开始上报该字段时,L1 与 credits 换算立即按不存在的费率高估,与官方 credit 账单对不上。",
+          "source": "https://learn.chatgpt.com/docs/pricing"
+        },
+        {
+          "fact": "[已证实] Codex rollout 会话日志(token_count.rate_limits)只携相对字段 resets_in_seconds(如 17940)+window_minutes(299/10079),无绝对 reset_at;official.ts:481 只读 reset_at??resets_at → session-log 回退(official.server.ts:547-558,834)resetsAt 恒 null → windowBounds 判 rolling → 禁产 QuotaSample。失败场景:wham/usage 为私有端点且常 429/不可达,此时 Codex 卡片永远 rolling L1、L2/L3 永不出现,而行内 timestamp+resets_in_seconds 本可反推 reset_at。另:5h 窗 2026-07-12~07-30 曾临时停用(仅剩周池)后恢复,applyCodexWindows 双窗自适应可正确处理该形态。",
+          "source": "https://github.com/openai/codex/issues/14728 + https://qcode.cc/en/codex-5-hour-limit-guide"
+        },
+        {
+          "fact": "[已证实] Grok 2026-06 起付费订阅为单一共享周池,产品构成(API/Build/Chat/Imagine/Voice)仅为占用拆分不可相加,Extra Usage Credits 在周池耗尽后才消耗——与算法文档 §13.1 一致;未迁移统一计费的账户无周池,official.ts:304-305 的 billingPeriodStart/End 回退实为 legacy 月度 credits 周期却会被标成 weekly 窗。costUsdTicks 已有公开文档:ccusage Grok guide 明文每 completed turn 的 costUsdTicks 单位为 1e-10 USD,并确认 inputTokens 含 cache(OpenAI 风格)、数据在 $GROK_HOME/sessions/**/updates.jsonl——与 grok-jsonl.ts 假设一致;synq 保持 usdValue=null(grok-jsonl.ts:91-111)符合 §8.4.1 门槛,但「换算比例无法证实」这一假设已过时。",
+          "source": "https://ccusage.com/guide/grok/ + https://docs.x.ai/grok/faq"
+        }
+      ],
+      "ideas": [
+        "Claude 5h 窗口停用固定平铺:windowBounds(src/lib/quota/quota-value.ts:125-135)在 windowResetsAt 过期后不再 advanceWindow,改标 rolling 并等下一次 /usage 的新 resets_at(或以「reset 后首个本地事件时间戳+5h」为低置信临时锚点);official.ts:186-189 的 5h 历史锚点推进同步移除,仅保留 7d 平铺(官方周重置为账户固定 cadence)。避免虚构 windowId 污染 mergeSamples。",
+        "解析 /usage 的 seven_day_sonnet/seven_day_opus 进 modelWeekLimits(扩展 official.ts:107-131 的 fableLimit 同类逻辑),按文档 §13.3 给 Sonnet 池建独立 windowId+采样(只聚合 sonnet 事件);同时解析 extra_usage——它是唯一美元口径的官方数据:overage 阶段 usdPerPct=monthly_limit/100 是解析式已知量(官方明确按标准 API 价计费),可直接给出零校准精确剩余,并用 used_credits 对账本地 L1。",
+        "parseCodexWindow(src/lib/quota/official.ts:468-488)增加 resets_in_seconds 支持:parseCodexRateLimitLine 已有行级 timestamp(official.ts:610),resetsAt=ts+resets_in_seconds*1000,让 session-log 回退路径产出非 rolling 窗口与 QuotaSample,消除 wham/usage 429/离线时 Codex L2/L3 永久缺失。",
+        "补 PRICING_TABLE(src/lib/quota/pricing-data.ts:89-107):gpt-5.5(5/30, cacheRead 0.5)、gpt-5.4-mini(0.75/4.5, cacheRead 0.075)、daybreak-blue(5/30)、daybreak-red(12.5/75)——由官方 Codex rate card credits÷25 反推并标 source=codex-rate-card;xAI 补 grok-4.3/grok-4.20 系(1.25/2.5, cacheRead 0.2, 200k 2x)。同时把全部 Codex 模型 cacheWrite5m/1h 显式置 0(官方不收 cache write 费),消除 perM 默认值潜伏高估。",
+        "Codex 专属跨窗口先验:既然逐模型 25 credits/USD 已验证统一(quota-value.ts:370-378 豁免的事实基础),同一 plan+rate card 版本下 usdPerPct 在相邻窗口间物理上不变——可把上一 windowId 的校准点估计作新窗 low-confidence 种子(仅 agent==='codex',失效条件=rate card 版本或 planLabel 变化),解决每 5h/每周冷启动;Claude/Grok 因无统一费率不适用。",
+        "Grok costUsdTicks 落地:按 ccusage 文档的 1e-10 USD/tick 做固定输入可复现实验(同一 turn 比较 ticks/1e10 与本地 API 等价金额,验证 §8.4.1 四条件),通过后按日志 schema 版本在 grok-jsonl.ts 填 ProviderReportedCost.usdValue=ticks/1e10,用作 L1 对账与 grok 侧未知模型(如 grok-4.20)定价兜底,抬升 Grok pricedTokenCoverage。",
+        "把 https://learn.chatgpt.com/docs/pricing(developers.openai.com/codex/pricing 的 308 目标)纳入价格快照 CI 核对源:定期抓取 rate card,逐模型校验 credits/(API 价)是否仍恒等 25;偏离时自动更新 creditsPerUsd 并撤销 quota-value.ts:374 的 Codex drift 豁免(改为读逐模型 creditsPerUsd 一致性)。7/12-7/30 无 changelog 停用 5h 窗与 7/30 降价证明这类语义会静默漂移。",
+        "快照加到期闹钟元数据:GPT-5.4/GPT-5.4-mini 2026-08-31 在 Codex 退役(ChatGPT 登录),届时 alias/family 转向 gpt-5.6-terra/luna 并冻结旧价仅供历史回算;Claude 侧记录 Sonnet 5 $2/$10 已转长期价,避免 9/1 误更新。"
+      ]
+    }
+  },
+  "verified": [
+    {
+      "title": "Δpct<1 的相邻对被整段丢弃且不与后续合并，小数百分比供应商可能永远无法校准",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 276,
+      "claim": "validSlopes 对相邻采样对执行 `if (dPct < 1) continue;`（quota-value.ts:276），被跳过片段的 Δusd/Δpct 信息永久丢失，不会与后续片段链接成 Δpct≥1 的复合片段。normalizeWindowSamples 只压缩百分比完全相等的采样（quota-value.ts:305-308），而 Codex `used_percent`/Grok `creditUsagePercent` 经 clampPct 保留小数（official.ts:472/303，代码在 quota-value.ts:398 用 `usedPct % 1 !== 0` 明确承认小数百分比存在），且 dashboard 每 2.5s 轮询官方并记样（dashboard.tsx:303 + store.ts:467）。用真实导出函数模拟：300 个覆盖 30% 消耗、零噪声的 0.1% 步长采样 → validSlopes 返回 0 条、confidence=none；随机混合步长下仅 25% 的 Δpct 信息被保留。official.ts:361 的 Grok 日志按 floor 去重后相邻片段 Δpct 也在 1 附近波动，约一半跌破 1 被丢。",
+      "impact": "供应商返回小数百分比 + 高频轮询（默认 2.5s）时，除非单个轮询间隔内暴涨 ≥1%，否则整窗永远没有有效斜率，L2/L3 恒为 none——用量越平稳越无法校准；即使有偶发大步长，大部分 Δusd 信息也被丢弃，置信度升级（sumPct 阈值）被人为拖慢数倍。",
+      "suggestion": "改为锚点链式差分：维护一个 anchor 采样，向后累积直到 (cur.pct - anchor.pct) ≥ 1 且两端 coverage≥0.8，再发射一条复合斜率并把 anchor 推进到 cur。这样保留全部 Δusd/Δpct 信息，且与文档 §11.2 的每片段 Δpct≥1 约束兼容（跨 pricingVersion/外部段仍在合并边界处断链）。",
+      "severity": "high",
+      "kind": "statistical",
+      "lens": "stats-method",
+      "verdict": {
+        "verdict": "CONFIRMED",
+        "reasoning": "## 结论：核心机制成立，已用真实导出函数复现\n\n**1. 代码事实全部核实**\n- `src/lib/quota/quota-value.ts:276` 确为 `if (dPct < 1) continue;`，相邻对被丢弃后无任何锚点/链式合并逻辑；`validSlopes`/`calibrateFromSamples` 是唯一校准路径（quota-value.ts:339/554，无其他调用方）。\n- `normalizeWindowSamples`（quota-value.ts:303-311）只做单调过滤 + 完全相等百分比去重，不做分桶聚合，因此存储里相邻样本的 dPct 就是官方百分比的原始粒度。\n- 小数百分比确实被保留：`clampPct`（official.ts:50-53）不取整；Grok `creditUsagePercent`（official.ts:303）、Codex `used_percent`（official.ts:472）原样通过。项目自己多处承认小数存在：quota-value.ts:398 的 `usedPct % 1 !== 0` 分支、算法文档 617 行「供应商提供小数百分比时可缩小到 ±10%」、official.ts:358-364 Grok 日志按 `Math.floor` 去重（对整数值做 floor 比较毫无意义，说明作者观测到过小数）。\n- 采样频率：dashboard.tsx:303 每 2.5s 轮询，但 official.server.ts:37/693 有 30s 服务端缓存（GROK_BILLING_CACHE_MS 作为三家默认 cacheMs）——发现里「2.5s」应修正为「有效 ~30s」，但不影响结论：5h 窗满速烧完也才 1%/3min，30s 间隔的相邻 Δpct 仍远小于 1。\n\n**2. 模拟实测（/tmp，import 仓库真实导出函数运行）**\n- 场景 A：0.1% 步长、零噪声、真斜率 0.46、覆盖 30% 消耗 → `validSlopes` 返回 0 条、confidence=none、totalPointUsd=null。与发现描述完全一致：密集采样 + 小数百分比 → 整窗永远无法校准。\n- 场景 B：Grok 日志 floor 去重形态 → 58 个相邻对中 27 个（47%）Δpct<1 被丢，约 41% 的 Δpct 信息损失（发现称「约一半跌破 1」准确；「仅 25% 保留」依赖步长分布，量级方向对但偏悲观）。零噪声下仍能到 high，故纯日志回放路径是「劣化」而非「全灭」。\n- 场景 C/D：整数供应商、以及小数+稀疏轮询（相邻跳 3-4%）均正常 → 问题精确限定于「小数粒度 < 1% + 持续开着 app」，而持续在线正是这个桌面追踪器的设计形态。且 store 合并后 live 细粒度样本会插回 floor 去重的历史样本之间（mergeSamples 只去重相等 pct），app 开着时 Grok 也退化为场景 A。\n\n**3. 「有意保守设计」抗辩不成立**\n文档 §11.2（562 行）确实规定每对 `Δpct >= 1`，代码忠实实现了文档；但 572 行的理由是整数取整噪声，而 §11.4（617 行）明确设计了「小数百分比供应商 → ±10% 更窄区间」的奖励路径——若小数供应商在密集采样下连 low 都永远到不了，该条款永不可达，属文档内部矛盾而非 fail-closed 本意。fail-closed 原则保护的是「不出伪金额」，锚点链式合并每段仍满足 Δpct≥1、量化误差有界，产出同样保守。另外 dPct<1 的对连 `dUsd===0` 外部用量检测（quota-value.ts:279）也一并跳过，丢弃并未换来更强的异常隔离。\n\n**4. 测试缺口**\nquota-value.test.ts 全部用整数步长（≥1）样本（92-125 行等），无任何小数步长/密集采样用例；official.test.ts 夹具 used_percent/creditUsagePercent 也全为整数。该场景零覆盖。\n\n**保留意见（不改判但降一点实际严重度）**：仓库内无实捕的小数 payload 夹具，「供应商现网确实回小数」依赖 floor 去重代码与文档 617 行的间接证据 + 背景研究员对 Codex f64 的核实；且 Codex wham 端点常不可达时本就无样本（另一缺陷），Claude 现网 utilization 似为整数不受影响。故现实爆炸半径 = Grok（确定劣化，app 常开时近乎全灭）+ Codex wham 可用时（可能全灭），非三家全灭。",
+        "worth_fixing": "yes",
+        "fix_sketch": "在 validSlopes（quota-value.ts:261-287）内把逐对差分改为锚点链式差分，语义严格泛化现行为（整数供应商相邻对 Δpct≥1 时立即发射，行为不变）：\n\n1. 每个 (windowId, pricingVersion) 组内维护 anchor=ordered[0]；向后扫描 cur：\n   - 若 cur.pricedTokenCoverage < 0.8 → 丢弃当前链（anchor 重置为下一个 coverage 达标样本），保持文档「两端 coverage≥0.8」约束；\n   - 若 (cur.usedPercent - anchor.usedPercent) >= 1 且 anchor.coverage>=0.8：dUsd<0 则重置 anchor；dUsd==0 发射 external 段（weight=累积 dPct）；否则发射 {value: dUsd/dPct, weight: dPct, modelMix: intervalModelMix(anchor, cur)}；然后 anchor=cur。\n2. 组边界天然断链（跨 windowId/pricingVersion 不合并，符合文档禁止跨窗混样）；单调性由 normalizeWindowSamples 已保证。\n3. slice(1,-1) 删失片段裁剪、MAD、加权中位数等下游逻辑不动——每段 weight 仍为该段 Δpct，加权语义不变。\n4. 文档 §11.2 补一句：「相邻采样对 Δpct<1 时向后累积至 ≥1 再构成片段（锚点链式），每片段仍满足 Δpct≥1」。\n5. 新增测试：(a) 0.1% 步长 300 样本零噪声 → 点估计≈真值、confidence 可达 medium/high；(b) 链中夹 coverage<0.8 样本 → 断链不污染；(c) 链内纯外部（dUsd==0）→ external 段被发射并降置信度；(d) Grok floor 去重回放 → 保留全部 Δpct 信息；(e) 既有整数用例全部不回归。\n\n注意点：链式段跨时更长，段内模型组合被平均，external/cheap 的局部化略钝——可接受，因现状是这些信息整段丢失；如需更强隔离可在锚点推进时额外限制单段最大时长（如 30min）。"
+      }
+    },
+    {
+      "title": "samplesFromOfficial 把 fetchedAt 时刻的官方百分比与 wall-clock now 截止的累计金额配对，且不检查 windowStale/weekStale",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 514,
+      "claim": "samplesFromOfficial 里 bounds 用调用方传入的 now 计算（:506，store.ts:472 传 Date.now()），事件截止 bounds.end=min(now, resetsAt)（:131），但 usedPercent 与 timestampMs 来自 slice.fetchedAt（:512）。缓存命中（cacheMs=30s）尤其是 Claude 429 退避期间 staleOfficial 持续回放最长 1h 前的 slice（official.server.ts:263-270、:739），consider() 完全不看 windowStale/weekStale。对照组 samplesFromOfficialHistory 用 now=slice.fetchedAt 正确对齐（:481-489）。",
+      "impact": "Claude usage API 进入退避的 40 分钟内用户烧 $5：每 2.5s 循环末尾 recordOfficialSamples 都会用陈旧 pct + 实时增长的 cumUsd 生成样本，plateau '保留最新'规则（:305-307）把该 pct 平台样本的 cumUsd 不断抬高固化；退避结束后 pct 跳升时形成 (陈旧pct→新pct) 差分，$5 被错误计入平台期 → 斜率被系统性压低，可触发 cheap<0.4m 误报降级或直接污染加权中位数，整窗/剩余区间失真。",
+      "suggestion": "consider() 中把事件截止改为 min(slice.fetchedAt, bounds.resetsAt)（与 history 回放路径一致）；并在 slice.windowStale/weekStale 为 true 时跳过对应 kind 的采样（fail closed，符合文档 §14）。",
+      "severity": "high",
+      "kind": "bug",
+      "lens": "correctness",
+      "verdict": {
+        "verdict": "CONFIRMED",
+        "reasoning": "发现的每条代码事实均核实成立:quota-value.ts:506 用调用方 now 算 bounds、:131 事件截止 min(now,resetsAt)、:512-513 pct/timestampMs 取自 slice.fetchedAt,consider()(:502-517)完全不检查 windowStale/weekStale(该标志只被 UI 消费,engine.ts:67-68);store.ts:469-472 以 Date.now() 记样,dashboard.tsx:303 每 2.5s 轮询且 store.ts:467 与 dashboard.tsx:290 每 tick 都触发;official.server.ts:731-739 在 429 退避(CLAUDE_BACKOFF_MAX_MS=1h,:41)期间持续回放 staleOfficial 且 fetchedAt 保持原值,usableClaudeSlice(:666-672)允许回放至 1h(CLAUDE_USAGE_STALE_MS,:39);对照组 samplesFromOfficialHistory(quota-value.ts:480-491)确以 slice.fetchedAt 为 now 正确对齐。无测试覆盖 stale slice 进 samplesFromOfficial(quota-value.test.ts:603 只测自洽样本的平台化),文档无任何\"有意如此\"声明,§14(:719)fail-closed 原则反而支持修复。用真实模块跑 /tmp 模拟(真值 $0.50/pct,$6/h 燃烧,40min 退避):平台样本 cum 被 :305-307 替换规则从 $5.95 固化抬至 $9.95,前向差分斜率 9 倍膨胀、后向差分 9 倍压低,cheap 门(:380,:394)误触发 → 3h 窗置信度 high→medium,100min 窗 high→low,60min 窗直接 none(L2/L3 全失);fetchedAt 对齐版三例全部保持正确。仅两点小修正:(1) 退避烧钱同时膨胀前一差分、压低后一差分,并非单向压低;(2) 清洁数据下 MAD+加权中位数保住点估计,主要实害是 cheap 误报与置信度系统性降级直至整窗校准归零,以及被污染的平台样本随窗口留存于 quotaSamples;30s 正常缓存路径的偏差(~$0.05)可忽略,实害集中在退避场景。",
+        "worth_fixing": "yes",
+        "fix_sketch": "在 samplesFromOfficial 的 consider() 内改用切片自身观测时刻:const at = slice.fetchedAt || now; const bounds = windowBounds(slice, kind, at) — 与 samplesFromOfficialHistory(quota-value.ts:480-491)完全一致,使事件截止变为 min(fetchedAt, resetsAt),同时顺带消除退避跨 reset 时 advanceWindow 把陈旧 pct 滚进新窗的次生污染(旧 pct 留在旧窗 id 内)。可选硬化(fail-closed,符合 §14):slice.windowStale 时跳过 five_hour 采样、weekStale 时跳过 weekly 采样;对齐修复后 stale 回放只会重写出同一 timestampMs/pct 的等价样本(仅吸收迟到的 JSONL 行,良性),故 stale-skip 为锦上添花而非必需。回归测试:构造 fetchedAt 落后 now 40min 的 stale slice + 期间新增事件,断言平台样本 cumulativeObservedUsd 不含 fetchedAt 之后的事件、且退避结束后 cheap/置信度不降级(可直接移植 /tmp/synq-stale-sim/sim.mjs 场景)。"
+      }
+    },
+    {
+      "title": "陈旧官方切片被 advanceWindow 前滚成当前窗口幻影样本，单调合并永久拒真",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 508,
+      "claim": "samplesFromOfficial 的 consider()（quota-value.ts:502-516）不检查 slice.windowStale/weekStale，windowBounds 的 advanceWindow（quota-value.ts:52-58,125-135）把已过期的 windowResetsAt 前滚到当前时刻所在窗口，于是陈旧 pct 被写成当前 windowId 的样本，timestampMs（=旧 fetchedAt，quota-value.ts:512）早于窗口 start。codex 回退路径 official.server.ts:834（codexLive ?? codexLog）返回的会话日志切片完全没有 stale 标记；claude 的 staleOfficial（official.server.ts:263-270）虽打了标记但采样端忽略。模拟证实：26h 前的 codex 日志（pct 63）生成 windowId=当前窗口、ts 早于 start 的样本；随后 normalizeWindowSamples 的单调过滤（quota-value.ts:303）在 mergeSamples 持久化路径把 pct=2..10 的真实样本全部拒存，最终只剩 [80]。",
+      "impact": "codex API 拉取失败（无 auth.json / 离线）且用户数小时未跑 Codex CLI 时，每个新 5h 窗口都被旧日志的高百分比幻影样本污染并写入 localStorage；恢复后真实百分比低于幻影值的样本全被丢弃，该窗口 L2/L3 校准置信度永久 none，无法自愈。claude OAuth 失败退避（最长 1h 保留 stale 切片）期间跨过 5h reset 时同样触发。",
+      "suggestion": "consider() 跳过 windowStale/weekStale 为 true、或 fetchedAt 早于 bounds.start 的切片；codexLog 回退也按 fetchedAt 距今时长打 stale 标记；mergeSamples 拒绝 timestampMs 早于窗口起点的样本作为兜底。",
+      "severity": "high",
+      "kind": "bug",
+      "lens": "sampling",
+      "verdict": {
+        "verdict": "CONFIRMED",
+        "reasoning": "核心机制全部实证成立（/tmp/phantom-sim.test.ts 直接 import 真实模块跑通，2/2 pass）：\n\n1. **采样端确实无稽核**：quota-value.ts:502-516 `consider()` 只检查 `used == null` 与 `bounds.rolling`，从不看 `windowStale`/`weekStale`，也不比对 `fetchedAt` 与 `bounds.start`。quota-value.ts:512 `timestampMs: slice.fetchedAt || now` 原样携带旧时间戳。\n2. **前滚成幻影窗**：quota-value.ts:52-58/125-135 对过期 `windowResetsAt` 按 span 整数倍平铺到含 now 的 tile（仅 five_hour；weekly 不前滚——发现所述本就是 5h 场景）。模拟：26h 前的 codex 切片（pct 63）→ rolling=false、windowId=当前 tile、timestampMs 早于窗口 start 26h。\n3. **codex 回退路径可触发**：official.server.ts:834 `codexLive ?? codexLog`，codexLog 来自 readCodexOfficialFromSessions（official.server.ts:547-558），无任何 stale 标记，fetchedAt=最后一条日志时间（可任意旧）。反驳点\"会话日志无绝对 reset_at → 恒 rolling → 不可触发\"被实机证据推翻：本机 ~/.codex/sessions/2026/08/20/rollout-*.jsonl 的 rate_limits 实含 `\"resets_at\": 1787815628`（绝对秒），official.ts:481 能读到；本账户是周池 pro，5h 腿需 Plus 类计划，但日志格式同样带 resets_at。\n4. **claude stale 腿成立**：official.server.ts:263-270 打了 windowStale=true，但采样端忽略；stale 切片最长保留 1h（official.server.ts:39,670），足以跨 5h reset 边界。模拟确认 windowStale=true 的切片照样生成 ts 早于窗口 start 的 pct=80 幻影样本。另发现同族更持久变体：OAuth 失效超 1h 后回退 plan-usage-history（official.server.ts:832 mergeClaudeOfficial），parseClaudePlanHistory（official.ts:229-268）fetchedAt=最后历史点、无 stale 标记，且 slicesFromClaudeHistory 与 advanceWindow 用同一锚链平铺、仅在观测到 ≤1 低点才重锚（official.ts:183-188），此变体 windowId 碰撞是结构性必然。\n5. **单调合并永久拒真**：mergeSamples 在写入时即做 normalizeWindowSamples 压缩（quota-value.ts:447 → 303 `if (row.usedPercent < maxPct) continue`），结果经 store.ts:472/587 持久化到 localStorage（synq-quota-v8）。模拟：同 windowId 下 pct 2/4/6/8/10 的真实样本全部被拒，只剩 [63]，calibrateFromSamples 置信度 none。\n6. **无测试覆盖**：quota-value.test.ts:564 只测 rolling 跳过；windowStale/weekStale 仅在 official.server.test.ts:477-479,580 测 merge/持久化语义，无任何测试断言 stale 切片不产样本。\n7. **非有意设计**：docs/subscription-quota-value-algorithm.md:839 明文\"官方 quota 每次**成功刷新**时生成一个候选 QuotaSample\"，失败刷新的 stale 残留生成样本直接违背文档；§9.4\"窗口不确定时…不保存为新窗口的基准样本\"的 fail-closed 原则也指向应跳过。不属于\"有意保守被误报\"。\n\n保留意见（发现中被夸大的部分）：(a) \"恢复后真实样本全被丢弃、永久无法自愈\"以幻影 tiled windowId 与恢复后真实 resets_at 的 windowId 碰撞为前提——claude 历史回退变体结构性必然、codex/OAuth 恢复腿在 60s 取整粒度下为条件性（连续重度使用跨边界时高概率，闲置后重启则大概率错开、幻影沦为死窗垃圾只占一个保留槽）；(b) 后果是保守型失效（该窗显示\"样本不足\"而非错误金额，幻影基线斜率大多被 slice(1,-1) 删失剪裁与 MAD 吸收），故实际严重度偏 medium 而非 high。但 codex 无 auth.json 的用户（日志是唯一来源，属默认形态）长期处于可触发态，机制、持久化污染与文档违背均坐实。",
+        "worth_fixing": "yes",
+        "fix_sketch": "三层修复（由主到兜底）：\n1. **采样准入**（quota-value.ts consider()，主修）：kind===\"five_hour\" 且 slice.windowStale、或 kind===\"weekly\" 且 slice.weekStale 时直接 return；再加通用不变量 `if ((slice.fetchedAt || now) < bounds.start) return;`——后者一并覆盖无标记的 codexLog 回退与 claude plan-usage-history 回退（观测时刻必须落在其所属窗口内，这也是 samplesFromOfficialHistory 传 now=fetchedAt 时天然满足的性质，不会误伤历史回放）。\n2. **来源打标**（official.server.ts:834）：codexLog 按龄期打 stale（如 now - fetchedAt > windowDurationMs ?? 5h 时 windowStale/weekStale=true），使 engine.ts:67-68 的 meterFieldSource 显示层同步受益；claude history 路径同理。\n3. **持久层兜底**（quota-value.ts mergeSamples 或 makeSample）：拒绝 timestampMs 早于 windowId 内嵌 start 锚点的样本入库，防其它未来来源复现同类幻影。\n测试：新增 stale codex 日志切片/claude windowStale 切片经 samplesFromOfficial 产 0 样本的用例，及\"旧幻影不再拒真样本\"的 mergeSamples 回归（可直接改造 /tmp/phantom-sim.test.ts 断言反向）。"
+      }
+    },
+    {
+      "title": "samplesFromOfficialHistory 对每条历史 slice 全量重放事件数组，O(H×E) 在真实数据上单次阻塞主线程 ~2s 且随用量线性恶化",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 480,
+      "claim": "quota-value.ts:480 的循环对每条历史 slice 调 samplesFromOfficial(quota-value.ts:495-525)，每 slice×2 个 kind 各做一次 eventsInWindow 全量扫描(quota-value.ts:139-150，20k 事件 ~0.7ms/次，含 new Set 去重)+observeWindow 对窗口内全部事件逐个 costBreakdown 计价(quota-value.ts:166-177)+mergeSamples 对全部既有采样做字符串规范化(quota-value.ts:443)。实测本机真实数据：codex 冷扫描产出 officialHistory H=6,852 条(codex-log.server.ts:188-199 的去重 key 含 fetchedAt，逐 turn 快照几乎不去重)，配 20k 事件重放耗时 1,805ms 只产出 49 个保留采样(~36ms/有效采样，绝大部分算力被 retention 丢弃)；claude plan-usage-history 另有 H=997。该重放在浏览器主线程执行(dashboard.tsx:282 recordCodexHistory、:287 recordOfficialHistory)，且 realEvents 不持久化导致每次启动都全量重放。",
+      "impact": "每次 app 启动（以及关掉 demo 模式重新水合时），UI 主线程冻结 ~2-3 秒（浏览器通常比 Node 基准更慢）；重度 Codex 用户一周内 turn 数达 2-3 万时冻结可达 6-10 秒，界面完全无响应。",
+      "suggestion": "两步优化：(1) 重放前按 windowId 分组，窗口内事件按 ts 排序一次并做 USD/coverage/modelMix 前缀和，每条 slice 只需二分 fetchedAt 取前缀值，复杂度从 O(H×E) 降到 O(E log E + H log E)；(2) 对 codex officialHistory 参照 grok 的做法(official.ts:356-365)在扫描端按『同窗口且 floor(pct) 相同』折叠相邻快照，H 可先降一个数量级。另可把 mergeSamples 改成批量模式，避免每 slice 重复 canonicalize 全部既有采样。",
+      "severity": "high",
+      "kind": "performance",
+      "lens": "performance",
+      "verdict": {
+        "verdict": "CONFIRMED",
+        "reasoning": "核心主张全部在真实代码与本机真实数据上复现。(1) 热路径存在：samplesFromOfficialHistory (src/lib/quota/quota-value.ts:474-493) 对每条 slice 调 samplesFromOfficial→consider (quota-value.ts:502-517)，非 rolling 时每 slice 做 eventsInWindow 全量扫描 (quota-value.ts:139-150)+observeWindow 逐事件 costBreakdown (quota-value.ts:166-177)+mergeSamples 全量 canonicalize (quota-value.ts:443)。(2) 唯一可能的否定路线——\"codex 会话日志无绝对 reset 时间→slice 判 rolling→consider 在 quota-value.ts:507 提前返回\"——被实测否定：本机 ~/.codex/sessions rollout 日志 rate_limits.primary 实际携带 resets_at(epoch 秒)，parseCodexWindow (src/lib/quota/official.ts:481-486) 读取后全部 6,852 条 slice 非 rolling(背景研究员\"resetsAt 恒 null\"的事实对当前 codex 版本已过时)。(3) 数字逐项复现：scanCodexUsage(0) 冷扫描产出 officialHistory H=6,852(逐字吻合，因 codex-log.server.ts:188-199 去重 key 含 fetchedAt 几乎不去重，而 grok 同类路径 official.ts:351-368 有 floor(pct) 折叠、claude 路径 official.ts:176+ 有 samePlateau 折叠，唯独 codex 没有)；Node 重放实测 1,609-1,637ms 恰好产出 49 个保留采样(与 claim 的 1,805ms/49 一致)；claude plan-usage-history H=998+grok 28 再花 197ms。(4) 主线程与每次启动重放属实：recordCodexHistory/recordOfficialHistory 是 zustand 客户端 store action (src/lib/quota/store.ts:475-488)，由 dashboard.tsx:282/287 在渲染进程同步调用；realEvents 与 codexCursor 不在 partialize 持久化清单 (store.ts:571-588)，页面加载 since=0 触发 codex-log.server.ts:122-126 游标全重置→全量重扫重放，setDemoMode(false) 归零 cursor (store.ts:228-230) 亦复现。(5) 非有意设计：docs/subscription-quota-value-algorithm.md 通篇无重放成本/性能声明，且实测按 grok 先例折叠后(H 6,852→772)重放 186ms 产出与全量重放逐字节相同的 49 个采样——被丢弃的 ~98% 算力确无语义价值，与 fail-closed 保守主义无关。测试覆盖：quota-value.test.ts:655/683 仅小 H 功能用例，codex-log.server.ts 无对应测试文件，无性能护栏。唯一轻微夸大处：impact 中\"2-3 万 turn 冻结 6-10 秒\"是 H×E 双线性外推(实测 0.24ms/slice@6.5k 事件，外推量级成立但未实测)，以及 WebView(JSC) 未必比 Node(V8) 慢，故为 PLAUSIBLE 级细节，不影响主判定。",
+        "worth_fixing": "yes",
+        "fix_sketch": "分三步、按性价比排序：(1) 首选低风险扫描端折叠——在 codex-log.server.ts:188-199 的去重处参照 parseGrokBillingLogAll (official.ts:351-368)，将\"同 windowResetsAt/weekResetsAt/weekStartedAt 且同 pct(整数场景可 floor，稳妥可用精确值)\"的相邻快照折叠为保留最后一条；实测 H 6,852→772、重放 1,609ms→186ms、保留采样集与全量重放逐字节一致，约 15 行改动即可消除 ~90% 冻结。(2) 若仍需更快或防重度用户恶化：samplesFromOfficialHistory 内按 (agent,kind,windowId) 预分组，窗口事件按 ts 排序一次并做 usd/tokens/pricedTokens/modelMix 前缀和，每 slice 二分 fetchedAt 取前缀差，复杂度 O(E log E + H log E)。(3) mergeSamples 批量化：重放循环内把 existing 的 normalizeSampleWindowId canonicalize 提到循环外做一次，避免每 slice 重复规范化整个采样数组。另可考虑把冷启动重放挪到 server function 或 Web Worker，彻底离开主线程。回归护栏：新增测试断言折叠前后 samplesFromOfficialHistory 输出等价，以及对逐 turn 快照密度的 H 上界断言。"
+      }
+    },
+    {
+      "title": "±15% 最小误差带在 low 置信度下实测覆盖率仅 ~64%，与文档『覆盖百分比取整』的声明不符",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 397,
+      "claim": "quota-value.ts:397-400 的区间 = 25/75 加权分位 ∪ 点估计±band(0.15/0.25/0.10)，band 不随有效 Δpct 总量（sumPct）缩放。文档 §11.4 声称最小误差带用于『覆盖百分比取整』。用真实 calibrateFromSamples 做纯 floor 量化噪声模拟（无漂移/无外部用量/coverage=1，4000 trials）：low 置信度区间（sumPct≈2-6）对真值的覆盖率仅 63.9%，medium 区间 87.0%；点估计均值 47.4（真值 50）。每个整数量化边界引入的相对误差 ~1/sumPct，sumPct=2 时单斜率误差可达 ±50-100%，远超 ±15% 带宽。",
+      "impact": "文档 §11.6 允许 low 置信度上主卡展示区间；用户看到的 [low, high] 在最需要区间保护的小样本阶段有 >1/3 概率不含真值，区间语义（fail closed、宁可宽不可假精确）被打破。",
+      "suggestion": "让最小带宽随量化信息量缩放，例如 band = max(现值, c/sumPct)（c≈1，使 low 档模拟覆盖率 ≥90%，可直接用 /tmp/synq-sim/sim2.mjs 标定 c）；或在 low 档强制 band ≥ 0.5。同时把 25/75 分位改为对量化误差显式建模的区间而非纯经验分位。",
+      "severity": "medium",
+      "kind": "statistical",
+      "lens": "stats-method",
+      "verdict": {
+        "verdict": "PARTIAL",
+        "reasoning": "## 核实过程（读码 + 复跑研究员模拟 + 自建对照模拟）\n\n**成立的部分**\n\n1. 代码引用属实：quota-value.ts:397-400 中 band 固定为 0.15/0.25（high+小数百分比缩到 0.10），完全不随 sumPct（quota-value.ts:381）缩放；区间 = [min(P25, point·(1-band)), max(P75, point·(1+band))]。\n2. 文档引用属实：docs/subscription-quota-value-algorithm.md:611-617 明文「区间过窄时仍至少保留以下误差带，以覆盖百分比取整 minimumRelativeBand = 15%」；:644 允许 low 在主卡展示区间；UI 确实这样做（agent-card.tsx:356-382，confidence !== \"none\" 即显示 [low, high] 区间 + 置信度标签）。\n3. 复跑研究员自己的 /tmp/synq-sim/sim2.mjs（直接 import 真实 calibrateFromSamples）：low 档 coverage=63.9%、medium 87.0%、点估计均值 47.4（真值 50）——数字可复现。\n4. 最坏情形数学成立：单斜率 Δpct=2 时 floor 量化相对误差可达 ±50%，±15% 带确实盖不住；无任何测试断言区间覆盖率（quota-value.test.ts:232-247 只断言带宽 ≥ 0.3·point 存在，:102-113 只断言 1% 噪声封顶 low）。\n5. 不能以「有意 fail-closed」驳回：文档给最小带的**声明目的**就是覆盖取整（:611），实测在稀疏采样域没做到；显示过窄区间是「假精确」，恰与 fail-closed（宁可宽）相反。\n\n**被驳倒/削弱的部分（核心）**\n\n6. 「low 置信度实测覆盖率仅 ~64%」**不是 low 档的普遍性质，而是采样密度 ≥0.6 pct/次 这一极端 regime 的性质**。研究员 sim 的 pollPct=0.6 意味着每次官方采样间烧掉 0.6% 额度；synq 实际打开时官方百分比每 ~30s 刷新一次（official.server.ts:37 GROK_BILLING_CACHE_MS=30_000 作为默认 cacheMs，:693；dashboard.tsx:303 每 2.5s tick + store.ts:467 每次 setOfficial 记样本），0.6%/30s 等价于每小时烧掉 5h 池的 72%（<1.5h 耗尽整窗）。\n7. 管线里有一个研究员模拟绕开了的**抗量化设计**：normalizeWindowSamples（quota-value.ts:303-311）对同一整数平台保留**最后一个**采样，密集轮询下保留样本自动贴齐整数边界，量化误差 → pollStep/Δpct 而非 1/Δpct。我用同一真实管线做扫描（/tmp/verify-band/sim.mjs，4000/3000 trials）：low 档 coverage 随烧速变化为 10%/h→100%、24%/h→98.6%、36%/h→93.7%、48%/h→83.6%、72%/h→69-81%、96%/h→59.6%。间歇开 app 场景（更贴近 dashboard 真实用法）为 87.1%-99.9%。\n8. 「app 关着就没样本」对 Claude 还被 official.server.ts:288-297 部分缓解：readOfficialHistory 从 Claude 桌面端自己的 plan-usage-history.json 回放历史点。\n9. 文档 §11.2（:572）已明示「只有 1% 变化的片段受取整影响很大，只能用于低置信度」，即量化噪声的设计缓解是置信度阶梯+标签，测试 quota-value.test.ts:102 已覆盖该意图——finding 把带宽当成唯一防线，忽略了这层。\n\n**结论**：机制真实（band 不随信息量缩放 + 文档声明目的在稀疏域落空 + 无覆盖率测试），但影响被高估：64% 只出现在爆发式烧量（<1.5h 耗尽 5h 窗）或长期关 app 的稀疏采样角落；app 常开 + 正常烧速下 low 档覆盖率 94-100%。故判 PARTIAL 而非 CONFIRMED。",
+        "worth_fixing": "maybe",
+        "fix_sketch": "在 quota-value.ts:397 之后加一行信息量下限（已在 /tmp/verify-band/quota 补丁副本上实测）：`if (confidence !== \"high\") band = Math.max(band, C / sumPct)`，C≈1。实测效果：研究员 regime low 档 69.2%→91.4%，间歇 app 87.1%→96.8%，全部密集场景 ≥97%；代价是密集低样本期区间平均宽度 ~30%→~72%（fail-closed 可接受，且 medium 时 sumPct≥5 使下限 ≤0.2 影响很小；若嫌宽可只对 confidence === \"low\" 生效或取 C=0.7）。同步改文档 §11.4：注明最小带随累计 Δpct 缩放（≈±C/sumPct），并补一条回归测试断言 low 档区间宽度 ≥ 2·C/sumPct·point。更彻底的方案（可后置）：利用保留样本的平台结构推确定性量化包络（每端点 ±1 pct 上界），代替全局常数带。"
+      }
+    },
+    {
+      "title": "MAD 离群过滤以无权中位数为中心，与 Δpct 加权点估计不一致，可整批误杀高权重准确斜率",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 361,
+      "claim": "quota-value.ts:359-361 用无权 median(values) 作为 MAD 中心和 0.25·m 参考，而点估计用 Δpct 加权中位数（:364）。当多条小权重（Δpct=1，量化噪声大）斜率按条数占多数时，无权中心被它们劫持；若它们数值相同（等大小请求在整数取整下常见），mad=0，保留带坍缩为 ±0.25·m。真实函数模拟：8 条 (w=1, v=0.20) + 2 条 (w=10, v=0.50) → 两条携带 20/28 权重的准确斜率被当离群值剔除，totalPointUsd=$20（权重一致估计 ≈$46），且 confidence=medium。",
+      "impact": "整数取整供应商（Claude）在多次小额请求 + 少数大段消耗的窗口里，点估计可被低权重噪声簇拖偏 50%+ 而置信度仍显示 medium——过滤器和估计器对『中心』的定义互相矛盾时以噪声簇为准。",
+      "suggestion": "MAD 过滤与点估计使用同一中心：m = weightedMedian(compatible)，mad 也按权重计算（weighted MAD）；并在 mad=0 退化时放宽为仅执行 0.25·m 相对带或跳过过滤（n≤3 时 MAD 本就无判别力）。",
+      "severity": "medium",
+      "kind": "statistical",
+      "lens": "stats-method",
+      "verdict": {
+        "verdict": "CONFIRMED",
+        "reasoning": "## 判定：成立（已用真实代码路径复现）\n\n**1. 机制核实（读码）**：`src/lib/quota/quota-value.ts:358-360` 的过滤中心 `m = median(values)`、`mad = median(|v-m|)` 均为无权（按条数）计算，`:361` 用 `max(3·mad, 0.25·m)` 保留带；而点估计 `:364 weightedMedian(kept)` 与区间 `:365-366` 按 Δpct 加权。两个\"中心\"定义确实互相矛盾。\n\n**2. 场景可触发（真实模块模拟）**：在 /tmp 写 Node 测试直接 import 仓库的 `calibrateFromSamples`，构造合法单调采样序列（同 windowId/同 pricingVersion/coverage=1/同 modelMix，经 `validSlopes`+`slice(1,-1)` 后剩 8 条 (w=1,v=0.20)+2 条 (w=10,v=0.50)）。实测输出：`totalPointUsd=$20.00, confidence=\"medium\"`，两条携带 20/28 权重的斜率被整批剔除；权重一致中心给 $50。与发现声称的数字逐项吻合。且 mad=0 坍缩并非必要条件——第二组模拟用非等值紧簇（0.18~0.22，mad>0）同样得 $20/medium，因为 `0.25·m` 相对带本身就足以剔除距簇中心 >25% 的任何高权重斜率。\n\n**3. 非\"有意保守设计\"**：`docs/subscription-quota-value-algorithm.md:576-595`（§11.3）确实规定了同样的非对称公式（无权 m/mad + 加权点估计），代码忠实实现了文档——但文档未给出任何\"按条数抗差是有意防护\"的理由；相反文档 :572 明文\"只有 1% 变化的片段受百分比取整影响很大，只能用于低置信度估算\"，却让这批片段按条数定义信任域并驱逐高 Δpct 片段，与文档自身的可靠性模型自相矛盾。且失败结果是\"偏差 50%+ 的点估计 + medium 置信度\"，这违背而非体现 fail-closed 原则，不能以保守主义豁免。\n\n**4. 无测试覆盖**：唯一 MAD 测试 `src/lib/quota/quota-value.test.ts:127-144`（\"MAD drops extreme slopes\"）是 7 条均匀 Δpct=3、v=0.46 斜率 + 1 条 v>10 的荒谬离群值——条数多数与权重多数一致，从未覆盖两者分歧的情形。仓库测试套件当前全绿，模拟即真实行为。\n\n**5. 加重情节（发现未提及）**：`:380` cheap 门 `s.value < m*0.4` 用的是同一个无权 m。最现实的触发机制正是 §12.2 要防的\"部分外部用量\"（第二设备持续消耗 → 本地小斜率簇系统性偏低）：此时被污染簇劫持了 m，干净的高权重本地爆发斜率被当离群值剔除，而 cheap 检测因参照系就是污染值本身而永不触发——同一个中心选择同时击穿了估计器和为此设计的防御。\n\n**一处公允修正**：发现建议的\"直接改加权 MAD\"有代价——现无权中心恰好能防住单条被污染的超大 Δpct 斜率（如长间隔混入外部用量的合并片段）按条数被多数票剔除；换纯加权中心后劫持权转移到大权重方（尽管该斜率今天只要通过过滤就已独占点估计）。故修复需带双中心分歧守卫，非简单替换。",
+        "worth_fixing": "yes",
+        "fix_sketch": "在 quota-value.ts:358-361 做中心一致化 + 分歧守卫（同步更新 docs §11.3 与测试）：\n1) `const mW = weightedMedian(compatible)`；weighted MAD：对 `|v-mW|` 按同权重取加权中位数；保留带仍 `max(3·wmad, 0.25·mW)`。\n2) mad≈0 或 compatible.length≤3 时退化为仅执行 0.25·mW 相对带（小 n 下 MAD 无判别力）。\n3) 双中心守卫：同时算无权 `mU = median(values)`，若 `|mW-mU| > 0.25·max(mW,mU)`（窗口双峰、两种中心互不认账），置信度封顶 low 并放宽误差带到 ±25%——这是\"任何单点估计都可疑\"的真信号，符合 fail-closed。\n4) cheap 门 :380 改用同一 mW 参照，并按文档 §12.2 把 cheap 片段真正从 kept 中排除（现只降置信度，与文档 :666 \"作为异常值排除\"不符）。\n5) 新增测试：count-majority ≠ weight-majority 场景（8×(w=1,v≈0.2)+2×(w=10,v=0.5)），断言高权重斜率不被整批剔除、或至少置信度降为 low；保留现有 :127 极端离群测试确保单条大权重污染斜率仍被剔/被守卫降级。"
+      }
+    }
+  ],
+  "unverified": [
+    {
+      "title": "weightedMedian 取下加权中位数，等权偶数条斜率时系统性偏低（两条时直接取最小值）",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 209,
+      "claim": "quota-value.ts:205-211 在 `acc >= total / 2` 处返回，等权重且累计权恰好命中半数时选择下侧元素，不做插值。整数取整供应商的斜率权重全为 1（Δpct=1），偶数条等权是常态。真实函数验证：kept={0.40 w10, 0.60 w10} → totalPointUsd=40（公平中点 50）；{.4,.6,.4,.6} 等权 → 40。sim2 蒙特卡洛中 low 档点估计均值 47.4 vs 真值 50，主要即来自此下中位数惯例与 floor 量化叠加。",
+      "impact": "点估计对偶数条等权样本系统性偏低最多一个相邻次序统计量间距（两条时 = 完全取低值，本例 -20%），整窗/剩余金额被持续低报，且该偏差不体现在区间语义里（区间围绕已偏的点对称扩展）。",
+      "suggestion": "标准加权中位数插值：当 acc === total/2 时返回当前值与下一值的均值（对应无权 median 的偶数处理，quota-value.ts:195-200 已是这么做的），消除下侧偏置。",
+      "severity": "medium",
+      "kind": "statistical",
+      "lens": "stats-method"
+    },
+    {
+      "title": "advanceWindow/slicesFromClaudeHistory 假设 5h 窗口连续平铺，与 Claude 实际'闲置后首条消息开窗'语义冲突，产生幻影窗口并造成双源 windowId 摇摆",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 52,
+      "claim": "advanceWindow 把过期 resetsAt 按 originStart+n*span 平铺推进（:52-58、:125-135）；slicesFromClaudeHistory 同样按 `fiveStartedAt += FIVE_HOUR_MS` 平铺（official.ts:186-189），且锚点取'观测到下降的采样时刻' p.t（official.ts:183），而 OAuth live 给出精确 resets_at。Claude/Codex 的 5h 窗实际从闲置后首条消息开始，不平铺。mergeClaudeOfficial 在 live stale 时切换到 history 锚点（official.server.ts:331-343），quotaValueFor 只精确匹配 windowId（quota-value.ts:550-551）。",
+      "impact": "场景：窗口 05:00-10:00 结束（76%），闲置到 13:00 重新开工（真窗 13:00-18:00）。官方数据未刷新时 advanceWindow 生成幻影窗 10:00-15:00：UI 把陈旧 76% 和错误的 15:00 倒计时挂在其上；13:00 后的事件被 makeSample 记入幻影 windowId，陈旧期每 5h 平铺一个新幻影 id，逐个挤占 mergeSamples 每组仅 8 个窗口的保留位（:466-471）。另外 live 与 history 推出的锚点差超过 30s 时（drop 检测滞后于真实 reset），同一真窗在两个 canonical windowId 间摇摆，两套样本互相孤儿化，校准反复冷启动。",
+      "suggestion": "5h 窗口过期后不要平铺外推：resetsAt < now 时降级为 rolling（不生成 windowId、不采样），等下一次官方刷新给出真实锚点再恢复；mergeClaudeOfficial 切换数据源时若两源锚点差 < 数分钟应固定采用 OAuth 精确锚点，避免 windowId 摇摆。",
+      "severity": "medium",
+      "kind": "bug",
+      "lens": "correctness"
+    },
+    {
+      "title": "normalizeWindowSamples 把同窗百分比下降一律当 stale 丢弃，真实的窗内配额调整会产生跨不连续点的畸形斜率",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 304,
+      "claim": "`if (row.usedPercent < maxPct) continue`（:303-304）只覆盖了'陈旧并发读'场景（测试 :603 认可），但文档 §14 明文'百分比下降 | 视为 reset 或数据回滚，开启新窗口'（docs/subscription-quota-value-algorithm.md:711）。当下降发生在 windowId 不变的窗口内——如 Grok 中途购买 credits/升级套餐使 creditUsagePercent=used/total 因分母变大而下降（billingPeriodStart/End 不变 → windowId 不变）——实现既不开新窗也不停止校准。",
+      "impact": "样本序列 (40%,$20) → 升级后 (20%,$21)、(25%,$23)…全部被丢弃，直到 pct 重新超过 40%：此时 (40%,$20)→(41%,$35) 形成 dPct=1、dUsd=15 的斜率（真值约 0.5），15 倍膨胀的离群值进入校准；若窗内斜率总数少，MAD 无法剔除，整窗/剩余估算严重虚高。",
+      "suggestion": "在 normalizeWindowSamples 或采样入口检测持续性下降（例如连续 ≥2 个样本低于 maxPct 且降幅 >1~2%），视为窗内配额调整：清空该 windowId 的历史采样、以下降点重新建立基线（等价于开新校准序列），而非静默丢弃。",
+      "severity": "medium",
+      "kind": "bug",
+      "lens": "correctness"
+    },
+    {
+      "title": "缺模型信息的事件被静默按旗舰模型计价，违反 fail-closed（文档 §20-4）",
+      "file": "src/lib/quota/claude-jsonl.ts",
+      "line": 109,
+      "claim": "claude-jsonl.ts:109 `String(msg.model ?? obj.model ?? \"claude-sonnet-5\")` 在日志缺 model 字段时把 modelRaw 默认成可精确命中的 claude-sonnet-5（quality=exact）；codex-log.server.ts:157 把 meta.model 初始化为 \"gpt-5.6-sol\"（token_count 先于 turn_context 出现时按最贵的 Sol 精确计价，实测 lookupPricing(\"\",\"gpt-5.6-sol\") 也返回 family-fallback Sol 价）；grok-log.server.ts:175 默认 \"grok-4.6\"（精确命中）；parse.ts:42-43 导入路径同样默认 sonnet/grok-4.6/gpt-5.6-sol。文档 §20 验收第 4 条要求\"未知模型会降低 coverage，而不是静默使用默认价\"，§7.1 禁止把未知模型静默映射到默认模型。",
+      "impact": "任何缺失/延迟出现模型字段的日志行（Codex resume 后 token_count 先于 turn_context、Grok modelUsage 缺失、Claude 截断行、手工导入无 model 字段）都会以旗舰价计入 L1 且 pricingQuality 标为 exact，coverage 不降。L1 金额被凭空抬高，且这些伪造金额进入 QuotaSample 污染 L2 斜率，UI 无任何降级提示。cost.test.ts 只测了 modelRaw=\"mystery-model-99\" 的显式未知，没测缺失路径。",
+      "suggestion": "三个解析器和 parse.ts 在模型信息缺失时应保留空 modelRaw 并让 lookupPricing 返回 unknown（进入 coverage 扣减），而不是注入可命中价格表的默认字符串；若要保留 UI 展示用的 model 族默认值，需将展示族与计价 modelRaw 解耦（modelRaw 置空或加 \"unknown:\" 前缀）。补充\"缺 model 字段 → priced=false 且 coverage 下降\"的测试。",
+      "severity": "medium",
+      "kind": "bug",
+      "lens": "costing"
+    },
+    {
+      "title": "family-fallback 遮蔽更近的精确价：dated Sonnet 4.6 被按 Sonnet 5 价低估 33%，dated Mythos 直接 unknown",
+      "file": "src/lib/quota/pricing-data.ts",
+      "line": 117,
+      "claim": "实测 lookupPricing(\"claude-sonnet-4-6-20251110\",\"sonnet\") 命中 FAMILY_FALLBACK[\"sonnet\"]=claude-sonnet-5（perM 2/10），而价格表 pricing-data.ts:97 里存在更贴切的 claude-sonnet-4-6（perM 3/15）：同一负载 $3 vs $4.5，系统性 -33%。MODEL_ALIASES (pricing-data.ts:109-115) 只登记了 fable-5/opus-5/sonnet-5 三个 dated 别名，而表内出现 claude-haiku-4-5-20251001 说明日志确实带日期后缀。另外 claude-jsonl.ts:20 把 mythos 归为 \"fable\" 族，pricing.ts:36 的 familyFromRaw 要求 raw 包含族名，\"claude-mythos-5-2026xxxx\" 不含 \"fable\"，实测返回 unknown——FAMILY_FALLBACK[\"mythos\"] (pricing-data.ts:119) 是从 claude-jsonl 路径永远不可达的死条目。",
+      "impact": "Sonnet 4.6 dated ID 的全部用量在 L1 被低估 33%（quality 仍是 family-fallback、coverage 不降，UI 无感知），并把 modelMix 键错记为 claude-sonnet-5，压低 L2 的 usdPerPct 校准单位；dated Mythos 用量则整段 unknown，把 pricedTokenCoverage 打穿 0.8 阈值导致 L1 置灰、采样对被丢弃。",
+      "suggestion": "在 lookupPricing 里于 alias 之后、family-fallback 之前增加一步\"剥离尾部 -YYYYMMDD 日期后缀再精确匹配\"，或为 sonnet-4-6/opus-4-x/haiku/mythos 的 dated 形式补齐 MODEL_ALIASES；同时让 familyFromRaw 对 mythos→fable 这类跨名族做显式映射或直接删除死条目 FAMILY_FALLBACK[\"mythos\"] 换成别名。",
+      "severity": "medium",
+      "kind": "bug",
+      "lens": "costing"
+    },
+    {
+      "title": "perM 给 Grok/Codex 伪造 Anthropic 惯例的 cache-write 价格（input×1.25 / ×2），且叠加长上下文倍率",
+      "file": "src/lib/quota/pricing-data.ts",
+      "line": 42,
+      "claim": "pricing-data.ts:42-43 在未显式给出 cacheWrite5m/cacheWrite1h 时默认按 input×1.25 和 input×2 生成写缓存价，该惯例是 Anthropic 专属，但被无差别应用到 sol/terra/luna/gpt54/grok46/grok45/grokBuild01。grok-jsonl.ts:49 把 cacheCreationTokens 映射进 cacheWrite、codex-jsonl.ts:67 映射 cache_write_input_tokens，随后 cost.ts:47 按伪造价计费。实测 grok-4.6 1M cacheWrite 计 $5（2.5/M × 长上下文 ×2），而文档 §7.4 引用的 xAI/OpenAI 公开 rate card 与 §16 示例均只有 input/cached/output 三档、无 cache-write 费项。",
+      "impact": "只要 Grok/Codex 日志出现 cache-creation 类字段，L1 \"API 等价金额\"就按供应商公开价里不存在的费项虚增（且 contextTokens 把该部分计入长上下文判定后再 ×2 放大），Codex 的 openAiCredits 同步虚增；这些虚增金额流入 QuotaSample 抬高 usdPerPct，L2/L3 区间整体偏高。",
+      "suggestion": "perM 的 cacheWrite5m/cacheWrite1h 默认值改为 0（或 null 表示\"该供应商无此费项\"），仅在 Claude 系模型上显式传入 1.25×/2×；为 grok/codex 各加一条\"cacheWrite tokens 不产生费用\"的计价测试锁住语义。",
+      "severity": "medium",
+      "kind": "statistical",
+      "lens": "costing"
+    },
+    {
+      "title": "image token 全链路缺失：imageUsd 恒 0、事件模型无字段、rawTokens 不计入，低估时 coverage 仍为 1",
+      "file": "src/lib/quota/cost.ts",
+      "line": 55,
+      "claim": "文档 §5.1/§6.4/§8.1 要求 imageInputTokens/imageOutputTokens 参与 rawTokens 和 imageUsd = II×imageInputPerToken + IO×imageOutputPerToken；实现中 cost.ts:55 硬编码 `const imageUsd = 0`，types.ts:9-32 的 UsageEvent 没有 image 字段，三个 JSONL 解析器均不提取，tokens.ts:41-55 的 rawExclusiveTokens 也不含 image 项，pricing-data.ts:54-55 所有模型 imageInputPerToken/imageOutputPerToken 恒为 0。",
+      "impact": "带图任务的 L1 金额被系统性低估，且因 image token 根本不进入 observedTokens，pricedTokenCoverage 保持 1，不会触发文档 §10 的 \"≥ $X\"/置灰降级——属于\"低估但无降级信号\"的最坏失败模式；同窗 Δusd 偏低还会拉低 L2 校准斜率。",
+      "suggestion": "要么按文档补齐：UsageEvent 增加 image 字段、解析器提取（至少 Grok/import 路径）、rawExclusiveTokens 与 costBreakdown 纳入；要么修订文档删除 image 承诺，并在存在未计价 image 字段时把对应 token 计入 observedTokens 但不计入 pricedTokens（复用 cacheWriteUnsplit 的 coverage 扣减模式）。",
+      "severity": "medium",
+      "kind": "doc-mismatch",
+      "lens": "costing"
+    },
+    {
+      "title": "历史重放与实时路径对同一物理窗口生成不同 windowId，回填样本从不参与校准",
+      "file": "src/lib/quota/official.ts",
+      "line": 183,
+      "claim": "slicesFromClaudeHistory 用「reset 后第一个历史点的时间 p.t」当窗口锚点并按固定 5h 推进（official.ts:183-193），而实时 OAuth 路径用官方精确 resets_at（official.ts:89,128-139）；canonicalWindowAnchor 仅按 60s 取整（quota-value.ts:73），两种锚点相差通常远超 30s → 同一物理窗口拆成两个 windowId。quotaValueFor 用精确等值过滤样本（quota-value.ts:550-552），且 mergeClaudeOfficial 在 live 变 stale 时把 windowResetsAt 切到历史锚点（official.server.ts:331-346），windowId 中途翻转。",
+      "impact": "启动时 recordOfficialHistory（dashboard.tsx:284-289）的整段回填样本因 windowId 不匹配从不进入当前窗口校准，纯属白做；stale 期间 quotaValueFor 的 windowId 翻到历史锚点侧，此前积累的实时样本瞬间不可见，置信度闪落 none 再恢复；重复窗口还占用 8 窗口保留槽（quota-value.ts:469）。",
+      "suggestion": "生成 windowId 前把锚点吸附到已存样本中最近的同 kind 锚点（容差 ±10min 内视为同一窗口），或 compatibleSamples 匹配时改用同容差比较而非精确等值。",
+      "severity": "medium",
+      "kind": "design",
+      "lens": "sampling"
+    },
+    {
+      "title": "每 2.5s 轮询都无条件全量读取并解析三类本地文件，30s 缓存只罩住网络请求",
+      "file": "src/lib/quota/official.server.ts",
+      "line": 689,
+      "claim": "readOfficialQuota 在检查任何缓存之前就执行 readClaudeOfficial（全量 JSON.parse plan-usage-history.json，official.server.ts:272-281,689）、readGrokLog（整读并逐行 split 无上限增长的 ~/.grok/logs/unified.jsonl，official.server.ts:283-286,690；official.ts:350-369）、readCodexOfficialFromSessions（递归遍历全部 rollout 目录 + 读 8 个尾部，official.server.ts:547-558,691）；客户端 pullLogs 每 2.5s 调用一次（dashboard.tsx:303），cacheMs=30s 的 claude/grok/codex 缓存（official.server.ts:700-717）不覆盖这些文件解析。",
+      "impact": "Grok CLI 的 unified.jsonl 长到几十 MB 后，每 2.5s 一次全量读入 + split 造成常驻 CPU/GC 开销；codex sessions 积累数千个 rollout 文件时每 2.5s 全树 statSync。桌面应用后台空转也持续烧 CPU。",
+      "suggestion": "把三个本地读取纳入同一 30s 缓存并用 officialFilesMtime（official.server.ts:838）的 mtime 变化做失效；grok 日志改用已有的 readTail 尾部增量读，claude 历史文件按 mtime 未变直接复用上次解析结果。",
+      "severity": "medium",
+      "kind": "performance",
+      "lens": "sampling"
+    },
+    {
+      "title": "每次启动都做同步冷全扫：claudeCursor/realEvents 不持久化 → 2.2s 阻塞 Node 事件循环 + 6.5MB serverFn JSON 载荷",
+      "file": "src/lib/quota/claude-log.server.ts",
+      "line": 190,
+      "claim": "store.ts:571-588 的 partialize 不含 claudeCursor/grokCursor/codexCursor 与 realEvents，启动时 cursor=0 → scanClaudeUsage(0) 走 claude-log.server.ts:190-232 的全同步循环(openSync/readSync，:146-151)读完最近一周所有 jsonl。实测本机：607 个文件、19,421 事件、耗时 2,186ms 全程阻塞 sidecar 事件循环，返回体 JSON 6.5MB；codex 冷扫另加 891ms。setDemoMode(off) 把 cursor 归零(store.ts:228-230)会再次触发同样的全量重读（since<=0 还会重置服务端已读游标，claude-log.server.ts:180-184）。",
+      "impact": "每次启动约 3 秒内所有 serverFn（含 pullOfficialQuota）被同步 I/O 卡住，前端首屏数据延迟；6.5MB JSON 序列化/反序列化又各花数百 ms；关一次演示模式即重付全部成本。",
+      "suggestion": "冷扫描改为异步分批（fs/promises + 每 N 个文件让出事件循环，或分页返回增量 ingest），并把已解析事件（或至少 cursor+折叠后事件）持久化到本地（项目已有 @electric-sql/pglite），使启动路径变成真正增量；demo 关闭时不必重置服务端游标，直接用内存态回放。",
+      "severity": "medium",
+      "kind": "performance",
+      "lens": "performance"
+    },
+    {
+      "title": "稳态每 2.5s 对全部历史 jsonl 做两遍目录遍历 + 逐文件 statSync，成本随历史会话数无界增长",
+      "file": "src/lib/quota/claude-log.server.ts",
+      "line": 177,
+      "claim": "scanClaudeUsage 每次调用（dashboard.tsx:303 每 2500ms）都执行 listJsonl 全树遍历(claude-log.server.ts:46-70) + refreshWorkflowLabels 第二遍全树遍历(:72-96, :178)，随后主循环再对每个文件 statSync(:191-196)。mtime<weekStart 只跳过读取，statSync 照做。实测本机 1,724 个 jsonl（819MB 目录）warm 扫描 32ms/次；grok/codex 同款遍历另计。文件数只增不减，成本线性增长。",
+      "impact": "常驻后台每 2.5s 消耗 ~32ms（约 1.3% 单核）纯 syscall/GC 开销；历史文件涨到 1 万个量级时单次遍历将到 ~200ms，2.5s 周期内占比 8%，桌面常驻应用的功耗与风扇表现直接受损。",
+      "suggestion": "把『发现文件』与『读增量』解耦：低频（如 60s）做一次全树遍历刷新候选文件表（可用目录 mtime 剪枝或 fs.watch/FSEvents），高频 2.5s 循环只 stat 候选表中 mtime 在近一周内的活跃文件；workflowLabels 的第二遍遍历合并进同一次 walk。",
+      "severity": "medium",
+      "kind": "performance",
+      "lens": "performance"
+    },
+    {
+      "title": "ingest 在零新事件时仍重建+重排序 20k 事件数组并刷新引用，导致前端每 2.5s 全链路重算 ~5 次",
+      "file": "src/lib/quota/store.ts",
+      "line": 367,
+      "claim": "ingestClaudeLogs/ingestGrokLogs/ingestCodexLogs 对 incoming=[] 没有短路：每次都 filter 全量 realEvents、重建 Map、[...].sort() 并 set 新数组引用(store.ts:354-387, :367)。dashboard.tsx 每 2500ms 周期内 3 次 ingest + setOfficial + setNow 触发多轮渲染，visibleEvents useMemo(dashboard.tsx:106-109)因引用变化失效，级联重算 6×quotaValueFor + 3×meterFor(memo, :323-378) + checkAlerts 里另外 3×meterFor(:158-174) + 组件内未 memo 的 hourlySeries(usage-chart.tsx:15，24 桶×3 agent 全量 filter)、modelShares(agent-card.tsx:107)、timelineSessions。实测单轮全链路 ~12ms(Node, 20k 事件)，每周期约 4-5 轮 ≈ 50-60ms，另有 recordOfficialSamples 每周期被调两次(store.ts:467 与 dashboard.tsx:290)。",
+      "impact": "空闲状态下前端主线程每 2.5s 花 50-100ms（浏览器较 Node 慢）做与上一帧完全相同的计算与 React 调和，加上每周期数次 20k 元素数组分配/排序带来的 GC 压力——常驻应用持续耗电、动画掉帧。",
+      "suggestion": "ingest 里当 incoming 为空且非 replace 时保留原 realEvents 引用只更新 live/active 元数据；有增量时用归并插入代替全量 sort。checkAlerts 复用渲染层已 memo 的 meter 结果；hourlySeries/modelShares/timelineSessions 移入 useMemo 并按分钟粒度量化 now，避免 setNow 每 tick 击穿所有 memo。",
+      "severity": "medium",
+      "kind": "performance",
+      "lens": "performance"
+    },
+    {
+      "title": "每窗口冷启动：持久化保留 8 个历史窗口的采样但校准从不使用，5h 窗口前期恒为 none",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 550,
+      "claim": "quotaValueFor 只把 windowId 完全相等的采样传入校准（quota-value.ts:550-552），而 mergeSamples 特意按 agent+kind+product 分组保留最近 8 个窗口 × 128 采样（:466-471，文档 §18）——这批历史数据除了占 localStorage 外从未被读取。usdPerPct 的量纲（API 等价美元/配额百分比）在同一套餐、同一 pricingVersion 下跨窗口高度稳定，5h 窗口每天冷启动 4-5 次，每次都要重新积累 sumPct≥2 才有 low、≥5 才有 medium。",
+      "impact": "每个新 5h 窗口的前 2%（低速时约首个小时）L2/L3 显示『样本不足』，而上一个窗口 1 小时前刚以 high 置信度校准出几乎相同的斜率；对每周仅缓慢消耗的 7d 窗口，冷启动期可长达数天。信息被存储却被禁用，是纯粹的效率损失。",
+      "suggestion": "在文档 §9.3 禁止『混样』的前提下引入跨窗口 prior 而非混样：当前窗口斜率不足时，取同组最近 1-2 个已完成窗口（相同 pricingVersion、modelMixDrift≤0.35）的点估计作为先验，置信度封顶 low、band 至少 ±25%，并在 UI 标注『按上一窗口校准』；当前窗口有效斜率达标后立即切回纯当前窗口估计。",
+      "severity": "low",
+      "kind": "design",
+      "lens": "stats-method"
+    },
+    {
+      "title": "cheap 检测缺失文档 §12.2 的'模型组合没有同步变便宜'核对，且 cheap 片段可同时留在 kept 中参与分位数",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 380,
+      "claim": "`const cheap = compatible.some((s) => s.value < m * 0.4)`（:380）只比对斜率与中位数，未按文档 §12.2（docs:660-667）核对该片段模型组合是否同步变便宜；且 cheap 片段仅靠 MAD 剔除（:361），当 3·mad 阈值宽（斜率分散）时该片段留在 kept 中参与加权中位数/分位数，同时又触发降级——文档要求'该片段作为异常值排除'。",
+      "impact": "误报：drift≤0.35 允许约 35% 流量从 Opus(输入$5/M)切到 Haiku($1/M)，usdPerPct 合法跌破 0.4×中位数 → 被当作疑似他机用量降一级置信度，正常换模型的用户永远拿不到 high。漏保护：真部分外部用量片段（本机恰有小额事件使 dUsd>0）在斜率分散时既污染点估计/区间又降级，双重损伤。",
+      "suggestion": "cheap 判定时同步计算该片段 modelMix 相对当前片段的理论单价比：若混合价格下降幅度足以解释斜率下降则不触发降级；触发 cheap 的片段无论 MAD 结果如何都从 kept 中剔除后再算分位数。",
+      "severity": "low",
+      "kind": "doc-mismatch",
+      "lens": "correctness"
+    },
+    {
+      "title": "canonicalWindowAnchor 的 60s 四舍五入在半分钟边界翻转，亚秒抖动即可把同一真实窗口劈成两个 windowId",
+      "file": "src/lib/quota/quota-value.ts",
+      "line": 73,
+      "claim": "`Math.round(value / 60_000) * 60_000`（:70-74）在真实 reset 时刻落在 :30 附近时不稳定：测试自身承认 provider 存在 ±1s 抖动（quota-value.test.ts:344-349 codexResetA/B 差 1s），而 hh:mm:29.8 与 hh:mm:30.4 会舍入到相邻两分钟，生成两个 canonical id。quotaValueFor 只保留 windowId 严格相等的样本（:550-551），normalizeWindowSamples 也按 id 分组（:293）。",
+      "impact": "约 (抖动幅度/60s) 概率的窗口（每秒级抖动约 1.7%/窗，7d+5h 双窗长期运行必然命中）中途分裂：先前累计的采样全部孤儿化，校准瞬间从 medium 掉回 none，且两半样本各自占用 8 窗保留位。对'每个新窗口冷启动'的算法而言等于窗口中途清零。",
+      "suggestion": "改用容差匹配而非独立取整：quotaValueFor 过滤样本时允许锚点差 ≤ 某阈值（如 120s）即视为同窗；或采样时若已有锚点差 <2×粒度的既存窗口，归并到既存 canonical id 而不是重新取整。",
+      "severity": "low",
+      "kind": "bug",
+      "lens": "correctness"
+    },
+    {
+      "title": "realEvents 上限 20000 截断与 cumulativeObservedUsd 全量重算冲突：重度周窗后期新样本累计金额回退，斜率被静默丢弃或系统性压低",
+      "file": "src/lib/quota/store.ts",
+      "line": 103,
+      "claim": "trimEvents 只保留最近 20000 条事件（store.ts:22、:103-106），realEvents 不持久化；makeSample 每次从当前事件表重算窗口累计金额（quota-value.ts:423-430）。7d 周窗（Claude 每条 assistant 消息一个事件，三 agent 叠加）超过 20000 条后，窗口早期事件被逐步逐出，新样本的 cumulativeObservedUsd 低于旧样本。validSlopes 对 dUsd<0 只静默 continue（quota-value.ts:277），文档 §14 要求'丢弃采样对并记录异常'。",
+      "impact": "重度用户周中后段：每次 trim 推进都使新旧样本对 dUsd<0 被丢弃，trim 持续推进期间幸存斜率的 dUsd 都少算了被逐出的早期消耗 → 周窗 usdPerPct 系统性偏低、有效片段数骤减，置信度从 medium 滑向 none 或输出偏低的整窗/剩余估值，用户看到的'剩余 API 等价'被低估且无任何异常提示。",
+      "suggestion": "对进行中窗口把累计金额做单调化缓存（记录该 windowId 已观测的最大 cumUsd 及事件截断水位），或按 agent 分别限额并保证至少覆盖当前最长活跃窗口（7d）的事件；同时在 dUsd<0 时按文档记录数据异常而非静默丢弃。",
+      "severity": "low",
+      "kind": "statistical",
+      "lens": "correctness"
+    },
+    {
+      "title": "claude-jsonl parseTs 数值秒时间戳未换算毫秒（死三元表达式）",
+      "file": "src/lib/quota/claude-jsonl.ts",
+      "line": 35,
+      "claim": "claude-jsonl.ts:34-35 `if (typeof raw === \"number\" ...) return raw > 1e12 ? raw : raw;` 两个分支返回同一值，条件判断无效；对照 codex-jsonl.ts:29 的同构函数 `raw > 1e12 ? raw : raw * 1000` 可见意图是把 epoch 秒换算为毫秒，Claude 版漏写 `* 1000`。",
+      "impact": "任何以数值 epoch 秒记录 timestamp/ts 的 Claude 日志行会得到 ~1.7e9 ms（1970 年代）的事件时间：claude-log.server.ts:234 的 `ts <= now+60s` 不拦截，但 eventsInWindow/inWindow 的窗口下界把它们全部排除——事件被静默丢出 L1 与采样，且无任何异常记录。当前 Claude Code 写 ISO 字符串所以是潜伏缺陷，但该分支既然存在就应正确。",
+      "suggestion": "改为 `return raw > 1e12 ? raw : raw * 1000;` 与 codex/grok 解析器对齐，并补一条数值秒时间戳的解析测试。",
+      "severity": "low",
+      "kind": "bug",
+      "lens": "costing"
+    },
+    {
+      "title": "负数/NaN token 被静默 clamp 成 0 后照常计价，cached>input 异常标志被丢弃，未按文档 fail-closed",
+      "file": "src/lib/quota/tokens.ts",
+      "line": 2,
+      "claim": "文档 §8.4.2 规定\"任一输入为 NaN、负数或无限值时，该事件计价失败并进入 coverage 统计\"，§14 规定 cached>input 时要\"记录数据异常\"。实现里 tokens.ts:1-4 finiteNonNeg 把负数/NaN 直接归 0，cost.ts 继续正常计价（实测 tokensIn:-5000 时 priced=true、quality=exact、coverage 不降）；tokens.ts:14 计算的 cachedExceedsInput 在 codex-jsonl.ts:62、grok-jsonl.ts:44、parse.ts:58 三处调用点均被丢弃，无任何落点；且 tokens.ts:15 `cacheReadTokens = Math.min(cached, input)` 与文档 §6.2 公式 `cacheReadTokens = max(cached, 0)` 的截断口径也不一致。",
+      "impact": "损坏的日志行（负 token、cached 溢出）产生看似正常的 L1 金额和 100% coverage，既不进入降级展示也不留诊断痕迹；上游数据质量问题被完全掩盖，违背文档\"宁可不显示估算，也不显示伪精确金额\"的总原则。",
+      "suggestion": "finiteNonNeg 检出负数/非有限值时向上返回失败信号，costBreakdown 将该事件置 priced=false 使其进入 coverage 扣减；cachedExceedsInput 至少写入事件级诊断字段（类似 cacheWriteUnsplit），供 observeWindow/UI 统计数据异常。",
+      "severity": "low",
+      "kind": "doc-mismatch",
+      "lens": "costing"
+    },
+    {
+      "title": "costBreakdown 无 per-event 缓存，同一事件每个周期被重复计价 ~10 次以上",
+      "file": "src/lib/quota/cost.ts",
+      "line": 19,
+      "claim": "costBreakdown(cost.ts:19-72)每次调用都重新 lookupPricing（含 2 次 toLowerCase 字符串分配, pricing.ts:22-45）并重算全部金额。同一 tick 内同一事件被 quotaValueFor→observeWindow(quota-value.ts:168)、meterFor 的 apiUsdWindow/apiUsdWeek(engine.ts:166-167)、checkAlerts 重复的 meterFor、report 页 groupSessions(engine.ts:314/327) 各自独立计价；事件对象在 store 中引用稳定，结果纯函数可缓存。实测 observeWindow 单遍 20k 事件 1.2ms，全链路每周期十余遍全量计价。",
+      "impact": "20k 事件下每 2.5s 周期约 20-30 万次冗余 costBreakdown 调用（数十 ms CPU + 字符串垃圾），在 F1 的历史重放路径中同样被放大（每 slice 重新计价整个窗口）。",
+      "suggestion": "加 WeakMap<UsageEvent, CostBreakdown> 惰性缓存（pricingVersion 为常量，事件不可变，缓存安全），observeWindow/apiUsd/groupSessions 统一走缓存；配合 F1 的前缀和后收益更明显。",
+      "severity": "low",
+      "kind": "performance",
+      "lens": "performance"
+    }
+  ],
+  "overall": [
+    {
+      "lens": "stats-method",
+      "assessment": "L2/L3 校准的整体设计是认真的：同窗口差分回避了跨设备/中途启动偏差、Δpct 加权抵消了 1/Δpct 的 Jensen 偏置、windowId+pricingVersion 隔离和 fail-closed 降级路径都与文档一致，测试覆盖了主要行为规格。但统计细节上有一条高危缺陷（Δpct<1 相邻对直接丢弃且不链式合并，小数百分比 + 2.5s 轮询下校准可能永久失活）和一组相互放大的中危问题：MAD 过滤中心与加权估计器不一致、下加权中位数系统性偏低、±15% 最小带在 low 档实测覆盖率仅 ~64%、外部用量在被裁剪的首尾段逃逸检测——这些都已用真实导出函数的数值模拟（/tmp/synq-sim/sim1-3.mjs）确认，而非仅读码推断。修复成本都不高（链式差分、加权 MAD、中位数插值、带宽随 sumPct 缩放、检测提前到裁剪前），建议按 severity 顺序落地。"
+    },
+    {
+      "lens": "correctness",
+      "assessment": "整体实现质量较高：L1 互斥 token 计价、价格查找顺序、plateau 单调化、MAD/加权分位、Codex 费率豁免等与文档高度一致，测试覆盖了大部分规格分支。但边界正确性上有两类系统性缺口：一是采样时间对齐——live 采样把陈旧官方百分比与实时累计金额错位配对、5h 窗口平铺外推与 Claude 真实开窗语义冲突、60s 取整在半分钟边界不稳，均会污染或孤儿化同窗采样；二是差分管线对非理想输入缺乏韧性——小数百分比 provider 的相邻小步差分被整对丢弃导致 L2/L3 不可达、同窗百分比真实下降和累计金额回退只被静默丢弃而非按文档开新窗/记异常、external 与 cheap 检测存在顺序与核对缺失。建议优先修复小数百分比累计成段与 fetchedAt 对齐两项，它们影响面最大。"
+    },
+    {
+      "lens": "costing",
+      "assessment": "L1 主链的核心语义大体扎实：Codex/Grok 的 cached input 互斥扣除（tokens.ts exclusiveCachedInput）与文档 §16 示例逐位吻合并有测试锚定；Claude 5m/1h cache-write 拆分、cacheWriteUnsplit 的\"按 5m 保守计价 + observeWindow 将 uncertainWriteTokens 剔出 pricedTokens\"链路闭环正确；Grok costUsdTicks 严格做到只存不换算（grep 全仓仅 grok-jsonl 写入、无任何美元换算或 UI 展示），价格查找顺序 exact→alias→family→unknown 与文档一致且中间无 toFixed。主要问题集中在 fail-closed 边界被打穿：三个解析器/导入路径在模型信息缺失时注入可命中价格表的默认旗舰模型（违反验收 §20-4）、dated 模型 ID 的别名漏配造成 Sonnet 4.6 被系统性低估 33% 而 UI 无感知、perM 给 Grok/Codex 伪造 Anthropic 惯例的 cache-write 价格；另有 image token / service tier / 异常输入 fail-closed 三处文档承诺未落地，以及 claude parseTs 的死三元表达式潜伏缺陷。"
+    },
+    {
+      "lens": "sampling",
+      "assessment": "采样与持久化管线整体结构清晰：windowId 规范化、单调压缩、128 样本/8 窗口保留与文档第 18 节基本对应；隐私承诺经核实成立（QuotaSample 仅含窗口锚点/百分比/金额/模型占比/价格版本，partialize 不落盘 events/cwd/prompt，store.ts:571-588）；「同百分比不重复保存」实现于 normalizeWindowSamples 的平台替换（quota-value.ts:303-311，替换而非跳过）。但两个高危缺陷会让校准在常见场景长期失效：陈旧官方切片被前滚进当前窗口后经单调过滤在持久化层永久拒真（模拟证实只剩幻影样本），以及小数百分比源在 Δpct≥1 门槛下斜率全灭（模拟：累计 39.8% 用量产出 0 条斜率）——后者意味着 Codex/Grok 的 L2/L3 实际可达置信度远低于文档预期，而 Claude（整数百分比 + 30s 刷新）路径健康。重放与增量两条路径在 windowId 锚点和金额截断时刻上均不一致，历史窗口保留目前没有消费者。"
+    },
+    {
+      "lens": "performance",
+      "assessment": "额度计算链路的算法本身（L2/L3 校准、retention 上限、MAD 过滤）设计克制，采样保留 128×8 的上限有效控制了持久化与校准的规模；日志扫描也有 cursor/tail 增量机制，稳态增量读取是对的。但『重放/重算』维度有系统性短板：历史采样重放是 O(H×E) 且在 UI 主线程执行（实测真实数据 1.8s 只产出 49 个采样），启动路径每次都同步冷全扫（2.2s 阻塞事件循环 + 6.5MB 载荷），稳态则每 2.5s 有两遍全目录 stat 遍历和 ~5 轮前端全链路重算。单事件计价无缓存使所有上述路径的常数因子再放大约一个数量级。以上均有 /tmp 基准脚本（bench-quota.mjs / bench-server.mjs / bench-replay.mjs）在本机真实日志上的实测数据支撑。"
+    }
+  ],
+  "rawFindingCount": 36
+}

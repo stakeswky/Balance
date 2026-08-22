@@ -16,10 +16,12 @@ import {
   type OfficialQuota,
   type OfficialSlice,
 } from "./official.ts";
-import { activityIdOf } from "./types.ts";
+import { quotaEventIdentity } from "./quota-cache.ts";
+import { activityIdOf, CALIBRATION_RETENTION_MS } from "./types.ts";
 import type { AgentId, AgentLiveInfo, ModelId, SessionState, UsageEvent } from "./types.ts";
 
-const MAX_EVENTS = 20000;
+const MAX_DISPLAY_EVENTS = 20_000;
+const MAX_CALIBRATION_EVENTS = 100_000;
 const MAX_ALERTS = 40;
 
 export interface QuotaAlert {
@@ -28,6 +30,77 @@ export interface QuotaAlert {
   agent: AgentId;
   kind: "window" | "week";
   message: string;
+}
+
+interface TrimmedEventState {
+  realEvents: UsageEvent[];
+  displayEvents: UsageEvent[];
+  truncatedBeforeMs: number | null;
+}
+
+function trimEventState(
+  events: UsageEvent[],
+  previousTruncatedBeforeMs: number | null,
+  now = Date.now(),
+): TrimmedEventState {
+  const recent = events
+    .filter((event) => event.ts >= now - CALIBRATION_RETENTION_MS)
+    .sort((left, right) => left.ts - right.ts);
+  const hardTrimmed = recent.length > MAX_CALIBRATION_EVENTS;
+  const realEvents = hardTrimmed ? recent.slice(-MAX_CALIBRATION_EVENTS) : recent;
+  const priorStillRelevant = previousTruncatedBeforeMs != null
+    && previousTruncatedBeforeMs >= now - CALIBRATION_RETENTION_MS;
+  return {
+    realEvents,
+    displayEvents: realEvents.slice(-MAX_DISPLAY_EVENTS),
+    truncatedBeforeMs: hardTrimmed
+      ? realEvents[0]!.ts
+      : priorStillRelevant
+        ? previousTruncatedBeforeMs
+        : null,
+  };
+}
+
+function isCacheHydratedEvent(event: UsageEvent): boolean {
+  return event.id.startsWith("quota-cache:");
+}
+
+function upsertCalibrationIndex(
+  index: Map<string, UsageEvent>,
+  incoming: UsageEvent[],
+): void {
+  for (const event of incoming) {
+    const identity = quotaEventIdentity(event);
+    const current = index.get(identity);
+    const incomingIsCache = isCacheHydratedEvent(event);
+    const currentIsReal = current != null && !isCacheHydratedEvent(current);
+    if (incomingIsCache && currentIsReal) continue;
+    index.set(identity, event);
+    if (!incomingIsCache && event.cacheIdentity != null) {
+      // 同一逻辑事件可能先经 importText 以本地 key 入索引；scanner 事件到达即移除，双计最多存活一个轮询周期。
+      index.delete(`import:${event.agent}:${event.id}`);
+    }
+  }
+}
+
+function pruneCalibrationIndex(index: Map<string, UsageEvent>, now: number): void {
+  for (const [identity, event] of index) {
+    if (event.ts < now - CALIBRATION_RETENTION_MS) index.delete(identity);
+  }
+}
+
+function sortedCalibration(index: Map<string, UsageEvent>): UsageEvent[] {
+  return [...index.values()].sort((left, right) => left.ts - right.ts);
+}
+
+export function calibrationDataFrom(
+  memoryBoundary: number | null,
+  cacheBoundary: number | null,
+): number | null {
+  const values = [memoryBoundary, cacheBoundary].filter(
+    (value): value is number => value != null,
+  );
+  return values.length ? Math.max(...values) : null;
 }
 
 export interface QuotaState {
@@ -61,6 +134,12 @@ export interface QuotaState {
   codexSession: SessionState | null;
   official: OfficialQuota;
   quotaSamples: QuotaSample[];
+  calibrationTruncatedBeforeMs: number | null;
+  calibrationEventIndex: Map<string, UsageEvent>;
+  calibrationEvents: UsageEvent[];
+  quotaCacheHydrated: boolean;
+  cacheHistoryTruncated: boolean;
+  cacheTruncatedBeforeMs: number | null;
   lastBeat: number;
   adapterHint: boolean;
   alertWindowPct: number;
@@ -98,11 +177,16 @@ export interface QuotaState {
   loadImported: () => number;
   resetDemo: () => void;
   setHint: (on: boolean) => void;
+  ingestQuotaCache: (
+    incoming: UsageEvent[],
+    opts: { publish: boolean; complete: boolean },
+  ) => void;
+  resetQuotaCacheHydration: () => void;
 }
 
 function trimEvents(events: UsageEvent[]) {
-  if (events.length <= MAX_EVENTS) return events;
-  return events.slice(events.length - MAX_EVENTS);
+  if (events.length <= MAX_DISPLAY_EVENTS) return events;
+  return events.slice(events.length - MAX_DISPLAY_EVENTS);
 }
 
 function startTrio(now: number) {
@@ -140,6 +224,43 @@ function sessionFromLive(live: AgentLiveInfo | null | undefined, model: ModelId)
   };
 }
 
+type IngestOptions = {
+  replace?: boolean;
+  live?: AgentLiveInfo | null;
+  active?: AgentLiveInfo[];
+};
+
+function idleIngestPatch(
+  state: QuotaState,
+  agent: AgentId,
+  opts: IngestOptions | undefined,
+): Partial<QuotaState> {
+  const live = opts?.live;
+  const active = opts?.active;
+  if (agent === "claude") {
+    return {
+      activeClaude: active ?? state.activeClaude,
+      claudeWriting: active ? active.length > 0 : live?.writing ?? state.claudeWriting,
+      claudeSession: state.claudeSession ?? sessionFromLive(live, "sonnet"),
+      lastBeat: Date.now(),
+    };
+  }
+  if (agent === "grok") {
+    return {
+      activeGrok: active ?? state.activeGrok,
+      grokWriting: active ? active.length > 0 : live?.writing ?? state.grokWriting,
+      grokSession: state.grokSession ?? sessionFromLive(live, "grok-4.6"),
+      lastBeat: Date.now(),
+    };
+  }
+  return {
+    activeCodex: active ?? state.activeCodex,
+    codexWriting: active ? active.length > 0 : live?.writing ?? state.codexWriting,
+    codexSession: state.codexSession ?? sessionFromLive(live, "gpt-5.6-sol"),
+    lastBeat: Date.now(),
+  };
+}
+
 export const useQuota = create<QuotaState>()(
   persist(
     (set, get) => ({
@@ -173,6 +294,12 @@ export const useQuota = create<QuotaState>()(
       codexSession: null,
       official: { claude: null, grok: null, codex: null },
       quotaSamples: [],
+      calibrationTruncatedBeforeMs: null,
+      calibrationEventIndex: new Map<string, UsageEvent>(),
+      calibrationEvents: [],
+      quotaCacheHydrated: false,
+      cacheHistoryTruncated: false,
+      cacheTruncatedBeforeMs: null,
       lastBeat: 0,
       adapterHint: true,
       alertWindowPct: 80,
@@ -344,15 +471,25 @@ export const useQuota = create<QuotaState>()(
         const parsed = parseUsagePayload(text, agent);
         if (!parsed.length) return 0;
         const state = get();
-        const realEvents = trimEvents([...state.realEvents, ...parsed].sort((a, b) => a.ts - b.ts));
+        const merged = [...state.realEvents, ...parsed].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
+        upsertCalibrationIndex(state.calibrationEventIndex, parsed);
+        pruneCalibrationIndex(state.calibrationEventIndex, Date.now());
+        const calibrationEvents = sortedCalibration(state.calibrationEventIndex);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
+          calibrationEvents,
         });
         return parsed.length;
       },
       ingestClaudeLogs: (incoming, opts) => {
         const state = get();
+        if (!opts?.replace && incoming.length === 0) {
+          set(idleIngestPatch(state, "claude", opts));
+          return 0;
+        }
         const others = state.realEvents.filter((e) => e.agent !== "claude");
         let claude: UsageEvent[];
         if (opts?.replace) {
@@ -364,14 +501,20 @@ export const useQuota = create<QuotaState>()(
           for (const ev of incoming) map.set(ev.id, ev);
           claude = [...map.values()];
         }
-        const realEvents = trimEvents([...others, ...claude].sort((a, b) => a.ts - b.ts));
+        const merged = [...others, ...claude].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
+        upsertCalibrationIndex(state.calibrationEventIndex, incoming);
+        pruneCalibrationIndex(state.calibrationEventIndex, Date.now());
+        const calibrationEvents = sortedCalibration(state.calibrationEventIndex);
         const cursor = claude.reduce((m, e) => Math.max(m, e.ts), state.claudeCursor);
         const live = opts?.live;
         const active = opts?.active;
         const focus = eventsForLive(claude, live);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
+          calibrationEvents,
           claudeCursor: cursor,
           claudeHydrated: state.claudeHydrated || incoming.length > 0,
           activeClaude: active ?? state.activeClaude,
@@ -387,6 +530,10 @@ export const useQuota = create<QuotaState>()(
       },
       ingestGrokLogs: (incoming, opts) => {
         const state = get();
+        if (!opts?.replace && incoming.length === 0) {
+          set(idleIngestPatch(state, "grok", opts));
+          return 0;
+        }
         const others = state.realEvents.filter((e) => e.agent !== "grok");
         let grok: UsageEvent[];
         if (opts?.replace) {
@@ -398,14 +545,20 @@ export const useQuota = create<QuotaState>()(
           for (const ev of incoming) map.set(ev.id, ev);
           grok = [...map.values()];
         }
-        const realEvents = trimEvents([...others, ...grok].sort((a, b) => a.ts - b.ts));
+        const merged = [...others, ...grok].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
+        upsertCalibrationIndex(state.calibrationEventIndex, incoming);
+        pruneCalibrationIndex(state.calibrationEventIndex, Date.now());
+        const calibrationEvents = sortedCalibration(state.calibrationEventIndex);
         const cursor = grok.reduce((m, e) => Math.max(m, e.ts), state.grokCursor);
         const live = opts?.live;
         const active = opts?.active;
         const focus = eventsForLive(grok, live);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
+          calibrationEvents,
           grokCursor: cursor,
           grokHydrated: state.grokHydrated || incoming.length > 0,
           activeGrok: active ?? state.activeGrok,
@@ -421,6 +574,10 @@ export const useQuota = create<QuotaState>()(
       },
       ingestCodexLogs: (incoming, opts) => {
         const state = get();
+        if (!opts?.replace && incoming.length === 0) {
+          set(idleIngestPatch(state, "codex", opts));
+          return 0;
+        }
         const others = state.realEvents.filter((e) => e.agent !== "codex");
         let codex: UsageEvent[];
         if (opts?.replace) {
@@ -432,14 +589,20 @@ export const useQuota = create<QuotaState>()(
           for (const ev of incoming) map.set(ev.id, ev);
           codex = [...map.values()];
         }
-        const realEvents = trimEvents([...others, ...codex].sort((a, b) => a.ts - b.ts));
+        const merged = [...others, ...codex].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
+        upsertCalibrationIndex(state.calibrationEventIndex, incoming);
+        pruneCalibrationIndex(state.calibrationEventIndex, Date.now());
+        const calibrationEvents = sortedCalibration(state.calibrationEventIndex);
         const cursor = codex.reduce((m, e) => Math.max(m, e.ts), state.codexCursor);
         const live = opts?.live;
         const active = opts?.active;
         const focus = eventsForLive(codex, live);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
+          calibrationEvents,
           codexCursor: cursor,
           codexHydrated: state.codexHydrated || incoming.length > 0,
           activeCodex: active ?? state.activeCodex,
@@ -468,16 +631,18 @@ export const useQuota = create<QuotaState>()(
       },
       recordOfficialSamples: (now = Date.now()) => {
         const state = get();
+        const quotaEvents = state.demoMode ? state.realEvents : state.calibrationEvents;
         set({
-          quotaSamples: samplesFromOfficial(state.realEvents, state.official, now, state.quotaSamples ?? []),
+          quotaSamples: samplesFromOfficial(quotaEvents, state.official, now, state.quotaSamples ?? []),
         });
       },
       recordOfficialHistory: (history) => {
         if (!history.length) return;
         const state = get();
+        const quotaEvents = state.demoMode ? state.realEvents : state.calibrationEvents;
         set({
           quotaSamples: samplesFromOfficialHistory(
-            state.realEvents,
+            quotaEvents,
             history,
             state.quotaSamples ?? [],
           ),
@@ -490,13 +655,19 @@ export const useQuota = create<QuotaState>()(
         const parsed = importedClaudeEvents();
         if (!parsed.length) return 0;
         const state = get();
-        const realEvents = trimEvents([
+        const merged = [
           ...parsed,
           ...state.realEvents.filter((event) => event.agent !== "claude"),
-        ].sort((a, b) => a.ts - b.ts));
+        ].sort((a, b) => a.ts - b.ts);
+        const trimmed = trimEventState(merged, state.calibrationTruncatedBeforeMs);
+        upsertCalibrationIndex(state.calibrationEventIndex, parsed);
+        pruneCalibrationIndex(state.calibrationEventIndex, Date.now());
+        const calibrationEvents = sortedCalibration(state.calibrationEventIndex);
         set({
-          realEvents,
-          events: state.demoMode ? state.events : realEvents,
+          realEvents: trimmed.realEvents,
+          events: state.demoMode ? state.events : trimmed.displayEvents,
+          calibrationTruncatedBeforeMs: trimmed.truncatedBeforeMs,
+          calibrationEvents,
           claudeCursor: 0,
           claudeHydrated: false,
           claudeSession: state.demoMode ? state.claudeSession : sessionFromEvents(parsed),
@@ -529,6 +700,28 @@ export const useQuota = create<QuotaState>()(
         });
       },
       setHint: (on) => set({ adapterHint: on }),
+      ingestQuotaCache: (incoming, opts) => {
+        const state = get();
+        upsertCalibrationIndex(state.calibrationEventIndex, incoming);
+        if (!opts.publish) return;
+        pruneCalibrationIndex(state.calibrationEventIndex, Date.now());
+        set({
+          calibrationEvents: sortedCalibration(state.calibrationEventIndex),
+          quotaCacheHydrated: opts.complete,
+        });
+      },
+      resetQuotaCacheHydration: () => {
+        const state = get();
+        for (const [identity, event] of state.calibrationEventIndex) {
+          if (isCacheHydratedEvent(event)) state.calibrationEventIndex.delete(identity);
+        }
+        set({
+          calibrationEvents: sortedCalibration(state.calibrationEventIndex),
+          quotaCacheHydrated: false,
+          cacheHistoryTruncated: false,
+          cacheTruncatedBeforeMs: null,
+        });
+      },
     }),
     {
       name: "balance-quota-v8",

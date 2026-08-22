@@ -1,8 +1,41 @@
+export type UsageAnomalyCode =
+  | "negative-token"
+  | "non-finite-token"
+  | "fractional-token"
+  | "cached-input-exceeds-input";
+
+export interface UsageAnomaly {
+  code: UsageAnomalyCode;
+  field: string;
+  rawValue: string;
+}
+
+export type UsageSpeed = "standard" | "fast" | "unknown";
+
+export interface ProviderReportedCost {
+  totalRawValue: number;
+  byModelRawValue: Record<string, number>;
+  rawUnit: "usd-ticks" | "unknown";
+  usdValue: number | null;
+  divisor: number | null;
+  sourceField: string;
+  schemaVersion: string | null;
+  semantics: "unverified" | "api-equivalent" | "provider-internal";
+}
+
 export type AgentId = "claude" | "codex" | "grok";
 
 export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
-export type CodexModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-5.4";
-export type GrokModelId = "grok-4.6" | "grok-4.5";
+export type CodexModelId =
+  | "gpt-5.6-sol"
+  | "gpt-5.6-terra"
+  | "gpt-5.6-luna"
+  | "gpt-5.5"
+  | "gpt-5.4"
+  | "gpt-5.4-mini"
+  | "daybreak-blue"
+  | "daybreak-red";
+export type GrokModelId = "grok-4.6" | "grok-4.5" | "grok-4.3" | "grok-4.20";
 export type ModelId = ClaudeModelId | CodexModelId | GrokModelId;
 export type ActorKind = "subagent" | "workflow-subagent";
 
@@ -26,9 +59,16 @@ export interface UsageEvent {
   cacheWrite1h?: number;
   /** True when Claude only had a combined cache-write total, billed as 5m. */
   cacheWriteUnsplit?: boolean;
+  imageInputTokens?: number;
+  imageOutputTokens?: number;
   reasoningMin: number;
-  reportedCostTicks?: number | null;
-  reportedCostByModel?: Record<string, number>;
+  reportedCost?: ProviderReportedCost;
+  speed?: UsageSpeed;
+  anomalies?: UsageAnomaly[];
+  /** 服务端计算的 sha256(agent\0id) 64 位十六进制身份；随 scanner 响应与 cache hydrate 下发浏览器。 */
+  cacheIdentity?: string;
+  /** 未知未来 cache model 的硬 fail-closed 开关；仅内存，不进入 UI 或持久化原文。 */
+  pricingDisabled?: boolean;
 }
 
 export interface SessionState {
@@ -135,3 +175,4 @@ export interface ModelShare {
 
 export const WINDOW_MS = 5 * 60 * 60 * 1000;
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+export const CALIBRATION_RETENTION_MS = WEEK_MS + 24 * 60 * 60_000;

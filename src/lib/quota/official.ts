@@ -12,6 +12,20 @@ export interface OfficialModelWeekLimit {
 
 export type OfficialModelWeekLimits = Partial<Record<ModelId, OfficialModelWeekLimit>>;
 
+export interface OfficialQuotaPool {
+  id: string;
+  kind: "model-week" | "extra-usage" | "product-share";
+  usagePercent: number | null;
+  startsAt: number | null;
+  resetsAt: number | null;
+  durationMs: number | null;
+  models: ModelId[];
+  exactUsedUsd: number | null;
+  exactLimitUsd: number | null;
+  fetchedAt: number;
+  stale?: boolean;
+}
+
 export interface OfficialSlice {
   agent: "claude" | "grok" | "codex";
   windowPct: number | null;
@@ -28,11 +42,15 @@ export interface OfficialSlice {
   onDemandUsed: number | null;
   onDemandCap: number | null;
   modelWeekLimits?: OfficialModelWeekLimits;
+  quotaPools?: OfficialQuotaPool[];
+  weekPeriodKind?: "weekly" | "monthly";
   windowStale?: boolean;
   weekStale?: boolean;
   modelWeekLimitsStale?: boolean;
   source: string;
   fetchedAt: number;
+  windowFetchedAt?: number;
+  weekFetchedAt?: number;
   windowKind: "five_hour" | "weekly";
 }
 
@@ -90,6 +108,70 @@ function claudeWindow(
   };
 }
 
+const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+function nullableNumber(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const value = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function claudeModelPool(
+  root: Record<string, unknown>,
+  field: "seven_day_sonnet" | "seven_day_opus",
+  model: ModelId,
+  fetchedAt: number,
+): OfficialQuotaPool | null {
+  const parsed = claudeWindow(root[field], "utilization");
+  if (!parsed) return null;
+  return {
+    id: field,
+    kind: "model-week",
+    usagePercent: parsed.usedPct,
+    startsAt: parsed.resetsAt == null ? null : parsed.resetsAt - WEEK_MS,
+    resetsAt: parsed.resetsAt,
+    durationMs: WEEK_MS,
+    models: [model],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt,
+    stale: false,
+  };
+}
+
+function claudeExtraUsage(
+  root: Record<string, unknown>,
+  fetchedAt: number,
+): OfficialQuotaPool | null {
+  const extra = record(root.extra_usage);
+  if (!extra || extra.is_enabled === false) return null;
+  const used = nullableNumber(extra.used_credits);
+  const limit = nullableNumber(extra.monthly_limit);
+  const utilization = nullableNumber(extra.utilization);
+  if (used == null && limit == null && utilization == null) return null;
+  return {
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: utilization == null ? null : clampPct(utilization),
+    startsAt: null,
+    resetsAt: timestampMs(extra.resets_at),
+    durationMs: null,
+    models: [],
+    exactUsedUsd: used,
+    exactLimitUsd: limit,
+    fetchedAt,
+    stale: false,
+  };
+}
+
+export function quotaPoolsWithStale(
+  pools: OfficialQuotaPool[] | undefined,
+  stale: boolean,
+): OfficialQuotaPool[] | undefined {
+  return pools?.map((pool) => ({ ...pool, stale }));
+}
+
 function claudeLimit(
   root: Record<string, unknown>,
   kind: "session" | "weekly_all",
@@ -128,9 +210,43 @@ export function parseClaudeUsagePayload(
   const fiveHour = claudeLimit(root, "session") ?? claudeWindow(root.five_hour, "utilization");
   const sevenDay = claudeLimit(root, "weekly_all") ?? claudeWindow(root.seven_day, "utilization");
   const fable = fableLimit(root);
-  if (!fiveHour && !sevenDay && !fable) return null;
   const fetchedAt = opts?.fetchedAt ?? Date.now();
-  const weekResetsAt = sevenDay?.resetsAt ?? fable?.resetsAt ?? null;
+  const sonnetPool = claudeModelPool(root, "seven_day_sonnet", "sonnet", fetchedAt);
+  const opusPool = claudeModelPool(root, "seven_day_opus", "opus", fetchedAt);
+  const extraUsage = claudeExtraUsage(root, fetchedAt);
+  const fablePool: OfficialQuotaPool | null = fable
+    ? {
+        id: "seven_day_fable",
+        kind: "model-week",
+        usagePercent: fable.usedPct,
+        startsAt: fable.resetsAt == null ? null : fable.resetsAt - WEEK_MS,
+        resetsAt: fable.resetsAt,
+        durationMs: WEEK_MS,
+        models: ["fable"],
+        exactUsedUsd: null,
+        exactLimitUsd: null,
+        fetchedAt,
+        stale: false,
+      }
+    : null;
+  const quotaPools = [fablePool, sonnetPool, opusPool, extraUsage].filter(
+    (pool): pool is OfficialQuotaPool => pool != null,
+  );
+  if (!fiveHour && !sevenDay && quotaPools.length === 0) return null;
+  const weekResetsAt = sevenDay?.resetsAt
+    ?? fable?.resetsAt
+    ?? sonnetPool?.resetsAt
+    ?? opusPool?.resetsAt
+    ?? null;
+  const modelWeekLimitEntries: OfficialModelWeekLimits = {
+    ...(fable ? { fable } : {}),
+    ...(sonnetPool?.usagePercent != null
+      ? { sonnet: { usedPct: sonnetPool.usagePercent, resetsAt: sonnetPool.resetsAt } }
+      : {}),
+    ...(opusPool?.usagePercent != null
+      ? { opus: { usedPct: opusPool.usagePercent, resetsAt: opusPool.resetsAt } }
+      : {}),
+  };
   return {
     agent: "claude",
     windowPct: fiveHour?.usedPct ?? null,
@@ -146,7 +262,10 @@ export function parseClaudeUsagePayload(
     prepaidBalance: null,
     onDemandUsed: null,
     onDemandCap: null,
-    modelWeekLimits: fable ? { fable } : undefined,
+    modelWeekLimits: Object.keys(modelWeekLimitEntries).length
+      ? modelWeekLimitEntries
+      : undefined,
+    quotaPools,
     source: opts?.source ?? "oauth-usage",
     fetchedAt,
     windowKind: "five_hour",
@@ -170,33 +289,28 @@ export function parseClaudeHistoryPoints(raw: unknown): ClaudeHistoryPoint[] {
   return parsed;
 }
 
-const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
 export function slicesFromClaudeHistory(points: ClaudeHistoryPoint[]): OfficialSlice[] {
   const out: OfficialSlice[] = [];
   let fiveStartedAt: number | null = null;
   let weekStartedAt: number | null = null;
+  let anchored = false;
   for (let i = 0; i < points.length; i++) {
     const p = points[i]!;
     const prev = i > 0 ? points[i - 1]! : null;
     if (prev && p.fh <= 1 && p.fh < prev.fh) fiveStartedAt = p.t;
     if (prev && p.sd <= 1 && p.sd < prev.sd) weekStartedAt = p.t;
-    if (fiveStartedAt != null) {
-      while (p.t > fiveStartedAt + FIVE_HOUR_MS + 60_000) {
-        fiveStartedAt += FIVE_HOUR_MS;
-      }
+    if (fiveStartedAt != null && p.t > fiveStartedAt + FIVE_HOUR_MS + 60_000) {
+      fiveStartedAt = null;
     }
     if (weekStartedAt != null) {
-      while (p.t > weekStartedAt + WEEK_MS + 60_000) {
-        weekStartedAt += WEEK_MS;
-      }
+      while (p.t > weekStartedAt + WEEK_MS + 60_000) weekStartedAt += WEEK_MS;
     }
-    if (fiveStartedAt == null && weekStartedAt == null) continue;
+    if (fiveStartedAt != null || weekStartedAt != null) anchored = true;
+    if (!anchored) continue;
     const slice: OfficialSlice = {
       agent: "claude",
-      windowPct: Math.floor(p.fh),
-      weekPct: Math.floor(p.sd),
+      windowPct: p.fh,
+      weekPct: p.sd,
       windowResetsAt: fiveStartedAt == null ? null : fiveStartedAt + FIVE_HOUR_MS,
       weekResetsAt: weekStartedAt == null ? null : weekStartedAt + WEEK_MS,
       weekStartedAt,
@@ -310,6 +424,12 @@ export function parseGrokBillingPayload(
       : cfg.subscription_tier != null
         ? String(cfg.subscription_tier)
         : null);
+  const durationMs = Number.isFinite(start) && Number.isFinite(end) && end > start
+    ? end - start
+    : null;
+  const weekPeriodKind = durationMs != null && durationMs > 8 * 24 * 60 * 60_000
+    ? "monthly"
+    : "weekly";
   return {
     agent: "grok",
     windowPct: null,
@@ -318,7 +438,8 @@ export function parseGrokBillingPayload(
     weekResetsAt: Number.isFinite(end) ? end : null,
     weekStartedAt: Number.isFinite(start) ? start : null,
     windowDurationMs: null,
-    weekDurationMs: Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : null,
+    weekDurationMs: durationMs,
+    weekPeriodKind,
     burnPctPerHour: 0,
     planLabel: tier,
     products: parseGrokProducts(cfg),
@@ -465,26 +586,30 @@ interface CodexWindow {
   resetsAt: number | null;
 }
 
-function parseCodexWindow(raw: unknown): CodexWindow | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  if (o.used_percent == null && o.usedPercent == null) return null;
-  const usedPercent = clampPct(num(o.used_percent ?? o.usedPercent));
-  const seconds =
-    o.limit_window_seconds != null
-      ? num(o.limit_window_seconds)
-      : o.window_minutes != null
-        ? num(o.window_minutes) * 60
-        : o.window_seconds != null
-          ? num(o.window_seconds)
-          : 0;
-  const resetRaw = o.reset_at ?? o.resets_at;
+function parseCodexWindow(raw: unknown, fetchedAt: number): CodexWindow | null {
+  const value = record(raw);
+  if (!value || (value.used_percent == null && value.usedPercent == null)) return null;
+  const usedPercent = clampPct(num(value.used_percent ?? value.usedPercent));
+  const windowSeconds = value.limit_window_seconds != null
+    ? num(value.limit_window_seconds)
+    : value.window_minutes != null
+      ? num(value.window_minutes) * 60
+      : value.window_seconds != null
+        ? num(value.window_seconds)
+        : 0;
+  const absolute = value.reset_at ?? value.resets_at;
+  const relativeRaw = value.resets_in_seconds;
+  const relativeSeconds = relativeRaw == null || relativeRaw === ""
+    ? null
+    : Number(relativeRaw);
   let resetsAt: number | null = null;
-  if (resetRaw != null) {
-    const n = num(resetRaw);
-    if (n > 0) resetsAt = n > 1e12 ? n : n * 1000;
+  if (absolute != null) {
+    const parsed = num(absolute);
+    if (parsed > 0) resetsAt = parsed >= 1_000_000_000_000 ? parsed : parsed * 1000;
+  } else if (relativeSeconds != null && Number.isFinite(relativeSeconds) && relativeSeconds >= 0) {
+    resetsAt = fetchedAt + relativeSeconds * 1000;
   }
-  return { usedPercent, windowSeconds: seconds, resetsAt };
+  return { usedPercent, windowSeconds, resetsAt };
 }
 
 function isWeeklyWindow(w: CodexWindow): boolean {
@@ -550,11 +675,11 @@ export function parseCodexRateLimits(
 ): OfficialSlice | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
-  const primary = parseCodexWindow(o.primary ?? o.primary_window);
-  const secondary = parseCodexWindow(o.secondary ?? o.secondary_window);
+  const fetchedAt = opts?.fetchedAt ?? Date.now();
+  const primary = parseCodexWindow(o.primary ?? o.primary_window, fetchedAt);
+  const secondary = parseCodexWindow(o.secondary ?? o.secondary_window, fetchedAt);
   if (!primary && !secondary && o.rate_limit == null) return null;
   const planType = opts?.planType ?? (typeof o.plan_type === "string" ? o.plan_type : null);
-  const fetchedAt = opts?.fetchedAt ?? Date.now();
   const slice = emptyOfficial("codex", opts?.source ?? "session-rate-limits", fetchedAt, codexPlanLabelFromType(planType));
   const credits = o.credits && typeof o.credits === "object" ? (o.credits as Record<string, unknown>) : {};
   if (credits.balance != null) slice.prepaidBalance = num(credits.balance);
@@ -571,10 +696,10 @@ export function parseCodexUsagePayload(
     ? root.rate_limit
     : root) as Record<string, unknown>;
   const planType = typeof root.plan_type === "string" ? root.plan_type : null;
-  const primary = parseCodexWindow(rate.primary_window ?? rate.primary);
-  const secondary = parseCodexWindow(rate.secondary_window ?? rate.secondary);
-  if (!primary && !secondary && planType == null) return null;
   const fetchedAt = opts?.fetchedAt ?? Date.now();
+  const primary = parseCodexWindow(rate.primary_window ?? rate.primary, fetchedAt);
+  const secondary = parseCodexWindow(rate.secondary_window ?? rate.secondary, fetchedAt);
+  if (!primary && !secondary && planType == null) return null;
   const slice = emptyOfficial("codex", opts?.source ?? "wham-usage", fetchedAt, codexPlanLabelFromType(planType));
   applyCodexWindows(slice, primary, secondary);
   const extra = root.additional_rate_limits;
@@ -585,7 +710,7 @@ export function parseCodexUsagePayload(
       const name = String(o.limit_name ?? o.metered_feature ?? "");
       if (!name) continue;
       const nested = (o.rate_limit && typeof o.rate_limit === "object" ? o.rate_limit : o) as Record<string, unknown>;
-      const win = parseCodexWindow(nested.primary_window ?? nested.primary) ?? parseCodexWindow(nested);
+      const win = parseCodexWindow(nested.primary_window ?? nested.primary, fetchedAt) ?? parseCodexWindow(nested, fetchedAt);
       slice.products.push({ product: name, usagePercent: win ? win.usedPercent : null });
     }
   }
@@ -626,6 +751,62 @@ export function parseCodexRateLimitLog(text: string): OfficialSlice | null {
     if (parsed) last = parsed;
   }
   return last;
+}
+
+export function parseClaudeStatuslinePayload(
+  raw: unknown,
+  opts?: { fetchedAt?: number; source?: string },
+): OfficialSlice | null {
+  const root = record(raw);
+  const limits = record(root?.rate_limits);
+  if (!limits) return null;
+  const parseWindow = (value: unknown) => {
+    const row = record(value);
+    if (!row) return null;
+    const used = nullableNumber(row.used_percentage ?? row.utilization);
+    const resetsAt = timestampMs(row.resets_at);
+    if (used == null || resetsAt == null) return null;
+    return { usedPct: clampPct(used), resetsAt };
+  };
+  const fiveHour = parseWindow(limits.five_hour);
+  const sevenDay = parseWindow(limits.seven_day);
+  if (!fiveHour && !sevenDay) return null;
+  const fetchedAt = opts?.fetchedAt ?? Date.now();
+  return {
+    agent: "claude",
+    windowPct: fiveHour?.usedPct ?? null,
+    weekPct: sevenDay?.usedPct ?? null,
+    windowResetsAt: fiveHour?.resetsAt ?? null,
+    weekResetsAt: sevenDay?.resetsAt ?? null,
+    weekStartedAt: sevenDay?.resetsAt == null ? null : sevenDay.resetsAt - WEEK_MS,
+    windowDurationMs: FIVE_HOUR_MS,
+    weekDurationMs: WEEK_MS,
+    burnPctPerHour: 0,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    source: opts?.source ?? "claude-statusline",
+    fetchedAt,
+    windowKind: "five_hour",
+  };
+}
+
+export function collapseOfficialPlateaus(history: OfficialSlice[]): OfficialSlice[] {
+  const output: OfficialSlice[] = [];
+  for (const slice of [...history].sort((left, right) => left.fetchedAt - right.fetchedAt)) {
+    const previous = output.at(-1);
+    const samePlateau = previous != null
+      && previous.agent === slice.agent
+      && previous.windowResetsAt === slice.windowResetsAt
+      && previous.weekResetsAt === slice.weekResetsAt
+      && previous.windowPct === slice.windowPct
+      && previous.weekPct === slice.weekPct;
+    if (samePlateau) output[output.length - 1] = slice;
+    else output.push(slice);
+  }
+  return output;
 }
 
 export { unwrapVal };

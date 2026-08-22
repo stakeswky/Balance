@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { OfficialSlice } from "./official.ts";
-import { useQuota } from "./store.ts";
+import { quotaEventIdentity } from "./quota-cache.ts";
+import { calibrationDataFrom, useQuota } from "./store.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
+import { CALIBRATION_RETENTION_MS } from "./types.ts";
 
 const initialState = useQuota.getState();
 const initialEvents = [...initialState.events];
 const initialRealEvents = [...initialState.realEvents];
 const initialLive = [initialState.liveClaude, initialState.liveGrok, initialState.liveCodex];
 
-function event(agent: AgentId, id: string, ts = 1): UsageEvent {
+const RECENT_TS = Date.now() - 60_000;
+
+function event(agent: AgentId, id: string, ts = RECENT_TS): UsageEvent {
   return {
     id,
     agent,
     model: agent === "claude" ? "sonnet" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol",
+    modelRaw: agent === "claude" ? "claude-sonnet-5" : agent === "grok" ? "grok-4.6" : "gpt-5.6-sol",
     ts,
     sessionId: `session-${id}`,
     task: `task-${id}`,
@@ -61,6 +66,11 @@ beforeEach(() => {
     liveClaude: true,
     liveGrok: false,
     liveCodex: false,
+    calibrationEventIndex: new Map(),
+    calibrationEvents: [],
+    quotaCacheHydrated: false,
+    cacheHistoryTruncated: false,
+    cacheTruncatedBeforeMs: null,
     quotaSamples: [{
       windowId: "sample-window",
       agent: "claude",
@@ -136,7 +146,7 @@ test("manual import and bundled import update realEvents without leaving demo mo
     id: "manual-grok",
     agent: "grok",
     model: "grok-4.6",
-    timestamp: 2,
+    timestamp: RECENT_TS,
     session_id: "manual",
     usage: { input_tokens: 10, output_tokens: 2 },
   }), "grok");
@@ -282,4 +292,181 @@ test("Claude exposes a live child even before that child's first usage event", (
   assert.equal(useQuota.getState().claudeSession?.id, "agent-new");
   assert.equal(useQuota.getState().claudeSession?.task, "刚启动的子任务");
   assert.equal(useQuota.getState().claudeWriting, true);
+});
+
+test("empty incremental ingest preserves event references", () => {
+  // Seed some events so arrays are non-empty
+  useQuota.getState().ingestClaudeLogs([event("claude", "ref-test-c", 100)], { replace: true });
+  useQuota.getState().ingestGrokLogs([event("grok", "ref-test-g", 200)], { replace: true });
+  useQuota.getState().ingestCodexLogs([event("codex", "ref-test-x", 300)], { replace: true });
+
+  const state = useQuota.getState();
+  const realEvents = state.realEvents;
+  const events = state.events;
+
+  // Empty incremental ingest (replace:false is the default) should not rebuild arrays
+  assert.equal(state.ingestClaudeLogs([], { active: [] }), 0);
+  const afterClaude = useQuota.getState();
+  assert.strictEqual(afterClaude.realEvents, realEvents);
+  assert.strictEqual(afterClaude.events, events);
+  // live metadata must still update
+  assert.deepEqual(afterClaude.activeClaude, []);
+  assert.ok(afterClaude.lastBeat > 0);
+
+  assert.equal(afterClaude.ingestGrokLogs([], { active: [] }), 0);
+  const afterGrok = useQuota.getState();
+  assert.strictEqual(afterGrok.realEvents, realEvents);
+  assert.strictEqual(afterGrok.events, events);
+
+  assert.equal(afterGrok.ingestCodexLogs([], { active: [] }), 0);
+  const afterCodex = useQuota.getState();
+  assert.strictEqual(afterCodex.realEvents, realEvents);
+  assert.strictEqual(afterCodex.events, events);
+});
+
+test("empty incremental ingest preserves event-derived session (no live downgrade)", () => {
+  // First ingest builds an event-derived claudeSession
+  const ev = event("claude", "session-derive-c", 500);
+  useQuota.getState().ingestClaudeLogs([ev], { replace: true });
+  const derivedSession = useQuota.getState().claudeSession;
+  assert.ok(derivedSession, "should have event-derived session");
+
+  // Now empty incremental ingest with a different live stub
+  const stubLive = {
+    sessionId: "other-session",
+    actorId: "stub-actor",
+    actorKind: "subagent" as const,
+    cwd: "/tmp",
+    task: "stub task",
+    writing: false,
+    lastTs: 600,
+    startedAt: 600,
+    turns: 0,
+  };
+  useQuota.getState().ingestClaudeLogs([], { live: stubLive });
+  const after = useQuota.getState();
+  // The event-derived session must not be downgraded to the live stub
+  assert.strictEqual(after.claudeSession, derivedSession);
+});
+
+test("calibration retention keeps 20001 real events and trims display to 20000", () => {
+  const now = Date.now();
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  const events: UsageEvent[] = [];
+  for (let i = 0; i < 20_001; i++) {
+    events.push(event("claude", `ev-${i}`, now - WEEK_MS + i * 1000));
+  }
+  useQuota.getState().ingestClaudeLogs(events, { replace: true });
+  const state = useQuota.getState();
+  // realEvents must keep all 20001 for calibration
+  assert.equal(state.realEvents.length, 20_001);
+  // display events must be capped at 20k
+  assert.equal(state.events.length, 20_000);
+  // cumulative USD should not regress — ensure sorted ascending
+  for (let i = 1; i < state.realEvents.length; i++) {
+    assert.ok(state.realEvents[i]!.ts >= state.realEvents[i - 1]!.ts);
+  }
+});
+
+test("publishes first and final cache pages", () => {
+  const now = Date.now();
+  const cacheEvent1: UsageEvent = {
+    ...event("claude", "quota-cache:c1", now - 60_000),
+    cacheIdentity: "hash-c1",
+  };
+  const cacheEvent2: UsageEvent = {
+    ...event("claude", "quota-cache:c2", now - 30_000),
+    cacheIdentity: "hash-c2",
+  };
+  const cacheEvent3: UsageEvent = {
+    ...event("grok", "quota-cache:g1", now - 20_000),
+    cacheIdentity: "hash-g1",
+  };
+
+  // Intermediate page (publish:false) — must not update calibrationEvents
+  useQuota.getState().ingestQuotaCache([cacheEvent1], { publish: false, complete: false });
+  assert.deepEqual(useQuota.getState().calibrationEvents, []);
+  assert.equal(useQuota.getState().quotaCacheHydrated, false);
+
+  // First published page (publish:true, complete:false) — publishes sorted calibrationEvents
+  useQuota.getState().ingestQuotaCache([cacheEvent2], { publish: true, complete: false });
+  const afterFirst = useQuota.getState();
+  assert.equal(afterFirst.calibrationEvents.length, 2);
+  assert.ok(afterFirst.calibrationEvents[0]!.ts <= afterFirst.calibrationEvents[1]!.ts);
+  assert.equal(afterFirst.quotaCacheHydrated, false);
+
+  // Final page (publish:true, complete:true) — marks hydration complete
+  useQuota.getState().ingestQuotaCache([cacheEvent3], { publish: true, complete: true });
+  const afterFinal = useQuota.getState();
+  assert.equal(afterFinal.calibrationEvents.length, 3);
+  assert.equal(afterFinal.quotaCacheHydrated, true);
+  // Must be sorted by ts
+  for (let i = 1; i < afterFinal.calibrationEvents.length; i++) {
+    assert.ok(afterFinal.calibrationEvents[i]!.ts >= afterFinal.calibrationEvents[i - 1]!.ts);
+  }
+});
+
+test("real event replaces cached hash", () => {
+  const now = Date.now();
+  const cacheEv: UsageEvent = {
+    ...event("claude", "quota-cache:abc123", now - 60_000),
+    cacheIdentity: "sha256-identity-1",
+  };
+  // Ingest cache event first
+  useQuota.getState().ingestQuotaCache([cacheEv], { publish: true, complete: true });
+  assert.equal(useQuota.getState().calibrationEvents.length, 1);
+  assert.ok(useQuota.getState().calibrationEvents[0]!.id.startsWith("quota-cache:"));
+
+  // Now ingest a real event with the same cacheIdentity (same sha256 hash from server)
+  const realEv: UsageEvent = {
+    ...event("claude", "real-log-abc123", now - 60_000),
+    cacheIdentity: "sha256-identity-1",
+  };
+  useQuota.getState().ingestClaudeLogs([realEv], { replace: true });
+
+  // The real event must have replaced the cached one
+  const state = useQuota.getState();
+  assert.equal(state.calibrationEvents.length, 1);
+  assert.equal(state.calibrationEvents[0]!.id, "real-log-abc123");
+  assert.ok(!state.calibrationEvents[0]!.id.startsWith("quota-cache:"));
+});
+
+test("cache truncation boundary", () => {
+  const now = Date.now();
+  // Both null → null
+  assert.equal(calibrationDataFrom(null, null), null);
+
+  // Only memory boundary → memory boundary
+  assert.equal(calibrationDataFrom(now - 1000, null), now - 1000);
+
+  // Only cache boundary → cache boundary
+  assert.equal(calibrationDataFrom(null, now - 2000), now - 2000);
+
+  // Both present → take the later (larger) value so neither source masks the other
+  assert.equal(calibrationDataFrom(now - 1000, now - 2000), now - 1000);
+  assert.equal(calibrationDataFrom(now - 3000, now - 500), now - 500);
+});
+
+test("prunes expired calibration events on publish", () => {
+  const now = Date.now();
+  const expired: UsageEvent = {
+    ...event("claude", "quota-cache:old", now - CALIBRATION_RETENTION_MS - 1000),
+    cacheIdentity: "hash-old",
+  };
+  const fresh: UsageEvent = {
+    ...event("claude", "quota-cache:new", now - 60_000),
+    cacheIdentity: "hash-new",
+  };
+
+  // Ingest both without publishing first
+  useQuota.getState().ingestQuotaCache([expired, fresh], { publish: false, complete: false });
+
+  // Now publish — the expired event must be pruned
+  useQuota.getState().ingestQuotaCache([], { publish: true, complete: true });
+  const state = useQuota.getState();
+  assert.equal(state.calibrationEvents.length, 1);
+  assert.equal(state.calibrationEvents[0]!.id, "quota-cache:new");
+
+  // The index must also not contain the expired entry
+  assert.equal(state.calibrationEventIndex.size, 1);
 });

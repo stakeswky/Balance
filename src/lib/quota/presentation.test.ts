@@ -13,6 +13,7 @@ import {
   primaryWindowResetsAt,
   quotaAlertDecision,
   quotaAlertLatch,
+  quotaPoolLabel,
   tightestQuota,
 } from "./presentation.ts";
 import type { QuotaValue } from "./quota-value.ts";
@@ -86,8 +87,11 @@ function quotaValue(confidence: QuotaValue["confidence"] = "low"): QuotaValue {
     remainingPointCredits: null,
     remainingHighCredits: null,
     confidence,
+    calibrationSource: "current-window",
     pricingVersion: "test",
     externalUsageDetected: false,
+    anomalousPairs: 0,
+    historyComplete: true,
   };
 }
 
@@ -236,6 +240,12 @@ test("Fable prefix does not reuse the generic weekly copy", () => {
     }),
     "Fable 5 周限额刷新 8月27日 04:59 · 4 天 0 小时",
   );
+});
+
+test("quota pool labels are provider neutral and explicit", () => {
+  assert.equal(quotaPoolLabel({ id: "seven_day_sonnet", kind: "model-week" }), "Sonnet 周池");
+  assert.equal(quotaPoolLabel({ id: "extra_usage", kind: "extra-usage" }), "额外用量");
+  assert.equal(quotaPoolLabel({ id: "research", kind: "model-week" }), "research 周池");
 });
 
 test("Fable alert latch triggers once and unlocks after a 12 point drop", () => {

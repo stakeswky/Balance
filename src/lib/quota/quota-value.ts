@@ -1,10 +1,18 @@
 import { costBreakdown, eventRawTokens } from "./cost.ts";
 import { OPENAI_CREDITS_PER_USD, PRICING_VERSION } from "./pricing.ts";
-import type { OfficialSlice } from "./official.ts";
+import type { OfficialQuotaPool, OfficialSlice } from "./official.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
-import { WEEK_MS, WINDOW_MS } from "./types.ts";
+import { CALIBRATION_RETENTION_MS, WEEK_MS, WINDOW_MS } from "./types.ts";
+import {
+  buildUsageCostIndex,
+  deduplicateUsageEvents,
+  observeIndexedWindow,
+  type UsageCostIndex,
+  type WindowObservation,
+} from "./usage-cost-index.ts";
 
 export type ValueConfidence = "none" | "low" | "medium" | "high";
+export type CalibrationSource = "none" | "current-window" | "historical-prior";
 
 export interface QuotaSample {
   windowId: string;
@@ -16,6 +24,7 @@ export interface QuotaSample {
   pricedTokenCoverage: number;
   modelMix: Record<string, number>;
   pricingVersion: string;
+  planLabel?: string | null;
 }
 
 export interface QuotaValue {
@@ -40,21 +49,197 @@ export interface QuotaValue {
   remainingPointCredits: number | null;
   remainingHighCredits: number | null;
   confidence: ValueConfidence;
+  calibrationSource: CalibrationSource;
   pricingVersion: string;
   externalUsageDetected: boolean;
+  anomalousPairs: number;
+  historyComplete: boolean;
 }
+
+export interface ExactQuotaValue {
+  usedUsd: number;
+  limitUsd: number;
+  remainingUsd: number;
+  usedPercent: number;
+  source: "official-extra-usage";
+}
+
+export type ProductQuotaValue =
+  | { kind: "estimated"; value: QuotaValue }
+  | { kind: "exact"; value: ExactQuotaValue }
+  | { kind: "stale"; value: { usedPercent: number | null } };
 
 const FIVE_H = WINDOW_MS;
 const WEEK = WEEK_MS;
-const WINDOW_ID_GRANULARITY_MS = 60_000;
-const MIN_REAL_WINDOW_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
+const WINDOW_ID_TOLERANCE_MS = 2_000;
+const COMPENSATION_RESET_MIN_DROP_PCT = 2;
 
-function advanceWindow(start: number, span: number, now: number): { start: number; resetsAt: number } {
-  if (!(span > 0)) return { start, resetsAt: start + span };
-  if (now < start) return { start, resetsAt: start + span };
-  const n = Math.floor((now - start) / span);
-  const nextStart = start + n * span;
-  return { start: nextStart, resetsAt: nextStart + span };
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function validPoolMetadata(pool: OfficialQuotaPool, now: number): boolean {
+  if (
+    !Number.isFinite(now)
+    || now < 0
+    || !Number.isFinite(pool.fetchedAt)
+    || pool.fetchedAt < 0
+    || pool.fetchedAt > now
+  ) return false;
+  for (const value of [pool.startsAt, pool.resetsAt, pool.durationMs]) {
+    if (value != null && (!Number.isFinite(value) || value < 0)) return false;
+  }
+  if (
+    pool.startsAt != null
+    && pool.resetsAt != null
+    && pool.startsAt > pool.resetsAt
+  ) return false;
+  if (
+    pool.usagePercent != null
+    && (
+      !Number.isFinite(pool.usagePercent)
+      || pool.usagePercent < 0
+      || pool.usagePercent > 100
+    )
+  ) return false;
+  for (const value of [pool.exactUsedUsd, pool.exactLimitUsd]) {
+    if (value != null && (!Number.isFinite(value) || value < 0)) return false;
+  }
+  return true;
+}
+
+function eventsForPool(events: UsageEvent[], pool: OfficialQuotaPool): UsageEvent[] {
+  if (!pool.models.length) return events;
+  const models = new Set(pool.models);
+  return events.filter((event) => models.has(event.model));
+}
+
+export function exactQuotaValue(
+  pool: OfficialQuotaPool,
+  now: number,
+): ExactQuotaValue | null {
+  if (
+    pool.kind !== "extra-usage"
+    || pool.stale
+    || !validPoolMetadata(pool, now)
+  ) return null;
+  if (
+    pool.exactUsedUsd == null
+    || pool.exactLimitUsd == null
+    || pool.exactLimitUsd <= 0
+  ) return null;
+  const usedUsd = pool.exactUsedUsd;
+  const limitUsd = pool.exactLimitUsd;
+  return {
+    usedUsd,
+    limitUsd,
+    remainingUsd: Math.max(0, limitUsd - usedUsd),
+    usedPercent: clampPercent((usedUsd / limitUsd) * 100),
+    source: "official-extra-usage",
+  };
+}
+
+export function quotaValueForPool(
+  events: UsageEvent[],
+  slice: OfficialSlice,
+  pool: OfficialQuotaPool,
+  now: number,
+  samples: QuotaSample[],
+  dataFromMs: number | null = null,
+): ProductQuotaValue | null {
+  if (!validPoolMetadata(pool, now)) return null;
+  if (pool.stale) {
+    const staleUsagePercent = pool.usagePercent != null
+      && Number.isFinite(pool.usagePercent)
+      ? clampPercent(pool.usagePercent)
+      : null;
+    const exactPercent = pool.exactUsedUsd != null
+      && pool.exactLimitUsd != null
+      && Number.isFinite(pool.exactUsedUsd)
+      && Number.isFinite(pool.exactLimitUsd)
+      && pool.exactUsedUsd >= 0
+      && pool.exactLimitUsd > 0
+      ? clampPercent((pool.exactUsedUsd / pool.exactLimitUsd) * 100)
+      : null;
+    return {
+      kind: "stale",
+      value: { usedPercent: staleUsagePercent ?? exactPercent },
+    };
+  }
+  const exact = exactQuotaValue(pool, now);
+  if (exact) return { kind: "exact", value: exact };
+  if (
+    pool.kind !== "model-week"
+    || pool.usagePercent == null
+    || !Number.isFinite(pool.usagePercent)
+    || pool.resetsAt == null
+    || !Number.isFinite(pool.resetsAt)
+  ) return null;
+
+  const start = pool.startsAt ?? pool.resetsAt - (pool.durationMs ?? WEEK);
+  const end = Math.min(now, pool.resetsAt);
+  if (!Number.isFinite(now) || !Number.isFinite(start) || end < start) return null;
+  const windowId = officialWindowId(slice.agent, "product", pool.id, start, pool.resetsAt);
+  const scopedEvents = eventsForPool(
+    eventsInWindow(events, slice.agent, start, end),
+    pool,
+  );
+  const observation = observeWindow(scopedEvents);
+  const compatibleSamples = samples.filter((sample) =>
+    sameOfficialWindowId(sample.windowId, windowId),
+  );
+
+  const historyComplete = (dataFromMs == null || start >= dataFromMs)
+    && start >= now - CALIBRATION_RETENTION_MS;
+  const calibration = historyComplete
+    ? calibrateFromSamples(compatibleSamples, pool.usagePercent, false)
+    : {
+        totalLowUsd: null,
+        totalPointUsd: null,
+        totalHighUsd: null,
+        remainingLowUsd: null,
+        remainingPointUsd: null,
+        remainingHighUsd: null,
+        confidence: "none" as const,
+        externalUsageDetected: false,
+        anomalousPairs: 0,
+      };
+
+  const toCredits = (usd: number | null): number | null =>
+    slice.agent === "codex" && usd != null ? usd * OPENAI_CREDITS_PER_USD : null;
+  const value: QuotaValue = {
+    usedPct: pool.usagePercent,
+    l1Usd: observation.observedUsd,
+    l1Credits: toCredits(observation.observedUsd),
+    l1Tokens: observation.observedTokens,
+    pricedTokenCoverage: observation.pricedTokenCoverage,
+    pricedEventCoverage: observation.pricedEventCoverage,
+    rolling: false,
+    windowId,
+    totalLowUsd: calibration.totalLowUsd,
+    totalPointUsd: calibration.totalPointUsd,
+    totalHighUsd: calibration.totalHighUsd,
+    remainingLowUsd: calibration.remainingLowUsd,
+    remainingPointUsd: calibration.remainingPointUsd,
+    remainingHighUsd: calibration.remainingHighUsd,
+    totalLowCredits: toCredits(calibration.totalLowUsd),
+    totalPointCredits: toCredits(calibration.totalPointUsd),
+    totalHighCredits: toCredits(calibration.totalHighUsd),
+    remainingLowCredits: toCredits(calibration.remainingLowUsd),
+    remainingPointCredits: toCredits(calibration.remainingPointUsd),
+    remainingHighCredits: toCredits(calibration.remainingHighUsd),
+    confidence: calibration.confidence,
+    calibrationSource: historyComplete && calibration.confidence !== "none"
+      ? "current-window"
+      : "none",
+    pricingVersion: PRICING_VERSION,
+    externalUsageDetected:
+      calibration.externalUsageDetected
+      || (pool.usagePercent > 0 && observation.observedUsd === 0),
+    anomalousPairs: calibration.anomalousPairs,
+    historyComplete,
+  };
+  return { kind: "estimated", value };
 }
 
 export function officialWindowId(
@@ -69,8 +254,8 @@ export function officialWindowId(
 
 function canonicalWindowAnchor(value: number | null): string {
   if (value == null) return "na";
-  if (!Number.isFinite(value) || value < MIN_REAL_WINDOW_TIMESTAMP_MS) return String(value);
-  return String(Math.round(value / WINDOW_ID_GRANULARITY_MS) * WINDOW_ID_GRANULARITY_MS);
+  if (!Number.isFinite(value)) return String(value);
+  return String(Math.round(value));
 }
 
 function canonicalWindowAnchorToken(value: string): string | null {
@@ -102,6 +287,46 @@ function normalizeSampleWindowId(sample: QuotaSample): QuotaSample {
   return { ...sample, windowId };
 }
 
+interface ParsedOfficialWindowId {
+  agent: string;
+  kind: string;
+  product: string;
+  startsAt: number | null;
+  resetsAt: number | null;
+}
+
+function parseOfficialWindowId(windowId: string): ParsedOfficialWindowId | null {
+  const parts = windowId.split(":");
+  if (parts.length < 5) return null;
+  const startToken = parts.at(-2)!;
+  const resetToken = parts.at(-1)!;
+  const parseAnchor = (value: string): number | null | undefined => {
+    if (value === "na") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const startsAt = parseAnchor(startToken);
+  const resetsAt = parseAnchor(resetToken);
+  if (startsAt === undefined || resetsAt === undefined) return null;
+  return {
+    agent: parts[0]!,
+    kind: parts[1]!,
+    product: parts.slice(2, -2).join(":"),
+    startsAt,
+    resetsAt,
+  };
+}
+
+export function sameOfficialWindowId(left: string, right: string): boolean {
+  const a = parseOfficialWindowId(left);
+  const b = parseOfficialWindowId(right);
+  if (!a || !b) return normalizeOfficialWindowId(left) === normalizeOfficialWindowId(right);
+  if (a.agent !== b.agent || a.kind !== b.kind || a.product !== b.product) return false;
+  const sameAnchor = (x: number | null, y: number | null) =>
+    x == null || y == null ? x === y : Math.abs(x - y) <= WINDOW_ID_TOLERANCE_MS;
+  return sameAnchor(a.startsAt, b.startsAt) && sameAnchor(a.resetsAt, b.resetsAt);
+}
+
 export function windowBounds(
   official: OfficialSlice | null | undefined,
   kind: "five_hour" | "weekly",
@@ -122,31 +347,27 @@ export function windowBounds(
     }
     return { start: now - WEEK, end: now, rolling: true, resetsAt: official?.weekResetsAt ?? null };
   }
-  if (official?.windowResetsAt) {
+  if (official?.windowResetsAt && official.windowResetsAt > now) {
     const span = official.windowDurationMs ?? FIVE_H;
-    const originStart = official.windowResetsAt - span;
-    const rolled = advanceWindow(originStart, span, now);
     return {
-      start: rolled.start,
-      end: Math.min(now, rolled.resetsAt),
+      start: official.windowResetsAt - span,
+      end: Math.min(now, official.windowResetsAt),
       rolling: false,
-      resetsAt: rolled.resetsAt,
+      resetsAt: official.windowResetsAt,
     };
   }
   return { start: now - FIVE_H, end: now, rolling: true, resetsAt: null };
 }
 
-export function eventsInWindow(events: UsageEvent[], agent: AgentId, start: number, end: number): UsageEvent[] {
-  const seen = new Set<string>();
-  const out: UsageEvent[] = [];
-  for (const e of events) {
-    if (e.agent !== agent) continue;
-    if (e.ts < start || e.ts > end) continue;
-    if (seen.has(e.id)) continue;
-    seen.add(e.id);
-    out.push(e);
-  }
-  return out;
+export function eventsInWindow(
+  events: UsageEvent[],
+  agent: AgentId,
+  start: number,
+  end: number,
+): UsageEvent[] {
+  return deduplicateUsageEvents(events).filter(
+    (event) => event.agent === agent && event.ts >= start && event.ts <= end,
+  );
 }
 
 export function observeWindow(events: UsageEvent[]): {
@@ -169,10 +390,10 @@ export function observeWindow(events: UsageEvent[]): {
     observedTokens += tokens;
     if (cost.priced && cost.pricingQuality !== "unknown") {
       observedUsd += cost.totalUsd;
-      const uncertainWriteTokens = e.cacheWriteUnsplit ? Math.max(0, e.cacheWrite) : 0;
-      pricedTokens += Math.max(0, tokens - uncertainWriteTokens);
-      pricedEvents += 1;
-      const key = cost.pricingModel ?? e.model;
+      pricedTokens += cost.pricedTokens;
+      if (cost.fullyPriced) pricedEvents += 1;
+      const speedKey = e.speed === "fast" ? "fast" : "standard";
+      const key = `${cost.pricingModel ?? e.model}:${speedKey}`;
       mix[key] = (mix[key] ?? 0) + cost.totalUsd;
     }
   }
@@ -199,16 +420,23 @@ function median(values: number[]): number {
   return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }
 
-function weightedMedian(rows: { value: number; weight: number }[]): number {
-  const total = rows.reduce((s, r) => s + r.weight, 0);
-  if (total <= 0) return median(rows.map((r) => r.value));
-  const sorted = [...rows].sort((a, b) => a.value - b.value);
-  let acc = 0;
-  for (const row of sorted) {
-    acc += row.weight;
-    if (acc >= total / 2) return row.value;
+export function weightedMedian(rows: { value: number; weight: number }[]): number {
+  const total = rows.reduce((sum, row) => sum + row.weight, 0);
+  if (total <= 0) return median(rows.map((row) => row.value));
+  const sorted = [...rows].sort((left, right) => left.value - right.value);
+  const half = total / 2;
+  let accumulated = 0;
+  for (let index = 0; index < sorted.length; index += 1) {
+    const row = sorted[index]!;
+    accumulated += row.weight;
+    const tolerance = Number.EPSILON * Math.max(1, total) * 8;
+    if (Math.abs(accumulated - half) <= tolerance) {
+      const right = sorted[index + 1];
+      return right ? (row.value + right.value) / 2 : row.value;
+    }
+    if (accumulated > half) return row.value;
   }
-  return sorted[sorted.length - 1]!.value;
+  return sorted.at(-1)!.value;
 }
 
 function weightedPercentile(rows: { value: number; weight: number }[], p: number): number {
@@ -222,6 +450,18 @@ function weightedPercentile(rows: { value: number; weight: number }[], p: number
     if (acc >= target) return row.value;
   }
   return sorted[sorted.length - 1]!.value;
+}
+
+function weightedMad(rows: { value: number; weight: number }[], center: number): number {
+  return weightedMedian(rows.map((row) => ({
+    value: Math.abs(row.value - center),
+    weight: row.weight,
+  })));
+}
+
+function relativeCenterDistance(left: number, right: number): number {
+  const scale = Math.max(Math.abs(left), Math.abs(right), Number.EPSILON);
+  return Math.abs(left - right) / scale;
 }
 
 function modelMixDrift(a: Record<string, number>, b: Record<string, number>): number {
@@ -256,34 +496,97 @@ interface QuotaSlope {
   weight: number;
   external: boolean;
   modelMix: Record<string, number>;
+  segmentId: number;
+  groupKey: string;
+}
+
+interface QuotaSlopeScan {
+  slopes: QuotaSlope[];
+  latestGroupKey: string | null;
+  latestSegmentId: number;
+  /** doc §14: cumulative-usd regressions are discarded but must be recorded. */
+  cumulativeDropPairs: number;
+}
+
+function scanValidSlopes(samples: QuotaSample[]): QuotaSlopeScan {
+  const slopes: QuotaSlope[] = [];
+  const groups = new Map<string, QuotaSample[]>();
+  for (const row of normalizeWindowSamples(samples)) {
+    const groupKey = `${row.windowId}\u0000${row.pricingVersion}`;
+    const group = groups.get(groupKey) ?? [];
+    group.push(row);
+    groups.set(groupKey, group);
+  }
+
+  let latestGroupKey: string | null = null;
+  let latestSegmentId = 0;
+  let latestTimestampMs = -Infinity;
+  let cumulativeDropPairs = 0;
+  for (const [groupKey, ordered] of groups) {
+    let anchor: QuotaSample | null = null;
+    let segmentId = 0;
+    for (const row of ordered) {
+      if (row.pricedTokenCoverage < 0.8) {
+        anchor = null;
+        segmentId += 1;
+        continue;
+      }
+      if (!anchor) {
+        anchor = row;
+        continue;
+      }
+
+      const dPct = row.usedPercent - anchor.usedPercent;
+      const dUsd = row.cumulativeObservedUsd - anchor.cumulativeObservedUsd;
+      if (dUsd < 0) {
+        cumulativeDropPairs += 1;
+        anchor = row;
+        segmentId += 1;
+        continue;
+      }
+      if (dPct < 0) {
+        anchor = row;
+        segmentId += 1;
+        continue;
+      }
+      if (dPct < 1) continue;
+      if (dPct > 0 && dUsd === 0) {
+        slopes.push({
+          value: 0,
+          weight: dPct,
+          external: true,
+          modelMix: {},
+          segmentId,
+          groupKey,
+        });
+        anchor = row;
+        segmentId += 1;
+        continue;
+      }
+      if (dUsd > 0) {
+        slopes.push({
+          value: dUsd / dPct,
+          weight: dPct,
+          external: false,
+          modelMix: intervalModelMix(anchor, row),
+          segmentId,
+          groupKey,
+        });
+      }
+      anchor = row;
+    }
+    const groupTimestampMs = ordered.at(-1)?.timestampMs ?? -Infinity;
+    if (groupTimestampMs > latestTimestampMs) {
+      latestTimestampMs = groupTimestampMs;
+      latestGroupKey = groupKey;
+      latestSegmentId = segmentId;
+    }
+  }
+  return { slopes, latestGroupKey, latestSegmentId, cumulativeDropPairs };
 }
 
 export function validSlopes(samples: QuotaSample[]): QuotaSlope[] {
-  const out: QuotaSlope[] = [];
-  const groups = new Map<string, QuotaSample[]>();
-  for (const row of normalizeWindowSamples(samples)) {
-    const key = `${row.windowId}\u0000${row.pricingVersion}`;
-    const group = groups.get(key) ?? [];
-    group.push(row);
-    groups.set(key, group);
-  }
-  for (const ordered of groups.values()) {
-    for (let i = 1; i < ordered.length; i++) {
-      const a = ordered[i - 1]!;
-      const b = ordered[i]!;
-      const dPct = b.usedPercent - a.usedPercent;
-      const dUsd = b.cumulativeObservedUsd - a.cumulativeObservedUsd;
-      if (dPct < 1) continue;
-      if (dUsd < 0) continue;
-      if (b.pricedTokenCoverage < 0.8 || a.pricedTokenCoverage < 0.8) continue;
-      if (dUsd === 0) {
-        out.push({ value: 0, weight: dPct, external: true, modelMix: {} });
-        continue;
-      }
-      out.push({ value: dUsd / dPct, weight: dPct, external: false, modelMix: intervalModelMix(a, b) });
-    }
-  }
-  return out;
+  return scanValidSlopes(samples).slopes;
 }
 
 export function normalizeWindowSamples(samples: QuotaSample[]): QuotaSample[] {
@@ -301,7 +604,12 @@ export function normalizeWindowSamples(samples: QuotaSample[]): QuotaSample[] {
     const out: QuotaSample[] = [];
     let maxPct = -Infinity;
     for (const row of ordered) {
-      if (row.usedPercent < maxPct) continue;
+      if (row.usedPercent < maxPct) {
+        if (maxPct - row.usedPercent <= COMPENSATION_RESET_MIN_DROP_PCT) continue;
+        out.push(row);
+        maxPct = row.usedPercent;
+        continue;
+      }
       if (row.usedPercent === maxPct) {
         out[out.length - 1] = row;
         continue;
@@ -323,6 +631,7 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   remainingHighUsd: number | null;
   confidence: ValueConfidence;
   externalUsageDetected: boolean;
+  anomalousPairs: number;
 } {
   const empty = {
     totalLowUsd: null,
@@ -333,33 +642,68 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     remainingHighUsd: null,
     confidence: "none" as const,
     externalUsageDetected: false,
+    anomalousPairs: 0,
   };
   if (rolling) return empty;
   const normalized = normalizeWindowSamples(samples);
-  const rawSlopes = validSlopes(normalized);
-  // The first and current percentage plateaus are interval-censored: their
-  // unseen beginning/end makes their USD-per-percent slope systematically
-  // unstable. Keep them only when there are too few interior transitions.
-  const slopes = rawSlopes.length >= 3 ? rawSlopes.slice(1, -1) : rawSlopes;
-  const externalUsageDetected = slopes.some((s) => s.external);
-  const usable = slopes.filter((s) => !s.external && s.value > 0);
-  if (!usable.length) return { ...empty, externalUsageDetected };
+  const scan = scanValidSlopes(normalized);
+  const rawSlopes = scan.slopes;
+  const anomalousPairs = scan.cumulativeDropPairs;
+  // Anomaly diagnostics must see every slope, including the interval-censored
+  // first/last plateaus; only the point estimator censors them below.
+  const externalUsageDetected = rawSlopes.some((slope) => slope.external);
+  const currentSegmentSlopes = scan.latestGroupKey == null
+    ? []
+    : rawSlopes.filter((slope) =>
+        slope.groupKey === scan.latestGroupKey
+        && slope.segmentId === scan.latestSegmentId,
+      );
+  // Point estimation only trusts the segment that is current when the scan
+  // ends; a fresh post-reset segment without slopes yields an empty estimate
+  // instead of reusing an older segment. The first and current percentage
+  // plateaus are interval-censored, so keep them out of the estimate unless
+  // there are too few interior transitions.
+  const estimationSlopes = currentSegmentSlopes.length >= 3
+    ? currentSegmentSlopes.slice(1, -1)
+    : currentSegmentSlopes;
+  const usable = estimationSlopes.filter((slope) => !slope.external && slope.value > 0);
+  if (!usable.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
   const agent = normalized[0]?.agent;
   const currentMix = [...rawSlopes]
     .reverse()
     .find((slope) => !slope.external && slope.value > 0 && hasModelMix(slope.modelMix))?.modelMix ?? {};
-  const compatible =
-    agent === "codex" || !hasModelMix(currentMix)
-      ? usable
-      : usable.filter((slope) => hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35);
-  if (!compatible.length) return { ...empty, externalUsageDetected };
+  const compatible = !hasModelMix(currentMix)
+    ? usable
+    : usable.filter((slope) =>
+        hasModelMix(slope.modelMix) && modelMixDrift(slope.modelMix, currentMix) <= 0.35,
+      );
+  if (!compatible.length) return { ...empty, externalUsageDetected, anomalousPairs };
 
-  const values = compatible.map((s) => s.value);
-  const m = median(values);
-  const mad = median(values.map((v) => Math.abs(v - m)));
-  const kept = compatible.filter((s) => Math.abs(s.value - m) <= Math.max(3 * mad, 0.25 * m));
-  if (!kept.length) return { ...empty, externalUsageDetected };
+  const provisionalCenter = weightedMedian(compatible);
+  const modelMixUnknown = !hasModelMix(currentMix)
+    || compatible.some((slope) => !hasModelMix(slope.modelMix));
+  const cheapSlopes = new Set(
+    compatible.filter((slope) => {
+      if (slope.value >= provisionalCenter * 0.4) return false;
+      if (!hasModelMix(currentMix) || !hasModelMix(slope.modelMix)) return false;
+      return modelMixDrift(slope.modelMix, currentMix) < 0.15;
+    }),
+  );
+  const candidates = compatible.filter((slope) => !cheapSlopes.has(slope));
+  if (!candidates.length) {
+    return { ...empty, externalUsageDetected: externalUsageDetected || cheapSlopes.size > 0, anomalousPairs };
+  }
+
+  const unweightedCenter = median(candidates.map((slope) => slope.value));
+  const weightedCenter = weightedMedian(candidates);
+  const mad = weightedMad(candidates, weightedCenter);
+  const threshold = Math.max(3 * mad, 0.25 * weightedCenter);
+  const kept = candidates.filter((slope) =>
+    Math.abs(slope.value - weightedCenter) <= threshold,
+  );
+  if (!kept.length) return { ...empty, externalUsageDetected: externalUsageDetected || cheapSlopes.size > 0, anomalousPairs };
+  const centerConflict = relativeCenterDistance(unweightedCenter, weightedCenter) > 0.35;
 
   const point = weightedMedian(kept);
   const lowRaw = weightedPercentile(kept, 0.25);
@@ -370,14 +714,16 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   // OpenAI's current Codex rate card prices all supported models at the same
   // 25 credits per API-equivalent USD, so Codex model mix does not change the
   // calibration unit. Other providers retain the conservative drift gate.
-  const drift =
-    agent === "codex" || !hasModelMix(currentMix)
-      ? 0
-      : weightedMedian(
-          kept.map((slope) => ({ value: modelMixDrift(slope.modelMix, currentMix), weight: slope.weight })),
-        );
+  const drift = !hasModelMix(currentMix)
+    ? 0
+    : weightedMedian(
+        kept.map((slope) => ({
+          value: modelMixDrift(slope.modelMix, currentMix),
+          weight: slope.weight,
+        })),
+      );
 
-  const cheap = compatible.some((s) => s.value < m * 0.4);
+  const cheap = cheapSlopes.size > 0;
   const sumPct = kept.reduce((s, r) => s + r.weight, 0);
   const coverage = last?.pricedTokenCoverage ?? 0;
   let confidence: ValueConfidence = "none";
@@ -388,14 +734,20 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
   } else if (kept.length >= 1 && sumPct >= 2 && coverage >= 0.8) {
     confidence = "low";
   }
+  if (centerConflict && (confidence === "high" || confidence === "medium")) {
+    confidence = "low";
+  }
+  if (modelMixUnknown && (confidence === "high" || confidence === "medium")) {
+    confidence = "low";
+  }
   const downgrade = (c: ValueConfidence): ValueConfidence =>
     c === "high" ? "medium" : c === "medium" ? "low" : "none";
   if (externalUsageDetected && confidence !== "none") confidence = downgrade(confidence);
-  if (cheap && confidence !== "none") confidence = downgrade(confidence);
-  if (confidence === "none") return { ...empty, externalUsageDetected };
+  if (confidence === "none") return { ...empty, externalUsageDetected: externalUsageDetected || cheap, anomalousPairs };
 
   let band = drift >= 0.15 ? 0.25 : 0.15;
   if (confidence === "high" && usedPct % 1 !== 0) band = Math.min(band, 0.1);
+  if (confidence !== "high") band = Math.max(band, 1 / sumPct);
   const low = Math.min(lowRaw, point * (1 - band));
   const high = Math.max(highRaw, point * (1 + band));
 
@@ -408,9 +760,14 @@ export function calibrateFromSamples(samples: QuotaSample[], usedPct: number, ro
     remainingPointUsd: point * (100 - u),
     remainingHighUsd: high * (100 - u),
     confidence,
-    externalUsageDetected,
+    externalUsageDetected: externalUsageDetected || cheap,
+    anomalousPairs,
   };
 }
+
+type SampleObservationInput =
+  | { events: UsageEvent[]; observation?: never }
+  | { events?: never; observation: WindowObservation };
 
 export function makeSample(opts: {
   windowId: string;
@@ -418,9 +775,9 @@ export function makeSample(opts: {
   product?: string | null;
   timestampMs: number;
   usedPercent: number;
-  events: UsageEvent[];
-}): QuotaSample | null {
-  const obs = observeWindow(opts.events);
+  planLabel?: string | null;
+} & SampleObservationInput): QuotaSample | null {
+  const obs = opts.observation ?? observeWindow(opts.events);
   return {
     windowId: opts.windowId,
     agent: opts.agent,
@@ -431,6 +788,7 @@ export function makeSample(opts: {
     pricedTokenCoverage: obs.pricedTokenCoverage,
     modelMix: obs.modelMix,
     pricingVersion: PRICING_VERSION,
+    planLabel: opts.planLabel ?? null,
   };
 }
 
@@ -441,9 +799,19 @@ function retentionGroup(sample: QuotaSample): string {
 
 export function mergeSamples(existing: QuotaSample[], incoming: QuotaSample): QuotaSample[] {
   const canonicalExisting = existing.map(normalizeSampleWindowId);
-  const canonicalIncoming = normalizeSampleWindowId(incoming);
-  const same = canonicalExisting.filter((s) => s.windowId === canonicalIncoming.windowId);
-  const others = canonicalExisting.filter((s) => s.windowId !== canonicalIncoming.windowId);
+  const normalizedIncoming = normalizeSampleWindowId(incoming);
+  const matchedWindowId = canonicalExisting.find((row) =>
+    sameOfficialWindowId(row.windowId, normalizedIncoming.windowId),
+  )?.windowId;
+  const canonicalIncoming = matchedWindowId
+    ? { ...normalizedIncoming, windowId: matchedWindowId }
+    : normalizedIncoming;
+  const same = canonicalExisting.filter((row) =>
+    sameOfficialWindowId(row.windowId, canonicalIncoming.windowId),
+  );
+  const others = canonicalExisting.filter((row) =>
+    !sameOfficialWindowId(row.windowId, canonicalIncoming.windowId),
+  );
   const nextSame = normalizeWindowSamples([...same, canonicalIncoming]).slice(-128);
   const combined = others.concat(nextSame);
   const latestByWindow = new Map<string, { group: string; at: number }>();
@@ -476,6 +844,7 @@ export function samplesFromOfficialHistory(
   history: OfficialSlice[],
   existing: QuotaSample[],
 ): QuotaSample[] {
+  const costIndex = buildUsageCostIndex(events);
   let samples = existing;
   for (const slice of [...history].sort((a, b) => a.fetchedAt - b.fetchedAt)) {
     samples = samplesFromOfficial(
@@ -487,6 +856,7 @@ export function samplesFromOfficialHistory(
       },
       slice.fetchedAt,
       samples,
+      costIndex,
     );
   }
   return samples;
@@ -497,21 +867,34 @@ export function samplesFromOfficial(
   official: { claude: OfficialSlice | null; grok: OfficialSlice | null; codex: OfficialSlice | null },
   now: number,
   existing: QuotaSample[],
+  costIndex?: UsageCostIndex,
 ): QuotaSample[] {
   let samples = existing;
   const consider = (slice: OfficialSlice | null, kind: "five_hour" | "weekly") => {
     if (!slice) return;
     const used = kind === "weekly" ? slice.weekPct : slice.windowPct;
-    if (used == null) return;
-    const bounds = windowBounds(slice, kind, now);
-    if (bounds.rolling) return;
+    const stale = kind === "weekly" ? slice.weekStale : slice.windowStale;
+    if (used == null || stale) return;
+
+    const sampledAt = kind === "weekly"
+      ? slice.weekFetchedAt ?? slice.fetchedAt
+      : slice.windowFetchedAt ?? slice.fetchedAt;
+    if (!Number.isFinite(sampledAt) || sampledAt <= 0) return;
+    if (sampledAt > now) return;
+    const bounds = windowBounds(slice, kind, sampledAt);
+    if (bounds.rolling || sampledAt < bounds.start || sampledAt > bounds.end) return;
+
     const windowId = officialWindowId(slice.agent, kind, null, bounds.start, bounds.resetsAt);
+    const observation = costIndex
+      ? observeIndexedWindow(costIndex, slice.agent, bounds.start, Math.min(bounds.end, sampledAt))
+      : observeWindow(eventsInWindow(events, slice.agent, bounds.start, Math.min(bounds.end, sampledAt, now)));
     const next = makeSample({
       windowId,
       agent: slice.agent,
-      timestampMs: slice.fetchedAt || now,
+      timestampMs: sampledAt,
       usedPercent: used,
-      events: eventsInWindow(events, slice.agent, bounds.start, bounds.end),
+      observation,
+      planLabel: slice.planLabel,
     });
     if (next) samples = mergeSamples(samples, next);
   };
@@ -521,7 +904,109 @@ export function samplesFromOfficial(
   consider(official.grok, "weekly");
   consider(official.codex, "five_hour");
   consider(official.codex, "weekly");
+  for (const slice of [official.claude, official.grok, official.codex]) {
+    if (!slice) continue;
+    for (const pool of slice.quotaPools ?? []) {
+      if (
+        !validPoolMetadata(pool, now)
+        || pool.stale
+        || pool.kind !== "model-week"
+        || pool.usagePercent == null
+        || !Number.isFinite(pool.usagePercent)
+        || pool.resetsAt == null
+        || !Number.isFinite(pool.resetsAt)
+      ) continue;
+      const sampledAt = pool.fetchedAt;
+      const start = pool.startsAt ?? pool.resetsAt - (pool.durationMs ?? WEEK);
+      if (
+        !Number.isFinite(sampledAt)
+        || !Number.isFinite(start)
+        || sampledAt < start
+        || sampledAt > now
+        || sampledAt > pool.resetsAt
+      ) continue;
+      const scopedEvents = eventsForPool(
+        eventsInWindow(events, slice.agent, start, sampledAt),
+        pool,
+      );
+      const next = makeSample({
+        windowId: officialWindowId(slice.agent, "product", pool.id, start, pool.resetsAt),
+        agent: slice.agent,
+        product: pool.id,
+        timestampMs: sampledAt,
+        usedPercent: pool.usagePercent,
+        planLabel: slice.planLabel,
+        events: scopedEvents,
+      });
+      if (next) samples = mergeSamples(samples, next);
+    }
+  }
   return samples;
+}
+
+export function historicalWindowPrior(
+  samples: QuotaSample[],
+  currentWindowId: string,
+  currentWindowStartMs: number,
+  agent: AgentId,
+  kind: "five_hour" | "weekly",
+  planLabel: string | null,
+  usedPct: number,
+  currentModelMix: Record<string, number>,
+): ReturnType<typeof calibrateFromSamples> | null {
+  const groups = new Map<string, QuotaSample[]>();
+  for (const sample of samples) {
+    if (sample.agent !== agent || sample.pricingVersion !== PRICING_VERSION) continue;
+    if ((sample.planLabel ?? null) !== planLabel) continue;
+    if ((sample.windowId.split(":")[1] ?? "") !== kind) continue;
+    if (sameOfficialWindowId(sample.windowId, currentWindowId)) continue;
+    const rows = groups.get(sample.windowId) ?? [];
+    rows.push(sample);
+    groups.set(sample.windowId, rows);
+  }
+
+  const windowEstimates = [...groups.values()]
+    .map((rows) => {
+      const ordered = normalizeWindowSamples(rows);
+      const last = ordered.at(-1);
+      if (!last) return null;
+      const identity = parseOfficialWindowId(last.windowId);
+      if (
+        !identity
+        || identity.resetsAt == null
+        || identity.resetsAt > currentWindowStartMs
+      ) return null;
+      if (!hasModelMix(currentModelMix) || !hasModelMix(last.modelMix)) return null;
+      if (modelMixDrift(last.modelMix, currentModelMix) > 0.35) return null;
+      const result = calibrateFromSamples(ordered, last.usedPercent, false);
+      const span = last.usedPercent - (ordered[0]?.usedPercent ?? last.usedPercent);
+      if (result.totalPointUsd == null || result.confidence === "none" || span < 5) return null;
+      return { value: result.totalPointUsd / 100, weight: span, at: last.timestampMs };
+    })
+    .filter((row): row is { value: number; weight: number; at: number } => row != null)
+    .sort((left, right) => right.at - left.at)
+    .slice(0, 3);
+
+  if (!windowEstimates.length) return null;
+  const point = weightedMedian(windowEstimates);
+  const lowRaw = weightedPercentile(windowEstimates, 0.25);
+  const highRaw = weightedPercentile(windowEstimates, 0.75);
+  const spread = point > 0 ? (highRaw - lowRaw) / point : Number.POSITIVE_INFINITY;
+  if (windowEstimates.length > 1 && spread > 0.35) return null;
+  const low = Math.min(lowRaw, point * 0.75);
+  const high = Math.max(highRaw, point * 1.25);
+  const remaining = 100 - Math.max(0, Math.min(100, usedPct));
+  return {
+    totalLowUsd: low * 100,
+    totalPointUsd: point * 100,
+    totalHighUsd: high * 100,
+    remainingLowUsd: low * remaining,
+    remainingPointUsd: point * remaining,
+    remainingHighUsd: high * remaining,
+    confidence: "low",
+    externalUsageDetected: false,
+    anomalousPairs: 0,
+  };
 }
 
 export function quotaValueFor(
@@ -531,6 +1016,7 @@ export function quotaValueFor(
   kind: "five_hour" | "weekly",
   now: number,
   samples: QuotaSample[],
+  dataFromMs?: number | null,
 ): QuotaValue {
   const usedPct = (kind === "weekly" ? official?.weekPct : official?.windowPct) ?? 0;
   const bounds = windowBounds(official, kind, now);
@@ -546,17 +1032,53 @@ export function quotaValueFor(
     remainingHighUsd: null,
     confidence: "none" as const,
     externalUsageDetected: false,
+    anomalousPairs: 0,
   };
-  const compatibleSamples = (samples ?? []).filter(
-    (sample) => normalizeOfficialWindowId(sample.windowId) === windowId,
+  const compatibleSamples = (samples ?? []).filter((sample) =>
+    sameOfficialWindowId(sample.windowId, windowId),
   );
-  const cal = official
-    ? calibrateFromSamples(
-        compatibleSamples,
-        usedPct,
-        bounds.rolling,
-      )
+  const currentCalibration = official
+    ? calibrateFromSamples(compatibleSamples, usedPct, bounds.rolling)
     : emptyCal;
+  // §12: any external-usage signal disqualifies borrowing a prior — either
+  // sample-derived (external slopes in the current window) or L1-derived
+  // (official percent moved while locally priced spend is zero).
+  const externallyConsumed =
+    currentCalibration.externalUsageDetected || (usedPct > 0 && obs.observedUsd === 0);
+  const prior = official
+    && !bounds.rolling
+    && currentCalibration.confidence === "none"
+    && !externallyConsumed
+    ? historicalWindowPrior(
+        samples ?? [],
+        windowId,
+        bounds.start,
+        agent,
+        kind,
+        official.planLabel,
+        usedPct,
+        obs.modelMix,
+      )
+    : null;
+  const cal = prior
+    ? { ...prior, anomalousPairs: currentCalibration.anomalousPairs }
+    : currentCalibration;
+  const calibrationSource: CalibrationSource = prior
+    ? "historical-prior"
+    : cal.confidence === "none"
+      ? "none"
+      : "current-window";
+
+  // Fail-closed: if data from a truncation boundary is newer than window start,
+  // or the window start is older than the calibration retention period, history
+  // is incomplete and calibration cannot be trusted.
+  const historyComplete = (dataFromMs == null || bounds.start >= dataFromMs)
+    && bounds.start >= now - CALIBRATION_RETENTION_MS;
+  const effectiveCalibration = historyComplete ? cal : emptyCal;
+  const effectiveCalibrationSource: CalibrationSource = historyComplete
+    ? calibrationSource
+    : "none";
+
   const toCredits = (usd: number | null): number | null =>
     agent === "codex" && usd != null ? usd * OPENAI_CREDITS_PER_USD : null;
   return {
@@ -568,14 +1090,16 @@ export function quotaValueFor(
     pricedEventCoverage: obs.pricedEventCoverage,
     rolling: bounds.rolling,
     windowId,
-    ...cal,
-    totalLowCredits: toCredits(cal.totalLowUsd),
-    totalPointCredits: toCredits(cal.totalPointUsd),
-    totalHighCredits: toCredits(cal.totalHighUsd),
-    remainingLowCredits: toCredits(cal.remainingLowUsd),
-    remainingPointCredits: toCredits(cal.remainingPointUsd),
-    remainingHighCredits: toCredits(cal.remainingHighUsd),
-    externalUsageDetected: cal.externalUsageDetected || (usedPct > 0 && obs.observedUsd === 0),
+    ...effectiveCalibration,
+    calibrationSource: effectiveCalibrationSource,
+    totalLowCredits: toCredits(effectiveCalibration.totalLowUsd),
+    totalPointCredits: toCredits(effectiveCalibration.totalPointUsd),
+    totalHighCredits: toCredits(effectiveCalibration.totalHighUsd),
+    remainingLowCredits: toCredits(effectiveCalibration.remainingLowUsd),
+    remainingPointCredits: toCredits(effectiveCalibration.remainingPointUsd),
+    remainingHighCredits: toCredits(effectiveCalibration.remainingHighUsd),
+    externalUsageDetected: effectiveCalibration.externalUsageDetected || (usedPct > 0 && obs.observedUsd === 0),
     pricingVersion: PRICING_VERSION,
+    historyComplete,
   };
 }

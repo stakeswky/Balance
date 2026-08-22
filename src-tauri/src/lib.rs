@@ -648,7 +648,7 @@ fn wait_for_health(timeout: Duration) -> Result<(), String> {
 fn resolve_server_layout(
     app: &AppHandle,
     force_bundled: bool,
-) -> Result<(PathBuf, PathBuf, PathBuf, bool), String> {
+) -> Result<(PathBuf, PathBuf, PathBuf, bool, PathBuf), String> {
     let resource_dir = app
         .path()
         .resource_dir()
@@ -656,10 +656,11 @@ fn resolve_server_layout(
     let bundled = resource_dir.join("balance-server");
     let watchdog = resource_dir.join("sidecar-watchdog.cjs");
     if !watchdog.is_file() {
-        return Err(format!(
-            "desktop sidecar watchdog is missing: {}",
-            watchdog.display()
-        ));
+        return Err(format!("desktop sidecar watchdog is missing: {}", watchdog.display()));
+    }
+    let collector = resource_dir.join("claude-statusline.mjs");
+    if !collector.is_file() {
+        return Err(format!("Claude statusline collector is missing: {}", collector.display()));
     }
     let (root, used_overlay) = if force_bundled {
         (bundled, false)
@@ -675,7 +676,48 @@ fn resolve_server_layout(
             entry.display()
         ));
     }
-    Ok((root, entry, watchdog, used_overlay))
+    Ok((root, entry, watchdog, used_overlay, collector))
+}
+
+fn install_statusline_collector(app: &AppHandle, source: &Path) -> Result<PathBuf, String> {
+    let home = app.path().home_dir().map_err(|error| error.to_string())?;
+    let directory = home
+        .join(".local")
+        .join("share")
+        .join("balance")
+        .join("bin");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&directory, permissions).map_err(|error| error.to_string())?;
+    }
+    let target = directory.join("claude-statusline.mjs");
+    std::fs::copy(source, &target).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&target, permissions).map_err(|error| error.to_string())?;
+    }
+    Ok(target)
+}
+
+fn statusline_snapshot_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let home = app.path().home_dir().map_err(|error| error.to_string())?;
+    let root = match std::env::consts::OS {
+        "macos" => home.join("Library").join("Application Support").join("Balance"),
+        "windows" => std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData").join("Local"))
+            .join("Balance"),
+        _ => std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local").join("state"))
+            .join("balance"),
+    };
+    Ok(root.join("claude-statusline.json"))
 }
 
 fn drain_sidecar_events(
@@ -714,8 +756,10 @@ fn start_sidecar(
     force_bundled: bool,
 ) -> Result<Option<bool>, String> {
     ensure_port_available()?;
-    let (server_root, server_entry, watchdog, used_overlay) =
+    let (server_root, server_entry, watchdog, used_overlay, collector) =
         resolve_server_layout(app, force_bundled)?;
+    let installed_collector = install_statusline_collector(app, &collector)?;
+    let statusline_snapshot = statusline_snapshot_path(app)?;
     let inherited_environment = filtered_sidecar_environment(std::env::vars_os());
     let (receiver, child) = app
         .shell()
@@ -736,6 +780,14 @@ fn start_sidecar(
         .env("BALANCE_NATIVE_VERSION", NATIVE_VERSION)
         .env("VITE_AUTH_ENABLED", "false")
         .env("NODE_ENV", "production")
+        .env(
+            "BALANCE_CLAUDE_STATUSLINE_COLLECTOR",
+            installed_collector.to_string_lossy().to_string(),
+        )
+        .env(
+            "BALANCE_CLAUDE_STATUSLINE_PATH",
+            statusline_snapshot.to_string_lossy().to_string(),
+        )
         .spawn()
         .map_err(|error| error.to_string())?;
     if let Err(child) = install_spawned_child(&state.0, child) {

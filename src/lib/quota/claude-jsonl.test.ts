@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { foldByRequestId, parseJsonlLine } from "./claude-jsonl.ts";
+import { foldByRequestId, parseJsonlLine, type SessionMeta } from "./claude-jsonl.ts";
 import { createScanState, scanClaudeUsage } from "./claude-log.server.ts";
+import { observeWindow } from "./quota-value.ts";
 
 function assistant(partial: Record<string, unknown>) {
   return JSON.stringify({
@@ -225,4 +226,145 @@ test("Claude workflow subagent prefers the workflow label over its long prompt",
   assert.equal(result.events[0]?.task, "M0-3-ws-origin");
   assert.equal(result.events[0]?.actorKind, "workflow-subagent");
   assert.equal(result.active[0]?.task, "M0-3-ws-origin");
+});
+
+test("Claude numeric Unix seconds are converted to milliseconds", () => {
+  const meta: SessionMeta = {
+    sessionId: "session",
+    cwd: "/tmp/project",
+    title: "",
+    lastUser: "",
+  };
+  const event = parseJsonlLine(JSON.stringify({
+    type: "assistant",
+    timestamp: 1_725_000_000,
+    requestId: "req-seconds",
+    message: {
+      model: "claude-sonnet-5",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  }), meta);
+  assert.equal(event!.ts, 1_725_000_000_000);
+});
+
+test("Claude parser propagates token anomalies without inventing cached-exceeds", () => {
+  const meta = { sessionId: "sess-1", cwd: "", title: "", lastUser: "" };
+  const anomalous = parseJsonlLine(
+    assistant({
+      requestId: "req_anomaly",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-6",
+        usage: { input_tokens: 10, output_tokens: -523 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(anomalous);
+  assert.equal(anomalous.tokensOut, 0);
+  assert.deepEqual(anomalous.anomalies?.map((anomaly) => anomaly.code), ["negative-token"]);
+
+  const exclusiveFields = parseJsonlLine(
+    assistant({
+      requestId: "req_exclusive",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-6",
+        usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5_000 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(exclusiveFields);
+  assert.equal(exclusiveFields.cacheRead, 5_000);
+  assert.equal(exclusiveFields.anomalies, undefined);
+});
+
+test("Claude explicit image token fields propagate verbatim", () => {
+  const meta = { sessionId: "sess-1", cwd: "", title: "", lastUser: "" };
+  const withImages = parseJsonlLine(
+    assistant({
+      requestId: "req_img",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-5",
+        usage: { input_tokens: 10, output_tokens: 20, image_input_tokens: 700, image_output_tokens: 30 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(withImages);
+  assert.equal(withImages.imageInputTokens, 700);
+  assert.equal(withImages.imageOutputTokens, 30);
+
+  const attachmentOnly = parseJsonlLine(
+    assistant({
+      requestId: "req_attach",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-5",
+        content: [{ type: "image", source: { type: "base64", media_type: "image/png" } }],
+        usage: { input_tokens: 10, output_tokens: 20 },
+      },
+    }),
+    meta,
+  );
+  assert.ok(attachmentOnly);
+  assert.equal(attachmentOnly.imageInputTokens, 0);
+  assert.equal(attachmentOnly.imageOutputTokens, 0);
+});
+
+test("Claude missing raw model keeps the event but stays unpriced", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-08-19T15:12:29.612Z",
+    sessionId: "sess-1",
+    requestId: "req_nomodel",
+    message: { role: "assistant", usage: { input_tokens: 10, output_tokens: 20 } },
+  });
+  const event = parseJsonlLine(line, { sessionId: "sess-1", cwd: "", title: "", lastUser: "" });
+  assert.ok(event);
+  assert.equal(event.modelRaw, undefined);
+  assert.equal(event.model, "sonnet");
+  assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
+});
+
+const SPEED_CASES = [
+  { raw: "fast", expected: "fast" },
+  { raw: "FAST", expected: "fast" },
+  { raw: "standard", expected: "standard" },
+  { raw: undefined, expected: "unknown" },
+  { raw: "turbo", expected: "unknown" },
+] as const;
+
+test("Claude explicit usage speed is recorded and never guessed", () => {
+  const meta = { sessionId: "sess-1", cwd: "", title: "", lastUser: "" };
+  for (const { raw, expected } of SPEED_CASES) {
+    const event = parseJsonlLine(
+      assistant({
+        requestId: `req_speed_${String(raw)}`,
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-5",
+          usage: { input_tokens: 10, output_tokens: 20, ...(raw === undefined ? {} : { speed: raw }) },
+        },
+      }),
+      meta,
+    );
+    assert.ok(event);
+    assert.equal(event.speed, expected);
+  }
+  const priorityOnly = parseJsonlLine(
+    assistant({
+      requestId: "req_priority",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-5",
+        usage: { input_tokens: 10, output_tokens: 20, priority: "high" },
+      },
+    }),
+    meta,
+  );
+  assert.ok(priorityOnly);
+  assert.equal(priorityOnly.speed, "unknown");
 });

@@ -8,15 +8,19 @@ import {
   nextCodexPlanId,
   parseClaudeHistoryPoints,
   parseClaudePlanHistory,
+  parseClaudeStatuslinePayload,
   parseClaudeUsagePayload,
+  quotaPoolsWithStale,
   slicesFromClaudeHistory,
   parseCodexRateLimitLog,
+  parseCodexRateLimits,
   parseCodexUsagePayload,
   parseGrokBillingLog,
   parseGrokBillingLogAll,
   parseGrokBillingPayload,
   codexPlanIdFromLabel,
 } from "./official.ts";
+import { windowBounds } from "./quota-value.ts";
 
 function grokLine(percent: number, timestamp: string): string {
   return JSON.stringify({
@@ -53,7 +57,7 @@ test("claude plan-usage-history uses latest fh/sd percents", () => {
   assert.ok(s.burnPctPerHour > 3 && s.burnPctPerHour < 5);
 });
 
-test("claude history replay emits one slice per integer percent after reset", () => {
+test("claude history replay keeps fractional percents after reset", () => {
   const t0 = Date.parse("2026-08-19T15:52:00Z");
   const points = parseClaudeHistoryPoints({
     samples: [
@@ -66,12 +70,12 @@ test("claude history replay emits one slice per integer percent after reset", ()
     ],
   });
   const slices = slicesFromClaudeHistory(points);
-  assert.deepEqual(slices.map((s) => s.windowPct), [0, 1, 2, 3]);
+  assert.deepEqual(slices.map((s) => s.windowPct), [0, 1, 1.2, 2, 3]);
   assert.equal(slices[0]?.windowResetsAt, t0 + 5 * 60 * 60 * 1000);
   assert.equal(slices[0]?.windowKind, "five_hour");
 });
 
-test("claude history continues into later 5h windows without a fresh reset sample", () => {
+test("claude history keeps weekly cadence without inventing a five-hour reset", () => {
   const t0 = Date.parse("2026-08-19T15:52:00Z");
   const withReset = parseClaudeHistoryPoints({
     samples: [
@@ -83,10 +87,23 @@ test("claude history continues into later 5h windows without a fresh reset sampl
     ],
   });
   const slices = slicesFromClaudeHistory(withReset);
+  assert.equal(slices[0]?.windowResetsAt, t0 + 5 * 60 * 60 * 1000);
   const later = slices.filter((s) => (s.fetchedAt ?? 0) >= t0 + 6 * 60 * 60_000);
   assert.ok(later.length >= 2);
-  assert.notEqual(later[0]?.windowResetsAt, slices[0]?.windowResetsAt);
+  assert.ok(later.every((s) => s.windowResetsAt === null));
   assert.deepEqual(later.map((s) => s.windowPct), [2, 3]);
+});
+
+test("Claude history does not tile an expired five-hour anchor", () => {
+  const start = Date.parse("2026-08-21T00:00:00Z");
+  const rows = slicesFromClaudeHistory([
+    { t: start, fh: 20.75, sd: 30.25 },
+    { t: start + 60_000, fh: 0.5, sd: 30.5 },
+    { t: start + 6 * 60 * 60_000, fh: 12.25, sd: 31.25 },
+  ]);
+  assert.equal(rows.at(-1)!.windowResetsAt, null);
+  assert.equal(rows.at(-1)!.windowPct, 12.25);
+  assert.equal(rows.at(-1)!.weekPct, 31.25);
 });
 
 test("claude 5h reset is inferred when fh drops to 0", () => {
@@ -430,4 +447,117 @@ test("ambiguous pro label preserves the user's current tier", () => {
   assert.equal(nextCodexPlanId("chatgpt-pro-20x", "ChatGPT Pro"), "chatgpt-pro-20x");
   assert.equal(nextCodexPlanId("chatgpt-plus", "ChatGPT Pro"), "chatgpt-plus");
   assert.equal(nextCodexPlanId("chatgpt-plus", "ChatGPT Pro 20×"), "chatgpt-pro-20x");
+});
+
+/**
+ * Evidence-URL: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: used_percent: f64、resets_in_seconds 可为 0
+ * Sanitized-Fixture: {"used_percent":12.5,"resets_in_seconds":0}
+ */
+test("Codex relative reset seconds use the rate-limit line timestamp", () => {
+  const fetchedAt = Date.parse("2026-08-21T10:00:00Z");
+  const result = parseCodexRateLimits({
+    primary: {
+      used_percent: 20.5,
+      window_minutes: 299,
+      resets_in_seconds: 1_794,
+    },
+  }, { fetchedAt, source: "session-rate-limits", planType: "plus" })!;
+  assert.equal(result.windowResetsAt, fetchedAt + 1_794_000);
+  assert.equal(result.windowPct, 20.5);
+});
+
+test("Codex preserves an explicit zero-second reset boundary", () => {
+  const fetchedAt = Date.parse("2026-08-21T10:00:00Z");
+  const result = parseCodexRateLimits({
+    primary: { used_percent: 0, window_minutes: 300, resets_in_seconds: 0 },
+  }, { fetchedAt, source: "session-rate-limits", planType: "plus" })!;
+  assert.equal(result.windowResetsAt, fetchedAt);
+  assert.equal(windowBounds(result, "five_hour", fetchedAt).rolling, true);
+});
+
+/**
+ * Evidence-URL: https://github.com/anthropics/claude-code/issues/31637
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: seven_day_sonnet/seven_day_opus/extra_usage 与小数 utilization
+ * Sanitized-Fixture: {"seven_day_sonnet":{"utilization":12.5},"seven_day_opus":{"utilization":7.25},"extra_usage":{"used_credits":42.5,"monthly_limit":100}}
+ */
+test("Claude parses model weekly pools and exact extra usage", () => {
+  const parsed = parseClaudeUsagePayload({
+    five_hour: { utilization: 20.5, resets_at: "2026-08-21T15:00:00Z" },
+    seven_day: { utilization: 40.25, resets_at: "2026-08-25T00:00:00Z" },
+    seven_day_sonnet: { utilization: 75.5, resets_at: "2026-08-25T00:00:00Z" },
+    seven_day_opus: { utilization: 10.25, resets_at: "2026-08-25T00:00:00Z" },
+    extra_usage: {
+      is_enabled: true,
+      used_credits: 42.5,
+      monthly_limit: 100,
+      utilization: 42.5,
+    },
+  })!;
+  assert.equal(parsed.modelWeekLimits!.sonnet!.usedPct, 75.5);
+  assert.equal(parsed.modelWeekLimits!.opus!.usedPct, 10.25);
+  assert.deepEqual(parsed.quotaPools!.find((pool) => pool.id === "extra_usage"), {
+    id: "extra_usage",
+    kind: "extra-usage",
+    usagePercent: 42.5,
+    startsAt: null,
+    resetsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: 42.5,
+    exactLimitUsd: 100,
+    fetchedAt: parsed.fetchedAt,
+    stale: false,
+  });
+  assert.ok(parsed.quotaPools!.every((pool) => pool.stale === false));
+  assert.ok(
+    quotaPoolsWithStale(parsed.quotaPools, true)!.every((pool) => pool.stale === true),
+  );
+});
+
+test("legacy Grok billing periods remain monthly", () => {
+  const parsed = parseGrokBillingPayload({
+    creditUsagePercent: 25,
+    currentPeriod: {
+      start: "2026-08-01T00:00:00Z",
+      end: "2026-09-01T00:00:00Z",
+    },
+  })!;
+  assert.equal(parsed.weekPeriodKind, "monthly");
+  assert.equal(parsed.weekDurationMs, 31 * 24 * 60 * 60_000);
+});
+
+/**
+ * Evidence-URL: https://github.com/ohugonnot/claude-code-statusline
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: stdin rate_limits 五小时/周窗，小数 utilization/reset
+ * Sanitized-Fixture: {"rate_limits":{"five_hour":{"utilization":12.5,"resets_at":"2026-08-21T15:00:00Z"},"seven_day":{"utilization":34.25,"resets_at":"2026-08-25T00:00:00Z"}}}
+ */
+test("Claude statusline rate limits preserve decimals and epoch resets", () => {
+  const parsed = parseClaudeStatuslinePayload({
+    rate_limits: {
+      five_hour: { used_percentage: 12.5, resets_at: 1_725_018_000 },
+      seven_day: { used_percentage: 34.25, resets_at: 1_725_604_800 },
+    },
+  }, { fetchedAt: 1_725_000_000_000 })!;
+  assert.equal(parsed.windowPct, 12.5);
+  assert.equal(parsed.windowResetsAt, 1_725_018_000_000);
+  assert.equal(parsed.weekPct, 34.25);
+});
+
+test("Claude statusline ignores windows without a valid reset", () => {
+  const partial = parseClaudeStatuslinePayload({
+    rate_limits: {
+      five_hour: { used_percentage: 12.5 },
+      seven_day: { used_percentage: 34.25, resets_at: 1_725_604_800 },
+    },
+  }, { fetchedAt: 1_725_000_000_000 })!;
+  assert.equal(partial.windowPct, null);
+  assert.equal(partial.windowResetsAt, null);
+  assert.equal(partial.weekPct, 34.25);
+  assert.equal(parseClaudeStatuslinePayload({
+    rate_limits: { five_hour: { used_percentage: 12.5 } },
+  }), null);
 });

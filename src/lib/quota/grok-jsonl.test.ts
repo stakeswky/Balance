@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { asGrokModel, parseGrokUpdateLine } from "./grok-jsonl.ts";
+import { asGrokModel, parseGrokUpdateLine, type GrokSessionMeta } from "./grok-jsonl.ts";
 import { createGrokScanState, scanGrokUsage } from "./grok-log.server.ts";
+import { observeWindow } from "./quota-value.ts";
 
 const meta = {
   sessionId: "sess-g",
@@ -49,8 +50,16 @@ test("parses turn_completed usage and grok-4.6-build", () => {
   assert.equal(ev.tokensOut, 33067);
   assert.equal(ev.cacheRead, 637568);
   assert.equal(ev.modelRaw, "grok-4.6-build");
-  assert.equal(ev.reportedCostTicks, 424242);
-  assert.equal(ev.reportedCostByModel?.["grok-4.6-build"], 424242);
+  assert.deepEqual(ev.reportedCost, {
+    totalRawValue: 424242,
+    byModelRawValue: { "grok-4.6-build": 424242 },
+    rawUnit: "usd-ticks",
+    usdValue: null,
+    divisor: null,
+    sourceField: "usage.costUsdTicks",
+    schemaVersion: null,
+    semantics: "unverified",
+  });
   assert.equal(ev.ts, 1787153666911);
   assert.equal(ev.task, "接 Grok 日志");
 });
@@ -163,7 +172,33 @@ test("Grok per-file cursor keeps a late parallel turn older than global since", 
   });
   appendFileSync(file, `${late}\n`);
   const second = scanGrokUsage(first.events[0]!.ts + 1, { grokHome, now: 1_787_153_668_000, state });
-  assert.deepEqual(second.events.map((event) => event.id), ["prompt-late"]);
+  // bounded response may filter out the late event; full cache events always keep it
+  assert.deepEqual(second.quotaCacheEvents.map((event) => event.id), ["prompt-late"]);
+});
+
+test("Grok parser propagates token anomalies from turn usage", () => {
+  const ev = parseGrokUpdateLine(
+    JSON.stringify({
+      timestamp: 1787153666,
+      params: {
+        sessionId: "sess-g",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "p-anomaly",
+          usage: { inputTokens: 100, cachedReadTokens: 250, outputTokens: -4, cacheCreationTokens: 0 },
+        },
+      },
+    }),
+    meta,
+  );
+  assert.ok(ev);
+  assert.equal(ev.tokensIn, 0);
+  assert.equal(ev.cacheRead, 100);
+  assert.equal(ev.tokensOut, 0);
+  assert.deepEqual(
+    ev.anomalies?.map((anomaly) => anomaly.code).sort(),
+    ["cached-input-exceeds-input", "negative-token"],
+  );
 });
 
 test("Grok reports two concurrently writing sessions", () => {
@@ -192,4 +227,80 @@ test("Grok reports two concurrently writing sessions", () => {
   assert.deepEqual(result.active.map((task) => task.sessionId).sort(), ["sess-a", "sess-b"]);
   assert.equal(result.live?.sessionId, "sess-a");
   assert.equal(result.live?.lastTs, now - 1_000);
+});
+
+test("Grok explicit image token fields propagate verbatim", () => {
+  const ev = parseGrokUpdateLine(
+    JSON.stringify({
+      timestamp: 1787153666,
+      params: {
+        sessionId: "sess-g",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "p-img",
+          usage: {
+            inputTokens: 100,
+            outputTokens: 10,
+            cachedReadTokens: 0,
+            cacheCreationTokens: 0,
+            image_input_tokens: 512,
+            image_output_tokens: 16,
+          },
+        },
+      },
+    }),
+    meta,
+  );
+  assert.ok(ev);
+  assert.equal(ev.imageInputTokens, 512);
+  assert.equal(ev.imageOutputTokens, 16);
+});
+
+test("Grok missing raw model keeps the event but stays unpriced", () => {
+  const line = JSON.stringify({
+    timestamp: 1787153666,
+    params: {
+      sessionId: "sess-g",
+      update: {
+        sessionUpdate: "turn_completed",
+        prompt_id: "p-nomodel",
+        usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 0, cacheCreationTokens: 0 },
+      },
+    },
+  });
+  const ev = parseGrokUpdateLine(line, { sessionId: "sess-g", cwd: "", title: "" } as GrokSessionMeta);
+  assert.ok(ev);
+  assert.equal(ev.modelRaw, undefined);
+  assert.equal(observeWindow([ev]).pricedTokenCoverage, 0);
+});
+
+const SPEED_CASES = [
+  { raw: "fast", expected: "fast" },
+  { raw: "FAST", expected: "fast" },
+  { raw: "standard", expected: "standard" },
+  { raw: undefined, expected: "unknown" },
+  { raw: "turbo", expected: "unknown" },
+] as const;
+
+test("Grok explicit usage speed is recorded and never guessed", () => {
+  const usageWith = (extra: Record<string, unknown>) =>
+    JSON.stringify({
+      timestamp: 1787153666,
+      params: {
+        sessionId: "sess-g",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "p-speed",
+          usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 0, cacheCreationTokens: 0, ...extra },
+        },
+      },
+    });
+  for (const { raw, expected } of SPEED_CASES) {
+    const ev = parseGrokUpdateLine(usageWith(raw === undefined ? {} : { speed: raw }), meta);
+    assert.ok(ev);
+    assert.equal(ev.speed, expected);
+  }
+  const priorityOnly = parseGrokUpdateLine(usageWith({ priority: "high" }), meta);
+  assert.ok(priorityOnly);
+  assert.equal(priorityOnly.speed, "unknown");
 });

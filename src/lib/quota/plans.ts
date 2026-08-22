@@ -191,7 +191,13 @@ export const MODEL_META: Record<
   "gpt-5.6-sol": { label: "GPT-5.6 Sol", agent: "codex", weight: 5, inPerM: 5, outPerM: 30 },
   "gpt-5.6-terra": { label: "GPT-5.6 Terra", agent: "codex", weight: 2, inPerM: 2, outPerM: 12 },
   "gpt-5.6-luna": { label: "GPT-5.6 Luna", agent: "codex", weight: 0.6, inPerM: 0.2, outPerM: 1.2 },
+  "gpt-5.5": { label: "GPT-5.5", agent: "codex", weight: 4, inPerM: 5, outPerM: 30 },
   "gpt-5.4": { label: "GPT-5.4", agent: "codex", weight: 2.2, inPerM: 2.5, outPerM: 15 },
+  "gpt-5.4-mini": { label: "GPT-5.4 Mini", agent: "codex", weight: 0.7, inPerM: 0.75, outPerM: 4.5 },
+  "daybreak-blue": { label: "Daybreak Blue", agent: "codex", weight: 4, inPerM: 5, outPerM: 30 },
+  "daybreak-red": { label: "Daybreak Red", agent: "codex", weight: 8, inPerM: 12.5, outPerM: 75 },
+  "grok-4.3": { label: "Grok 4.3", agent: "grok", weight: 0.8, inPerM: 1.25, outPerM: 2.5 },
+  "grok-4.20": { label: "Grok 4.20", agent: "grok", weight: 0.8, inPerM: 1.25, outPerM: 2.5 },
   "grok-4.6": { label: "Grok 4.6", agent: "grok", weight: 1, inPerM: 2, outPerM: 6 },
   "grok-4.5": { label: "Grok 4.5", agent: "grok", weight: 1, inPerM: 2, outPerM: 6 },
 };
