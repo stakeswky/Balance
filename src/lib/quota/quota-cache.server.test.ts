@@ -1,9 +1,10 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import type { UsageEvent } from "./types.ts";
-import type { CachedLogCursor } from "./quota-cache.ts";
+import type { CachedLogCursor, QuotaCacheSnapshot } from "./quota-cache.ts";
 import {
   type QuotaCacheWriteDeps,
+  type QuotaCacheCoordinatorDeps,
   nodeQuotaCacheWriteDeps,
   quotaCachePath,
   quotaCacheSnapshotId,
@@ -12,6 +13,7 @@ import {
   writeQuotaCacheSnapshotAtomic,
   readQuotaCache,
   createQuotaCacheWriter,
+  createQuotaCacheCoordinator,
 } from "./quota-cache.server.ts";
 import { cacheEvent } from "./quota-cache.server.ts";
 
@@ -413,5 +415,153 @@ describe("quota cache capacity", () => {
     assert.equal(snapshot.events.length, 1);
     // The modelRaw should be kept if safe
     assert.equal(snapshot.events[0].modelRaw, "future-unknown-model-2030");
+  });
+});
+
+describe("persists scanner cursors via coordinator", () => {
+  function makeCoordinatorDeps(overrides?: {
+    snapshot?: QuotaCacheSnapshot | null;
+    enqueue?: QuotaCacheCoordinatorDeps["enqueue"];
+  }): {
+    deps: QuotaCacheCoordinatorDeps;
+    writes: Array<{ events: UsageEvent[]; cursors: CachedLogCursor[] }>;
+  } {
+    const writes: Array<{ events: UsageEvent[]; cursors: CachedLogCursor[] }> = [];
+    const deps: QuotaCacheCoordinatorDeps = {
+      path: "/tmp/test-coordinator-cache.json",
+      read: () => overrides?.snapshot ?? null,
+      enqueue: overrides?.enqueue ?? (async (_path, events, cursors) => {
+        writes.push({ events: [...events], cursors: [...cursors] });
+      }),
+    };
+    return { deps, writes };
+  }
+
+  it("unchanged cursors produce zero writes", async () => {
+    const cursor = makeCursor({ agent: "claude", pathHash: "c".repeat(64) });
+    const snapshot = makeQuotaCacheSnapshot([], [cursor], Date.now());
+    const { deps, writes } = makeCoordinatorDeps({ snapshot });
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    // Record the exact same cursor
+    await coordinator.recordCursors("claude", [cursor]);
+    assert.equal(writes.length, 0, "unchanged cursor should produce zero writes");
+  });
+
+  it("changed cursor triggers write", async () => {
+    const cursor = makeCursor({ agent: "claude", pathHash: "c".repeat(64), resumeOffset: 100 });
+    const snapshot = makeQuotaCacheSnapshot([], [cursor], Date.now());
+    const { deps, writes } = makeCoordinatorDeps({ snapshot });
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const updated = { ...cursor, resumeOffset: 200, observedSize: 300 };
+    await coordinator.recordCursors("claude", [updated]);
+    assert.equal(writes.length, 1, "changed cursor should trigger write");
+    assert.ok(
+      writes[0].cursors.some((c) => c.resumeOffset === 200),
+      "updated cursor should be in write",
+    );
+  });
+
+  it("removing a file removes its cursor", async () => {
+    const cursor1 = makeCursor({ agent: "claude", pathHash: "d".repeat(64) });
+    const cursor2 = makeCursor({ agent: "claude", pathHash: "e".repeat(64) });
+    const snapshot = makeQuotaCacheSnapshot([], [cursor1, cursor2], Date.now());
+    const { deps, writes } = makeCoordinatorDeps({ snapshot });
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    // Record only cursor1, omitting cursor2 (file deleted)
+    await coordinator.recordCursors("claude", [cursor1]);
+    assert.equal(writes.length, 1, "cursor removal should trigger write");
+    assert.equal(
+      writes[0].cursors.filter((c) => c.agent === "claude").length,
+      1,
+      "should only have one claude cursor",
+    );
+  });
+
+  it("three agents concurrent update preserves all cursors", async () => {
+    const { deps, writes } = makeCoordinatorDeps();
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const claudeCursor = makeCursor({ agent: "claude", pathHash: "1".repeat(64) });
+    const codexCursor = makeCursor({ agent: "codex", pathHash: "2".repeat(64) });
+    const grokCursor = makeCursor({ agent: "grok", pathHash: "3".repeat(64) });
+
+    // Concurrent updates
+    await Promise.all([
+      coordinator.recordCursors("claude", [claudeCursor]),
+      coordinator.recordCursors("codex", [codexCursor]),
+      coordinator.recordCursors("grok", [grokCursor]),
+    ]);
+
+    // After all writes, the final write should have all three agents
+    const lastWrite = writes.at(-1)!;
+    assert.ok(
+      lastWrite.cursors.some((c) => c.agent === "claude"),
+      "claude cursor preserved",
+    );
+    assert.ok(
+      lastWrite.cursors.some((c) => c.agent === "codex"),
+      "codex cursor preserved",
+    );
+    assert.ok(
+      lastWrite.cursors.some((c) => c.agent === "grok"),
+      "grok cursor preserved",
+    );
+  });
+
+  it("final JSON contains no raw path or tail", async () => {
+    const { deps, writes } = makeCoordinatorDeps();
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const cursor = makeCursor({ agent: "claude", pathHash: "f".repeat(64) });
+    await coordinator.recordCursors("claude", [cursor]);
+
+    const serialized = JSON.stringify(writes[0].cursors);
+    assert.ok(!serialized.includes('"path"'), "no raw path in output");
+    assert.ok(!serialized.includes('"tail"'), "no tail in output");
+  });
+
+  it("resumeCursors returns only requested agent", () => {
+    const claudeCursor = makeCursor({ agent: "claude", pathHash: "a".repeat(64) });
+    const codexCursor = makeCursor({ agent: "codex", pathHash: "b".repeat(64) });
+    const snapshot = makeQuotaCacheSnapshot([], [claudeCursor, codexCursor], Date.now());
+    const { deps } = makeCoordinatorDeps({ snapshot });
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const claudeResult = coordinator.resumeCursors("claude");
+    assert.equal(claudeResult.length, 1);
+    assert.equal(claudeResult[0].agent, "claude");
+
+    const codexResult = coordinator.resumeCursors("codex");
+    assert.equal(codexResult.length, 1);
+    assert.equal(codexResult[0].agent, "codex");
+
+    const grokResult = coordinator.resumeCursors("grok");
+    assert.equal(grokResult.length, 0);
+  });
+
+  it("persists scanner cursors but tolerates write failures", async () => {
+    const failingEnqueue: QuotaCacheCoordinatorDeps["enqueue"] = async () => {
+      throw new Error("injected disk full");
+    };
+    const { deps } = makeCoordinatorDeps({ enqueue: failingEnqueue });
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const cursor = makeCursor({ agent: "claude", pathHash: "f".repeat(64) });
+
+    // The recordCursors call should throw, but in the watch.ts handler
+    // pattern, it's caught. Here we verify the coordinator itself throws
+    // and the caller can catch gracefully.
+    await assert.rejects(
+      () => coordinator.recordCursors("claude", [cursor]),
+      /injected disk full/,
+      "coordinator should propagate the write error",
+    );
+
+    // After failure, resumeCursors should still work (state is updated in memory)
+    const resumed = coordinator.resumeCursors("claude");
+    assert.equal(resumed.length, 1, "in-memory state should still have the cursor");
   });
 });

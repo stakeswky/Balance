@@ -12,6 +12,8 @@ import {
   snapshotInventoryEntries,
   readChunkFromEntry,
 } from "./file-inventory.server.ts";
+import type { CachedLogCursor } from "./quota-cache.ts";
+import { seedFileCursors, snapshotLogCursors } from "./quota-cursor.server.ts";
 
 const GROW_MS = 30 * 60 * 1000;
 const WRITING_MS = 20 * 1000;
@@ -26,13 +28,26 @@ export interface ScanState {
   workflowLabels: Map<string, string>;
 }
 
+export interface ClaudeScanOptions {
+  home?: string;
+  now?: number;
+  state?: ScanState;
+  resumeCursors?: readonly CachedLogCursor[];
+}
+
 export interface ClaudeScanResult {
   events: UsageEvent[];
+  quotaCacheCursors: CachedLogCursor[];
   live: ClaudeLiveInfo | null;
   active: ClaudeLiveInfo[];
   roots: string[];
   filesRead: number;
 }
+
+export type ScanClaudeUsage = (
+  since: number,
+  opts?: ClaudeScanOptions,
+) => ClaudeScanResult;
 
 export function createScanState(): ScanState {
   return {
@@ -91,7 +106,7 @@ function isParentJsonl(path: string): boolean {
 
 export function scanClaudeUsage(
   since: number,
-  opts?: { home?: string; now?: number; state?: ScanState },
+  opts?: ClaudeScanOptions,
 ): ClaudeScanResult {
   const home = opts?.home ?? homedir();
   const now = opts?.now ?? Date.now();
@@ -110,6 +125,11 @@ export function scanClaudeUsage(
     : snapshotInventoryEntries(inventory.entries);
 
   refreshWorkflowLabelsFromEntries(files, state);
+
+  const seeded = since > 0
+    ? seedFileCursors("claude", files, state.files, opts?.resumeCursors ?? [])
+    : [];
+  void seeded;
 
   if (since <= 0) {
     for (const [path] of state.files) {
@@ -190,5 +210,12 @@ export function scanClaudeUsage(
   }
   const { live, active } = latestActivities(candidates);
 
-  return { events: folded, live, active, roots, filesRead };
+  return {
+    events: folded,
+    quotaCacheCursors: snapshotLogCursors("claude", state.files),
+    live,
+    active,
+    roots,
+    filesRead,
+  };
 }

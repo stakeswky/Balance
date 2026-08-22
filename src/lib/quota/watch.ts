@@ -8,6 +8,7 @@ import { scanClaudeUsage } from "./claude-log.server";
 import { scanCodexUsage } from "./codex-log.server";
 import { scanGrokUsage } from "./grok-log.server";
 import { assertQuotaRequestAllowed } from "./local-request.server.ts";
+import { quotaResumeCursors, recordQuotaScanCursors } from "./quota-cache.server.ts";
 import { readOfficialHistory, readOfficialQuota } from "./official.server";
 import { claudeStatuslineSetup, type ClaudeStatuslineSetup } from "./onboarding.ts";
 
@@ -24,21 +25,43 @@ export const pullClaudeUsage = createServerFn({ method: "POST" })
   .validator((data: unknown) => inputSchema.parse(data))
   .handler(async ({ data }) => {
     assertQuotaRequestAllowed();
-    return scanClaudeUsage(data.since);
+    const scanned = scanClaudeUsage(data.since, {
+      resumeCursors: quotaResumeCursors("claude"),
+    });
+    // 缓存写失败（磁盘满/权限）不得让 usage RPC 500：吞掉并记日志，响应仍返回 scan 结果。
+    await recordQuotaScanCursors("claude", scanned.quotaCacheCursors).catch((error) => {
+      console.warn("quota cache cursor write failed", error);
+    });
+    const { quotaCacheCursors: _cacheOnly, ...response } = scanned;
+    return response;
   });
 
 export const pullGrokUsage = createServerFn({ method: "POST" })
   .validator((data: unknown) => inputSchema.parse(data))
   .handler(async ({ data }) => {
     assertQuotaRequestAllowed();
-    return scanGrokUsage(data.since);
+    const scanned = scanGrokUsage(data.since, {
+      resumeCursors: quotaResumeCursors("grok"),
+    });
+    await recordQuotaScanCursors("grok", scanned.quotaCacheCursors).catch((error) => {
+      console.warn("quota cache cursor write failed", error);
+    });
+    const { quotaCacheCursors: _cacheOnly, ...response } = scanned;
+    return response;
   });
 
 export const pullCodexUsage = createServerFn({ method: "POST" })
   .validator((data: unknown) => inputSchema.parse(data))
   .handler(async ({ data }) => {
     assertQuotaRequestAllowed();
-    return scanCodexUsage(data.since);
+    const scanned = scanCodexUsage(data.since, {
+      resumeCursors: quotaResumeCursors("codex"),
+    });
+    await recordQuotaScanCursors("codex", scanned.quotaCacheCursors).catch((error) => {
+      console.warn("quota cache cursor write failed", error);
+    });
+    const { quotaCacheCursors: _cacheOnly, ...response } = scanned;
+    return response;
   });
 
 export const pullOfficialQuota = createServerFn({ method: "GET" }).handler(async () => {

@@ -17,6 +17,8 @@ import {
   snapshotInventoryEntries,
   readChunkFromEntry,
 } from "./file-inventory.server.ts";
+import type { CachedLogCursor } from "./quota-cache.ts";
+import { seedFileCursors, snapshotLogCursors } from "./quota-cursor.server.ts";
 
 const GROW_MS = 30 * 60 * 1000;
 const WRITING_MS = 20 * 1000;
@@ -29,8 +31,17 @@ export interface CodexScanState {
   meta: Map<string, CodexSessionMeta>;
 }
 
+export interface CodexScanOptions {
+  home?: string;
+  codexHome?: string;
+  now?: number;
+  state?: CodexScanState;
+  resumeCursors?: readonly CachedLogCursor[];
+}
+
 export interface CodexScanResult {
   events: UsageEvent[];
+  quotaCacheCursors: CachedLogCursor[];
   live: AgentLiveInfo | null;
   active: AgentLiveInfo[];
   roots: string[];
@@ -38,6 +49,11 @@ export interface CodexScanResult {
   official: OfficialSlice | null;
   officialHistory: OfficialSlice[];
 }
+
+export type ScanCodexUsage = (
+  since: number,
+  opts?: CodexScanOptions,
+) => CodexScanResult;
 
 export function createCodexScanState(): CodexScanState {
   return { files: new Map(), inventory: createFileInventory(), meta: new Map() };
@@ -61,7 +77,7 @@ function sessionIdFromPath(path: string): string {
 
 export function scanCodexUsage(
   since: number,
-  opts?: { home?: string; codexHome?: string; now?: number; state?: CodexScanState },
+  opts?: CodexScanOptions,
 ): CodexScanResult {
   const home = opts?.home ?? homedir();
   const codexHome = codexHomeOf(home, opts?.codexHome);
@@ -80,6 +96,20 @@ export function scanCodexUsage(
   const files = inventory.refreshed
     ? inventory.entries
     : snapshotInventoryEntries(inventory.entries);
+
+  // Codex：token_count 依赖此前 turn_context 的 model；不恢复 cwd/title/session 原文。
+  const seeded = since > 0
+    ? seedFileCursors("codex", files, state.files, opts?.resumeCursors ?? [])
+    : [];
+  for (const { path, cached } of seeded) {
+    if (!cached.modelRaw || state.meta.has(path)) continue;
+    state.meta.set(path, {
+      sessionId: sessionIdFromPath(path),
+      cwd: "",
+      title: "",
+      model: cached.modelRaw,
+    });
+  }
 
   if (since <= 0) {
     for (const [path] of state.files) {
@@ -153,5 +183,18 @@ export function scanCodexUsage(
   const officialHistory = collapseOfficialPlateaus(deduplicatedOfficial);
   const official = officialHistory.at(-1) ?? null;
 
-  return { events: folded, live, active, roots, filesRead, official, officialHistory };
+  return {
+    events: folded,
+    quotaCacheCursors: snapshotLogCursors(
+      "codex",
+      state.files,
+      (path) => state.meta.get(path)?.model,
+    ),
+    live,
+    active,
+    roots,
+    filesRead,
+    official,
+    officialHistory,
+  };
 }

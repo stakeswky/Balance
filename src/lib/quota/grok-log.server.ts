@@ -12,6 +12,8 @@ import {
   snapshotInventoryEntries,
   readChunkFromEntry,
 } from "./file-inventory.server.ts";
+import type { CachedLogCursor } from "./quota-cache.ts";
+import { seedFileCursors, snapshotLogCursors } from "./quota-cursor.server.ts";
 
 const GROW_MS = 30 * 60 * 1000;
 const WRITING_MS = 20 * 1000;
@@ -24,13 +26,27 @@ export interface GrokScanState {
   meta: Map<string, GrokSessionMeta>;
 }
 
+export interface GrokScanOptions {
+  home?: string;
+  grokHome?: string;
+  now?: number;
+  state?: GrokScanState;
+  resumeCursors?: readonly CachedLogCursor[];
+}
+
 export interface GrokScanResult {
   events: UsageEvent[];
+  quotaCacheCursors: CachedLogCursor[];
   live: AgentLiveInfo | null;
   active: AgentLiveInfo[];
   roots: string[];
   filesRead: number;
 }
+
+export type ScanGrokUsage = (
+  since: number,
+  opts?: GrokScanOptions,
+) => GrokScanResult;
 
 export function createGrokScanState(): GrokScanState {
   return { files: new Map(), inventory: createFileInventory(), meta: new Map() };
@@ -79,7 +95,7 @@ function loadSummary(dir: string, meta: GrokSessionMeta): void {
 
 export function scanGrokUsage(
   since: number,
-  opts?: { home?: string; grokHome?: string; now?: number; state?: GrokScanState },
+  opts?: GrokScanOptions,
 ): GrokScanResult {
   const home = opts?.home ?? homedir();
   const grokHome = grokHomeOf(home, opts?.grokHome);
@@ -98,6 +114,22 @@ export function scanGrokUsage(
   const files = inventory.refreshed
     ? inventory.entries
     : snapshotInventoryEntries(inventory.entries);
+
+  // Grok：meta map 以 sid 为 key；其余字段仍由路径/summary 的现有逻辑补齐。
+  const seeded = since > 0
+    ? seedFileCursors("grok", files, state.files, opts?.resumeCursors ?? [])
+    : [];
+  for (const { path, cached } of seeded) {
+    if (!cached.modelRaw) continue;
+    const sid = sessionIdFromPath(path);
+    if (state.meta.has(sid)) continue;
+    state.meta.set(sid, {
+      sessionId: sid,
+      cwd: cwdFromEncoded(path, sessionsRoot),
+      title: "",
+      model: cached.modelRaw,
+    });
+  }
 
   if (since <= 0) {
     for (const [path] of state.files) {
@@ -154,5 +186,16 @@ export function scanGrokUsage(
   }
   const { live, active } = latestActivities(candidates);
 
-  return { events: folded, live, active, roots, filesRead };
+  return {
+    events: folded,
+    quotaCacheCursors: snapshotLogCursors(
+      "grok",
+      state.files,
+      (path) => state.meta.get(sessionIdFromPath(path))?.model,
+    ),
+    live,
+    active,
+    roots,
+    filesRead,
+  };
 }

@@ -17,6 +17,7 @@ import { basename, dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
   quotaCacheSnapshotSchema,
+  hydrateCachedEvent,
   isSafeModelRaw,
   type CachedLogCursor,
   type CachedQuotaEvent,
@@ -301,3 +302,113 @@ export function createQuotaCacheWriter(
 const quotaCacheWriter = createQuotaCacheWriter();
 
 export const enqueueQuotaCacheWrite = quotaCacheWriter.enqueue;
+
+// ── Coordinator (Step 5.8d) ────────────────────────────────────────────
+
+interface QuotaServerCacheState {
+  events: Map<string, UsageEvent>;
+  cursors: Map<string, CachedLogCursor>;
+}
+
+export interface QuotaCacheCoordinatorDeps {
+  path: string;
+  read: (path: string) => QuotaCacheSnapshot | null;
+  enqueue: (
+    path: string,
+    events: UsageEvent[],
+    cursors: CachedLogCursor[],
+    now: number,
+  ) => Promise<void>;
+}
+
+function cursorKey(cursor: CachedLogCursor): string {
+  return `${cursor.agent}:${cursor.pathHash}`;
+}
+
+function sameCursor(left: CachedLogCursor, right: CachedLogCursor): boolean {
+  return left.pathHash === right.pathHash
+    && left.agent === right.agent
+    && left.modelRaw === right.modelRaw
+    && left.resumeOffset === right.resumeOffset
+    && left.observedSize === right.observedSize
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.dev === right.dev
+    && left.ino === right.ino;
+}
+
+export function createQuotaCacheCoordinator(deps: QuotaCacheCoordinatorDeps): {
+  resumeCursors: (agent: AgentId) => CachedLogCursor[];
+  recordCursors: (
+    agent: AgentId,
+    incoming: CachedLogCursor[],
+    now?: number,
+  ) => Promise<void>;
+} {
+  let state: QuotaServerCacheState | null = null;
+  const current = (): QuotaServerCacheState => {
+    if (state) return state;
+    const snapshot = deps.read(deps.path);
+    state = {
+      events: new Map(
+        (snapshot?.events ?? []).map((cached) => {
+          const event = hydrateCachedEvent(cached);
+          return [serverQuotaEventIdentity(event), event] as const;
+        }),
+      ),
+      cursors: new Map(
+        (snapshot?.cursors ?? []).map((cursor) => [cursorKey(cursor), cursor] as const),
+      ),
+    };
+    return state;
+  };
+  return {
+    resumeCursors(agent) {
+      return [...current().cursors.values()].filter((cursor) => cursor.agent === agent);
+    },
+    async recordCursors(agent, incoming, now = Date.now()) {
+      const cache = current();
+      const next = new Map(
+        incoming
+          .filter((cursor) => cursor.agent === agent)
+          .map((cursor) => [cursorKey(cursor), cursor] as const),
+      );
+      const prior = [...cache.cursors.entries()]
+        .filter(([, cursor]) => cursor.agent === agent);
+      const unchanged = prior.length === next.size
+        && prior.every(([key, cursor]) => {
+          const candidate = next.get(key);
+          return candidate != null && sameCursor(cursor, candidate);
+        });
+      if (unchanged) return;
+      for (const [key, cursor] of cache.cursors) {
+        if (cursor.agent === agent) cache.cursors.delete(key);
+      }
+      for (const [key, cursor] of next) cache.cursors.set(key, cursor);
+      await deps.enqueue(
+        deps.path,
+        [...cache.events.values()],
+        [...cache.cursors.values()],
+        now,
+      );
+    },
+  };
+}
+
+const quotaCacheCoordinator = createQuotaCacheCoordinator({
+  path: quotaCachePath(),
+  read: readQuotaCache,
+  enqueue: enqueueQuotaCacheWrite,
+});
+
+export function quotaResumeCursors(agent: AgentId): CachedLogCursor[] {
+  return quotaCacheCoordinator.resumeCursors(agent);
+}
+
+export function recordQuotaScanCursors(
+  agent: AgentId,
+  cursors: CachedLogCursor[],
+  now = Date.now(),
+): Promise<void> {
+  return quotaCacheCoordinator.recordCursors(agent, cursors, now);
+}
