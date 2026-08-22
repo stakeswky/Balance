@@ -238,6 +238,47 @@ test("Codex missing raw model keeps the event but stays unpriced", () => {
   assert.equal(observeWindow([event]).pricedTokenCoverage, 0);
 });
 
+function plateauRow(usedPercent: number, timestamp: string) {
+  return JSON.stringify({
+    timestamp,
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: {
+        last_token_usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cached_input_tokens: 0,
+          cache_write_input_tokens: 0,
+          reasoning_output_tokens: 0,
+        },
+      },
+      rate_limits: {
+        primary: { used_percent: usedPercent, window_minutes: 10080, resets_at: 1787209839 },
+        plan_type: "pro",
+      },
+    },
+  });
+}
+
+test("Codex history keeps only the latest row of an unchanged plateau", () => {
+  const home = mkdtempSync(join(tmpdir(), "balance-codex-plateau-"));
+  const codexHome = join(home, ".codex");
+  const dir = join(codexHome, "sessions", "2026", "08", "21");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "rollout-2026-08-21T10-00-00-01a01caf-0009-78b1-a9fe-152648fe32d4.jsonl");
+  const rows = [
+    plateauRow(57, "2026-08-21T10:00:00.000Z"),
+    plateauRow(57, "2026-08-21T10:01:00.000Z"),
+    plateauRow(58, "2026-08-21T10:02:00.000Z"),
+  ];
+  writeFileSync(file, `${rows.join("\n")}\n`);
+  const now = Date.parse("2026-08-21T10:10:00Z");
+  const result = scanCodexUsage(0, { codexHome, now, state: createCodexScanState() });
+  assert.deepEqual(result.officialHistory.map((row) => row.weekPct), [57, 58]);
+  assert.equal(result.officialHistory[0]!.fetchedAt, Date.parse("2026-08-21T10:01:00.000Z"));
+});
+
 const SPEED_CASES = [
   { raw: "fast", expected: "fast" },
   { raw: "FAST", expected: "fast" },

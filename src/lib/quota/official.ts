@@ -793,4 +793,20 @@ export function parseClaudeStatuslinePayload(
   };
 }
 
+export function collapseOfficialPlateaus(history: OfficialSlice[]): OfficialSlice[] {
+  const output: OfficialSlice[] = [];
+  for (const slice of [...history].sort((left, right) => left.fetchedAt - right.fetchedAt)) {
+    const previous = output.at(-1);
+    const samePlateau = previous != null
+      && previous.agent === slice.agent
+      && previous.windowResetsAt === slice.windowResetsAt
+      && previous.weekResetsAt === slice.weekResetsAt
+      && previous.windowPct === slice.windowPct
+      && previous.weekPct === slice.weekPct;
+    if (samePlateau) output[output.length - 1] = slice;
+    else output.push(slice);
+  }
+  return output;
+}
+
 export { unwrapVal };

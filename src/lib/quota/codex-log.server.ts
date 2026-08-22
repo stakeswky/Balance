@@ -7,7 +7,7 @@ import {
   parseCodexJsonlLine,
   type CodexSessionMeta,
 } from "./codex-jsonl.ts";
-import type { OfficialSlice } from "./official.ts";
+import { collapseOfficialPlateaus, type OfficialSlice } from "./official.ts";
 
 const GROW_MS = 30 * 60 * 1000;
 const WRITING_MS = 20 * 1000;
@@ -183,9 +183,9 @@ export function scanCodexUsage(
   }
   const { live, active } = latestActivities(candidates);
 
-  parsedOfficial.sort((a, b) => a.fetchedAt - b.fetchedAt);
+  parsedOfficial.sort((left, right) => left.fetchedAt - right.fetchedAt);
   const seenOfficial = new Set<string>();
-  const officialHistory = parsedOfficial.filter((slice) => {
+  const deduplicatedOfficial = parsedOfficial.filter((slice) => {
     const key = [
       slice.fetchedAt,
       slice.windowPct ?? "na",
@@ -197,6 +197,7 @@ export function scanCodexUsage(
     seenOfficial.add(key);
     return true;
   });
+  const officialHistory = collapseOfficialPlateaus(deduplicatedOfficial);
   const official = officialHistory.at(-1) ?? null;
 
   return { events: folded, live, active, roots, filesRead, official, officialHistory };
