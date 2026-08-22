@@ -277,3 +277,31 @@ Decoded ID: `{"file":"/src/lib/quota/watch.ts?tss-serverfn-split","export":"pull
 The **quota algorithm and rendering pipeline** are functionally correct: the isolated fixture E2E (Section 2, 16/16 pass) validates all rendering paths with controlled data, and the independent cross-check confirms the computation logic produces correct L1 values from real logs.
 
 The zero-mock live verification **cannot fully validate the end-to-end data flow** because a pre-existing TanStack Start version mismatch breaks serverFn calls in dev mode. This is an infrastructure dependency issue, not a defect in the quota algorithm optimization. The app degrades gracefully (zero console/page errors, correct fallback labels). Fixing the version mismatch (`npm update @tanstack/react-start` or `npm update @tanstack/start-plugin-core`) would restore dev-mode serverFn functionality.
+
+### 6.8 Fix Applied (2026-08-22)
+
+**Root cause**: `@tanstack/react-start@1.168.47` shipped with `@tanstack/router-core@1.171.25` which lacked proper error recovery when `start-plugin-core`'s validate-server-fn-id plugin threw during lazy dev-mode module resolution. The first serverFn request triggered compilation but the validation raced ahead of registration, resulting in HTTP 500.
+
+**Production build** was NOT affected: the `validate-server-fn-id` plugin only runs in `serve` mode (`apply: "serve"`); production builds use SHA256 hash IDs resolved from a pre-compiled manifest.
+
+**Fix**: Pinned `@tanstack/react-start` to `1.168.48` and `@tanstack/router-plugin` to `1.168.34`. The actual behavioral fix is in the transitive dependency `@tanstack/router-core@1.171.26` which added proper module-resolution error recovery.
+
+**Verification**:
+
+| Check | Result |
+|-------|--------|
+| `npm test` | 600/600 pass |
+| `npm run typecheck` | Clean (exit 0) |
+| `npm run build` | Success |
+| Dev-mode serverFn HTTP status | 20/20 return 200 (was: all 500) |
+| Claude Weekly L1 (dev mode, zero mock) | **$2.0k** (matches cross-check $2,084.88) |
+| Page errors (dev mode) | 0 |
+
+**Packages changed**:
+
+| Package | Before | After |
+|---------|--------|-------|
+| `@tanstack/react-start` | 1.168.47 | 1.168.48 |
+| `@tanstack/router-plugin` | 1.168.33 | 1.168.34 |
+| `@tanstack/router-core` (transitive) | 1.171.25 | 1.171.26 |
+| `@tanstack/start-plugin-core` (transitive) | 1.171.37 | 1.171.38 |
