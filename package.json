@@ -29,6 +29,8 @@
     "preview": "vite preview --host 0.0.0.0 --port 8080",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types scripts/**/*.test.mjs src/lib/quota/*.test.ts",
+    "test:quota:algorithm": "node --test --experimental-strip-types src/lib/quota/*.test.ts scripts/quota-algorithm-regression.test.mjs",
+    "bench:quota:replay": "node --experimental-strip-types scripts/quota-replay-benchmark.mjs",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
