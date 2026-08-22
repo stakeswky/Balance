@@ -50,8 +50,16 @@ test("parses turn_completed usage and grok-4.6-build", () => {
   assert.equal(ev.tokensOut, 33067);
   assert.equal(ev.cacheRead, 637568);
   assert.equal(ev.modelRaw, "grok-4.6-build");
-  assert.equal(ev.reportedCostTicks, 424242);
-  assert.equal(ev.reportedCostByModel?.["grok-4.6-build"], 424242);
+  assert.deepEqual(ev.reportedCost, {
+    totalRawValue: 424242,
+    byModelRawValue: { "grok-4.6-build": 424242 },
+    rawUnit: "usd-ticks",
+    usdValue: null,
+    divisor: null,
+    sourceField: "usage.costUsdTicks",
+    schemaVersion: null,
+    semantics: "unverified",
+  });
   assert.equal(ev.ts, 1787153666911);
   assert.equal(ev.task, "接 Grok 日志");
 });

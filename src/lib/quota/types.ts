@@ -12,6 +12,17 @@ export interface UsageAnomaly {
 
 export type UsageSpeed = "standard" | "fast" | "unknown";
 
+export interface ProviderReportedCost {
+  totalRawValue: number;
+  byModelRawValue: Record<string, number>;
+  rawUnit: "usd-ticks" | "unknown";
+  usdValue: number | null;
+  divisor: number | null;
+  sourceField: string;
+  schemaVersion: string | null;
+  semantics: "unverified" | "api-equivalent" | "provider-internal";
+}
+
 export type AgentId = "claude" | "codex" | "grok";
 
 export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
@@ -51,8 +62,7 @@ export interface UsageEvent {
   imageInputTokens?: number;
   imageOutputTokens?: number;
   reasoningMin: number;
-  reportedCostTicks?: number | null;
-  reportedCostByModel?: Record<string, number>;
+  reportedCost?: ProviderReportedCost;
   speed?: UsageSpeed;
   anomalies?: UsageAnomaly[];
 }

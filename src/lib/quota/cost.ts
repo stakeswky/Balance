@@ -9,6 +9,10 @@ export interface CostBreakdown {
   cacheWriteUsd: number;
   imageUsd: number;
   totalUsd: number;
+  recomputedUsd: number;
+  reportedUsd: number | null;
+  costSource: "token-recomputed" | "provider-reported";
+  aggregatedTurnTierUncertain: boolean;
   pricedTokens: number;
   fullyPriced: boolean;
   pricingModel: string | null;
@@ -27,6 +31,10 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
       cacheWriteUsd: 0,
       imageUsd: 0,
       totalUsd: 0,
+      recomputedUsd: 0,
+      reportedUsd: null,
+      costSource: "token-recomputed",
+      aggregatedTurnTierUncertain: false,
       pricedTokens: 0,
       fullyPriced: false,
       pricingModel: null,
@@ -53,6 +61,10 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
       cacheWriteUsd: 0,
       imageUsd: 0,
       totalUsd: 0,
+      recomputedUsd: 0,
+      reportedUsd: null,
+      costSource: "token-recomputed",
+      aggregatedTurnTierUncertain: false,
       pricedTokens: 0,
       fullyPriced: false,
       pricingModel: null,
@@ -95,7 +107,18 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
     (imageInputPriced ? imageInput : 0) +
     (imageOutputPriced ? imageOutput : 0);
   let fullyPriced = imageInputPriced && imageOutputPriced && uncertainWriteTokens === 0;
-  const totalUsd = inputUsd + outputUsd + cacheReadUsd + cacheWriteUsd + imageUsd;
+  const recomputedUsd = inputUsd + outputUsd + cacheReadUsd + cacheWriteUsd + imageUsd;
+  const reportedUsd = event.reportedCost?.semantics === "api-equivalent"
+    ? event.reportedCost.usdValue
+    : null;
+  const useReported = event.agent === "grok" && reportedUsd != null;
+  const totalUsd = useReported ? reportedUsd : recomputedUsd;
+  const costSource = useReported ? "provider-reported" as const : "token-recomputed" as const;
+  const aggregatedTurnTierUncertain = event.agent === "grok"
+    && p.longContextThreshold != null
+    && contextTokens > p.longContextThreshold
+    && !useReported;
+  if (aggregatedTurnTierUncertain) fullyPriced = false;
   const creditMultiplier = fast ? p.fastCreditMultiplier ?? 1 : 1;
   const openAiCredits =
     event.agent === "codex" && p.creditsPerUsd != null
@@ -108,6 +131,10 @@ export function costBreakdown(event: UsageEvent): CostBreakdown {
     cacheWriteUsd,
     imageUsd,
     totalUsd,
+    recomputedUsd,
+    reportedUsd,
+    costSource,
+    aggregatedTurnTierUncertain,
     pricedTokens,
     fullyPriced,
     pricingModel: hit.resolvedModel,

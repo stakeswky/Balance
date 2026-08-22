@@ -1,6 +1,35 @@
-import type { GrokModelId, UsageAnomaly, UsageEvent } from "./types.ts";
+import type { GrokModelId, ProviderReportedCost, UsageAnomaly, UsageEvent } from "./types.ts";
 import { clipTask } from "./claude-jsonl.ts";
 import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
+
+export const GROK_TICK_DIVISORS: Readonly<Record<string, number>> = {
+  "grok-cli-1.0.0": 10_000_000_000,
+};
+
+export function grokReportedCost(
+  totalRawValue: number,
+  byModelRawValue: Record<string, number>,
+  schemaVersion: string | null,
+): ProviderReportedCost {
+  const divisor = schemaVersion ? GROK_TICK_DIVISORS[schemaVersion] ?? null : null;
+  const validTotal = Number.isFinite(totalRawValue) && totalRawValue >= 0;
+  const validModels = Object.values(byModelRawValue).every(
+    (value) => Number.isFinite(value) && value >= 0,
+  );
+  const modelTotal = Object.values(byModelRawValue).reduce((sum, value) => sum + value, 0);
+  const reconciles = !Object.keys(byModelRawValue).length || Math.abs(modelTotal - totalRawValue) <= 1;
+  const verified = divisor != null && validTotal && validModels && reconciles;
+  return {
+    totalRawValue,
+    byModelRawValue,
+    rawUnit: "usd-ticks",
+    usdValue: verified ? totalRawValue / divisor : null,
+    divisor: verified ? divisor : null,
+    sourceField: "usage.costUsdTicks",
+    schemaVersion,
+    semantics: verified ? "api-equivalent" : "unverified",
+  };
+}
 
 export interface GrokSessionMeta {
   sessionId: string;
@@ -110,7 +139,8 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
   const sessionId = String(params.sessionId ?? meta.sessionId);
   const promptId = String(update.prompt_id ?? metaBlock?.eventId ?? `${sessionId}:${ts}`);
   const modelRaw = modelFromUsage(usage, optionalModel(meta.model));
-  const ticks = typeof usage.costUsdTicks === "number" ? usage.costUsdTicks : null;
+  const ticksRaw = usage.costUsdTicks;
+  const ticks = typeof ticksRaw === "number" ? ticksRaw : null;
   const byModel: Record<string, number> = {};
   const models = usage.modelUsage;
   if (models && typeof models === "object") {
@@ -120,6 +150,12 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
       }
     }
   }
+  const schemaVersionRaw = usage.schemaVersion ?? update.schemaVersion ?? obj.schemaVersion;
+  const schemaVersion =
+    typeof schemaVersionRaw === "string" && schemaVersionRaw ? schemaVersionRaw : null;
+  const reportedCost = ticks == null
+    ? undefined
+    : grokReportedCost(ticks, byModel, schemaVersion);
   return {
     id: promptId,
     agent: "grok",
@@ -128,15 +164,9 @@ export function parseGrokUpdateLine(line: string, meta: GrokSessionMeta): UsageE
     ts,
     sessionId,
     task: clipTask(meta.title || meta.cwd || sessionId),
-    tokensIn: counts.tokensIn,
-    tokensOut: counts.tokensOut,
-    cacheRead: counts.cacheRead,
-    cacheWrite: counts.cacheWrite,
-    imageInputTokens: counts.imageInputTokens,
-    imageOutputTokens: counts.imageOutputTokens,
+    ...counts,
     reasoningMin: 0,
-    reportedCostTicks: ticks,
-    reportedCostByModel: Object.keys(byModel).length ? byModel : undefined,
+    reportedCost,
     speed,
     anomalies: counts.anomalies.length ? counts.anomalies : undefined,
   };

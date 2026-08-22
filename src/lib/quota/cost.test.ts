@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { costBreakdown } from "./cost.ts";
+import { grokReportedCost } from "./grok-jsonl.ts";
 import type { UsageEvent } from "./types.ts";
 
 function ev(partial: Partial<UsageEvent>): UsageEvent {
@@ -117,10 +118,12 @@ test("reported ticks are ignored when computing API-equivalent USD", () => {
       modelRaw: "grok-4.6",
       tokensIn: 100_000,
       tokensOut: 0,
-      reportedCostTicks: 99_999_999,
+      reportedCost: grokReportedCost(99_999_999, {}, null),
     }),
   );
   assert.ok(Math.abs(withTicks.totalUsd - 0.2) < 1e-12);
+  assert.equal(withTicks.reportedUsd, null);
+  assert.equal(withTicks.costSource, "token-recomputed");
 });
 
 test("unsplit claude cache write drops quality to family-fallback", () => {
@@ -232,4 +235,25 @@ test("unknown image prices reduce coverage without discarding text cost", () => 
   assert.equal(cost.priced, true);
   assert.equal(cost.imageUsd, 0);
   assert.equal(cost.fullyPriced, false);
+});
+
+/**
+ * Evidence-URL: https://ccusage.com/guide/grok/
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: Grok CLI 1.0.0：`1 tick = 1e-10 USD`、turn 可聚合多请求；版本字段名统一为 `schemaVersion`，实现读取的就是它
+ * Sanitized-Fixture: {"schemaVersion":"grok-cli-1.0.0","costUsdTicks":12500000000,"usd":1.25}
+ */
+test("verified Grok ticks override an ambiguous aggregated-turn recomputation", () => {
+  const event = ev({
+    agent: "grok",
+    model: "grok-4.6",
+    modelRaw: "grok-4.6",
+    tokensIn: 360_000,
+    reportedCost: grokReportedCost(72_000_000_000, { "grok-4.6": 72_000_000_000 }, "grok-cli-1.0.0"),
+  });
+  const cost = costBreakdown(event);
+  assert.equal(cost.reportedUsd, 7.2);
+  assert.equal(cost.totalUsd, 7.2);
+  assert.equal(cost.costSource, "provider-reported");
+  assert.notEqual(cost.recomputedUsd, cost.reportedUsd);
 });
