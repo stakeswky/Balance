@@ -45,7 +45,7 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
   );
 });
 
-test("all desktop native version stamps move together to 0.3.0", () => {
+test("native version stamps stay at 0.3.0 for the 0.3.1 hot pack", () => {
   const cargo = read("src-tauri/Cargo.toml");
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
   const pack = JSON.parse(read("desktop-pack.json"));
@@ -53,7 +53,7 @@ test("all desktop native version stamps move together to 0.3.0", () => {
 
   assert.match(cargo, /^version = "0\.3\.0"$/m);
   assert.equal(config.version, "0.3.0");
-  assert.equal(pack.packVersion, "0.3.0");
+  assert.equal(pack.packVersion, "0.3.1");
   assert.equal(pack.minNativeVersion, "0.3.0");
   assert.match(packageJson.scripts["desktop:verify:dmg"], /Balance_0\.3\.0_aarch64\.dmg/);
 });

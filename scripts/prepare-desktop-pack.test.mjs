@@ -14,7 +14,7 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(join(root, relative), "utf8");
 
-test("desktop pack, Tauri, Cargo, and native lock share version 0.3.0", () => {
+test("desktop pack 0.3.1 keeps native compatibility stamps at 0.3.0", () => {
   const pack = JSON.parse(read("desktop-pack.json"));
   const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
   const lock = JSON.parse(read("desktop-native.lock"));
@@ -22,7 +22,7 @@ test("desktop pack, Tauri, Cargo, and native lock share version 0.3.0", () => {
 
   assert.equal(pack.schemaVersion, 1);
   assert.equal(pack.app, "balance");
-  assert.equal(pack.packVersion, "0.3.0");
+  assert.equal(pack.packVersion, "0.3.1");
   assert.equal(pack.minNativeVersion, "0.3.0");
   assert.equal(tauri.version, "0.3.0");
   assert.equal(cargoVersion, "0.3.0");
@@ -47,7 +47,7 @@ test("desktop prepare stamps pack.json into the Nitro output", () => {
       gitSha: "abc1234deadbeef",
     });
     const written = JSON.parse(readFileSync(join(outputDir, "pack.json"), "utf8"));
-    assert.equal(stamped.packVersion, "0.3.0");
+    assert.equal(stamped.packVersion, "0.3.1");
     assert.equal(stamped.minNativeVersion, "0.3.0");
     assert.equal(stamped.nativeVersion, "0.3.0");
     assert.equal(stamped.gitSha, "abc1234deadbeef");
