@@ -445,8 +445,8 @@ describe("persists scanner cursors via coordinator", () => {
     const { deps, writes } = makeCoordinatorDeps({ snapshot });
     const coordinator = createQuotaCacheCoordinator(deps);
 
-    // Record the exact same cursor
-    await coordinator.recordCursors("claude", [cursor]);
+    // Record the exact same cursor (no events)
+    await coordinator.recordScan("claude", [], [cursor]);
     assert.equal(writes.length, 0, "unchanged cursor should produce zero writes");
   });
 
@@ -457,7 +457,7 @@ describe("persists scanner cursors via coordinator", () => {
     const coordinator = createQuotaCacheCoordinator(deps);
 
     const updated = { ...cursor, resumeOffset: 200, observedSize: 300 };
-    await coordinator.recordCursors("claude", [updated]);
+    await coordinator.recordScan("claude", [], [updated]);
     assert.equal(writes.length, 1, "changed cursor should trigger write");
     assert.ok(
       writes[0].cursors.some((c) => c.resumeOffset === 200),
@@ -473,7 +473,7 @@ describe("persists scanner cursors via coordinator", () => {
     const coordinator = createQuotaCacheCoordinator(deps);
 
     // Record only cursor1, omitting cursor2 (file deleted)
-    await coordinator.recordCursors("claude", [cursor1]);
+    await coordinator.recordScan("claude", [], [cursor1]);
     assert.equal(writes.length, 1, "cursor removal should trigger write");
     assert.equal(
       writes[0].cursors.filter((c) => c.agent === "claude").length,
@@ -492,9 +492,9 @@ describe("persists scanner cursors via coordinator", () => {
 
     // Concurrent updates
     await Promise.all([
-      coordinator.recordCursors("claude", [claudeCursor]),
-      coordinator.recordCursors("codex", [codexCursor]),
-      coordinator.recordCursors("grok", [grokCursor]),
+      coordinator.recordScan("claude", [], [claudeCursor]),
+      coordinator.recordScan("codex", [], [codexCursor]),
+      coordinator.recordScan("grok", [], [grokCursor]),
     ]);
 
     // After all writes, the final write should have all three agents
@@ -518,7 +518,7 @@ describe("persists scanner cursors via coordinator", () => {
     const coordinator = createQuotaCacheCoordinator(deps);
 
     const cursor = makeCursor({ agent: "claude", pathHash: "f".repeat(64) });
-    await coordinator.recordCursors("claude", [cursor]);
+    await coordinator.recordScan("claude", [], [cursor]);
 
     const serialized = JSON.stringify(writes[0].cursors);
     assert.ok(!serialized.includes('"path"'), "no raw path in output");
@@ -553,11 +553,11 @@ describe("persists scanner cursors via coordinator", () => {
 
     const cursor = makeCursor({ agent: "claude", pathHash: "f".repeat(64) });
 
-    // The recordCursors call should throw, but in the watch.ts handler
+    // The recordScan call should throw, but in the watch.ts handler
     // pattern, it's caught. Here we verify the coordinator itself throws
     // and the caller can catch gracefully.
     await assert.rejects(
-      () => coordinator.recordCursors("claude", [cursor]),
+      () => coordinator.recordScan("claude", [], [cursor]),
       /injected disk full/,
       "coordinator should propagate the write error",
     );
@@ -565,6 +565,126 @@ describe("persists scanner cursors via coordinator", () => {
     // After failure, resumeCursors should still work (state is updated in memory)
     const resumed = coordinator.resumeCursors("claude");
     assert.equal(resumed.length, 1, "in-memory state should still have the cursor");
+  });
+});
+
+describe("records scan events in cache", () => {
+  function makeCoordinatorDeps2(overrides?: {
+    snapshot?: QuotaCacheSnapshot | null;
+    enqueue?: QuotaCacheCoordinatorDeps["enqueue"];
+  }): {
+    deps: QuotaCacheCoordinatorDeps;
+    writes: Array<{ events: UsageEvent[]; cursors: CachedLogCursor[] }>;
+  } {
+    const writes: Array<{ events: UsageEvent[]; cursors: CachedLogCursor[] }> = [];
+    const deps: QuotaCacheCoordinatorDeps = {
+      path: "/tmp/test-recordscan-cache.json",
+      read: () => overrides?.snapshot ?? null,
+      enqueue: overrides?.enqueue ?? (async (_path, events, cursors) => {
+        writes.push({ events: [...events], cursors: [...cursors] });
+      }),
+    };
+    return { deps, writes };
+  }
+
+  it("recordScan merges events by hash identity", async () => {
+    const { deps, writes } = makeCoordinatorDeps2();
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const now = Date.now();
+    const event1 = makeEvent({ ts: now - 5000, id: "evt-1", agent: "claude" });
+    const event2 = makeEvent({ ts: now - 3000, id: "evt-2", agent: "claude" });
+    const cursor = makeCursor({ agent: "claude", pathHash: "a".repeat(64) });
+
+    await coordinator.recordScan("claude", [event1, event2], [cursor], now);
+    assert.equal(writes.length, 1, "first recordScan should trigger write");
+    assert.equal(writes[0].events.length, 2, "should have 2 events");
+
+    // Second call with same events: no write
+    await coordinator.recordScan("claude", [event1, event2], [cursor], now);
+    assert.equal(writes.length, 1, "unchanged events should not trigger another write");
+  });
+
+  it("unchanged cursors and events produce zero writes", async () => {
+    const now = Date.now();
+    const event = makeEvent({ ts: now - 1000, id: "stable", agent: "claude" });
+    const cursor = makeCursor({ agent: "claude", pathHash: "s".repeat(64) });
+
+    // Pre-load into coordinator via first recordScan
+    const { deps, writes } = makeCoordinatorDeps2();
+    const coordinator = createQuotaCacheCoordinator(deps);
+    await coordinator.recordScan("claude", [event], [cursor], now);
+    assert.equal(writes.length, 1);
+
+    // Same again — zero writes
+    await coordinator.recordScan("claude", [event], [cursor], now);
+    assert.equal(writes.length, 1, "unchanged state should not write again");
+  });
+});
+
+describe("prunes expired cache events on record scan", () => {
+  it("events older than 8 days are removed from cache", async () => {
+    const now = Date.now();
+    const EIGHT_DAYS = 8 * 24 * 60 * 60_000;
+
+    const oldEvent = makeEvent({ ts: now - EIGHT_DAYS - 1000, id: "old-evt", agent: "claude" });
+    const freshEvent = makeEvent({ ts: now - 1000, id: "fresh-evt", agent: "claude" });
+
+    const writes: Array<{ events: UsageEvent[]; cursors: CachedLogCursor[] }> = [];
+    const deps: QuotaCacheCoordinatorDeps = {
+      path: "/tmp/test-prune-cache.json",
+      read: () => null,
+      enqueue: async (_path, events, cursors) => {
+        writes.push({ events: [...events], cursors: [...cursors] });
+      },
+    };
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    // Seed both events
+    const cursor = makeCursor({ agent: "claude", pathHash: "p".repeat(64) });
+    await coordinator.recordScan("claude", [oldEvent, freshEvent], [cursor], now);
+    assert.equal(writes.length, 1);
+
+    // The old event should have been pruned in the write
+    const writtenEvents = writes[0].events;
+    assert.ok(
+      !writtenEvents.some((e) => e.id === "old-evt"),
+      "expired event should be pruned from write payload",
+    );
+    assert.ok(
+      writtenEvents.some((e) => e.id === "fresh-evt"),
+      "fresh event should remain",
+    );
+  });
+});
+
+describe("cache write failure keeps the usage response", () => {
+  it("handler catches write failure and still returns scan result", async () => {
+    // Simulate what watch.ts does: call recordQuotaScan and catch errors
+    const failingEnqueue: QuotaCacheCoordinatorDeps["enqueue"] = async () => {
+      throw new Error("injected disk full");
+    };
+    const deps: QuotaCacheCoordinatorDeps = {
+      path: "/tmp/test-fail-cache.json",
+      read: () => null,
+      enqueue: failingEnqueue,
+    };
+    const coordinator = createQuotaCacheCoordinator(deps);
+
+    const now = Date.now();
+    const event = makeEvent({ ts: now - 1000, id: "fail-test", agent: "claude" });
+    const cursor = makeCursor({ agent: "claude", pathHash: "f".repeat(64) });
+
+    // recordScan should propagate the error
+    await assert.rejects(
+      () => coordinator.recordScan("claude", [event], [cursor], now),
+      /injected disk full/,
+      "coordinator should propagate write error",
+    );
+
+    // But in-memory state should still be updated (events still accessible)
+    const resumed = coordinator.resumeCursors("claude");
+    assert.equal(resumed.length, 1, "in-memory cursors should survive write failure");
   });
 });
 

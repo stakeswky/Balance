@@ -10,7 +10,7 @@ import { scanGrokUsage } from "./grok-log.server";
 import { assertQuotaRequestAllowed } from "./local-request.server.ts";
 import {
   quotaResumeCursors,
-  recordQuotaScanCursors,
+  recordQuotaScan,
   paginateQuotaBootstrap,
   readQuotaBootstrapSnapshot,
 } from "./quota-cache.server.ts";
@@ -35,10 +35,18 @@ export const pullClaudeUsage = createServerFn({ method: "POST" })
       resumeCursors: quotaResumeCursors("claude"),
     });
     // 缓存写失败（磁盘满/权限）不得让 usage RPC 500：吞掉并记日志，响应仍返回 scan 结果。
-    await recordQuotaScanCursors("claude", scanned.quotaCacheCursors).catch((error) => {
-      console.warn("quota cache cursor write failed", error);
+    await recordQuotaScan(
+      "claude",
+      scanned.quotaCacheEvents,
+      scanned.quotaCacheCursors,
+    ).catch((error) => {
+      console.warn("quota cache write failed", error);
     });
-    const { quotaCacheCursors: _cacheOnly, ...response } = scanned;
+    const {
+      quotaCacheEvents: _cacheEvents,
+      quotaCacheCursors: _cacheCursors,
+      ...response
+    } = scanned;
     return response;
   });
 
@@ -49,10 +57,18 @@ export const pullGrokUsage = createServerFn({ method: "POST" })
     const scanned = scanGrokUsage(data.since, {
       resumeCursors: quotaResumeCursors("grok"),
     });
-    await recordQuotaScanCursors("grok", scanned.quotaCacheCursors).catch((error) => {
-      console.warn("quota cache cursor write failed", error);
+    await recordQuotaScan(
+      "grok",
+      scanned.quotaCacheEvents,
+      scanned.quotaCacheCursors,
+    ).catch((error) => {
+      console.warn("quota cache write failed", error);
     });
-    const { quotaCacheCursors: _cacheOnly, ...response } = scanned;
+    const {
+      quotaCacheEvents: _cacheEvents,
+      quotaCacheCursors: _cacheCursors,
+      ...response
+    } = scanned;
     return response;
   });
 
@@ -63,10 +79,18 @@ export const pullCodexUsage = createServerFn({ method: "POST" })
     const scanned = scanCodexUsage(data.since, {
       resumeCursors: quotaResumeCursors("codex"),
     });
-    await recordQuotaScanCursors("codex", scanned.quotaCacheCursors).catch((error) => {
-      console.warn("quota cache cursor write failed", error);
+    await recordQuotaScan(
+      "codex",
+      scanned.quotaCacheEvents,
+      scanned.quotaCacheCursors,
+    ).catch((error) => {
+      console.warn("quota cache write failed", error);
     });
-    const { quotaCacheCursors: _cacheOnly, ...response } = scanned;
+    const {
+      quotaCacheEvents: _cacheEvents,
+      quotaCacheCursors: _cacheCursors,
+      ...response
+    } = scanned;
     return response;
   });
 

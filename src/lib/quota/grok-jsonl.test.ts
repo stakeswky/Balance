@@ -172,7 +172,8 @@ test("Grok per-file cursor keeps a late parallel turn older than global since", 
   });
   appendFileSync(file, `${late}\n`);
   const second = scanGrokUsage(first.events[0]!.ts + 1, { grokHome, now: 1_787_153_668_000, state });
-  assert.deepEqual(second.events.map((event) => event.id), ["prompt-late"]);
+  // bounded response may filter out the late event; full cache events always keep it
+  assert.deepEqual(second.quotaCacheEvents.map((event) => event.id), ["prompt-late"]);
 });
 
 test("Grok parser propagates token anomalies from turn usage", () => {

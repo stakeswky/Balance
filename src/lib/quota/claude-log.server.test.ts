@@ -178,6 +178,80 @@ describe("resumes hashed file cursors (Claude)", () => {
   });
 });
 
+describe("bounded scanner response (Claude)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bounded-test-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("since>0 returns only overlap events and quotaCacheEvents has all", () => {
+    const { home, sessionPath } = setupClaudeHome(tmpDir);
+    const now = Date.now();
+    const baseTs = now - 3600_000;
+
+    // Write 20 events spread 10s apart
+    const lines: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      lines.push(claudeJsonlLine(baseTs + i * 10_000, i));
+    }
+    fs.writeFileSync(sessionPath, lines.map((l) => l + "\n").join(""));
+
+    const state = createScanState();
+    // First full scan (since=0)
+    const full = scanClaudeUsage(0, { home, now, state });
+    assert.ok(full.events.length === 20, `expected 20 events, got ${full.events.length}`);
+
+    // Second scan with since set to midpoint: should return overlap only
+    const since = baseTs + 10 * 10_000; // ts of event #10
+    const state2 = createScanState();
+    const bounded = scanClaudeUsage(since, { home, now, state: state2 });
+
+    // scanResponseEvents filters to ts > since - 60_000
+    const expectedResponseCount = full.events.filter((e) => e.ts > since - 60_000).length;
+    assert.equal(
+      bounded.events.length,
+      expectedResponseCount,
+      `bounded response should have ${expectedResponseCount} events, got ${bounded.events.length}`,
+    );
+
+    // quotaCacheEvents should contain ALL parsed events
+    assert.ok(
+      (bounded as any).quotaCacheEvents != null,
+      "result must include quotaCacheEvents for server-side cache",
+    );
+    assert.ok(
+      (bounded as any).quotaCacheEvents.length >= bounded.events.length,
+      "quotaCacheEvents should have at least as many events as the response",
+    );
+  });
+
+  it("all response events carry 64-char hex cacheIdentity", () => {
+    const { home, sessionPath } = setupClaudeHome(tmpDir);
+    const now = Date.now();
+    const baseTs = now - 3600_000;
+
+    const lines: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      lines.push(claudeJsonlLine(baseTs + i * 1000, i));
+    }
+    fs.writeFileSync(sessionPath, lines.map((l) => l + "\n").join(""));
+
+    const state = createScanState();
+    const result = scanClaudeUsage(0, { home, now, state });
+
+    for (const event of result.events) {
+      assert.ok(
+        typeof event.cacheIdentity === "string" && /^[a-f0-9]{64}$/.test(event.cacheIdentity),
+        `event ${event.id} must have 64-char hex cacheIdentity, got ${event.cacheIdentity}`,
+      );
+    }
+  });
+});
+
 describe("persists scanner cursors (Claude)", () => {
   let tmpDir: string;
 

@@ -174,6 +174,75 @@ describe("resumes hashed file cursors (Codex)", () => {
   });
 });
 
+describe("bounded scanner response (Codex)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bounded-test-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("since>0 returns only overlap events and quotaCacheEvents has all", () => {
+    const { home, sessionPath } = setupCodexHome(tmpDir);
+    const now = Date.now();
+    const baseTs = now - 3600_000;
+
+    const lines: string[] = [codexTurnContextLine("gpt-5.4-mini")];
+    for (let i = 0; i < 20; i++) {
+      lines.push(codexTokenCountLine(baseTs + i * 10_000, i));
+    }
+    fs.writeFileSync(sessionPath, lines.map((l) => l + "\n").join(""));
+
+    const state1 = createCodexScanState();
+    const full = scanCodexUsage(0, { home, now, state: state1 });
+    assert.ok(full.events.length > 0, "full scan should yield events");
+
+    const since = baseTs + 10 * 10_000;
+    const state2 = createCodexScanState();
+    const bounded = scanCodexUsage(since, { home, now, state: state2 });
+
+    const expectedResponseCount = full.events.filter((e) => e.ts > since - 60_000).length;
+    assert.equal(
+      bounded.events.length,
+      expectedResponseCount,
+      `bounded response should have ${expectedResponseCount} events`,
+    );
+
+    assert.ok(
+      (bounded as any).quotaCacheEvents != null,
+      "result must include quotaCacheEvents",
+    );
+    assert.ok(
+      (bounded as any).quotaCacheEvents.length >= bounded.events.length,
+      "quotaCacheEvents should have all events",
+    );
+  });
+
+  it("all response events carry 64-char hex cacheIdentity", () => {
+    const { home, sessionPath } = setupCodexHome(tmpDir);
+    const now = Date.now();
+    const baseTs = now - 3600_000;
+
+    const lines: string[] = [codexTurnContextLine("gpt-5.5")];
+    for (let i = 0; i < 5; i++) {
+      lines.push(codexTokenCountLine(baseTs + i * 1000, i));
+    }
+    fs.writeFileSync(sessionPath, lines.map((l) => l + "\n").join(""));
+
+    const state = createCodexScanState();
+    const result = scanCodexUsage(0, { home, now, state });
+
+    for (const event of result.events) {
+      assert.ok(
+        typeof event.cacheIdentity === "string" && /^[a-f0-9]{64}$/.test(event.cacheIdentity),
+        `event ${event.id} must have 64-char hex cacheIdentity`,
+      );
+    }
+  });
+});
+
 describe("persists scanner cursors (Codex)", () => {
   let tmpDir: string;
 

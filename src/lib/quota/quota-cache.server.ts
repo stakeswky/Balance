@@ -68,6 +68,21 @@ export function cacheEvent(event: UsageEvent): CachedQuotaEvent {
   };
 }
 
+// ── Shared scanner helpers (Step 5.9c) ────────────────────────────────
+
+export function withCacheIdentity(events: UsageEvent[]): UsageEvent[] {
+  for (const event of events) {
+    event.cacheIdentity ??= eventIdHash(event.agent, event.id);
+  }
+  return events;
+}
+
+export function scanResponseEvents(folded: UsageEvent[], since: number): UsageEvent[] {
+  return since > 0
+    ? folded.filter((event) => event.ts > since - 60_000)
+    : folded;
+}
+
 // ── Persistence I/O (Step 5.8b) ────────────────────────────────────────
 
 const CACHE_RETENTION_MS = 8 * 24 * 60 * 60_000;
@@ -339,14 +354,46 @@ function sameCursor(left: CachedLogCursor, right: CachedLogCursor): boolean {
     && left.ino === right.ino;
 }
 
-export function createQuotaCacheCoordinator(deps: QuotaCacheCoordinatorDeps): {
+function replaceAgentCursors(
+  cache: QuotaServerCacheState,
+  agent: AgentId,
+  incoming: CachedLogCursor[],
+): boolean {
+  const next = new Map(
+    incoming
+      .filter((cursor) => cursor.agent === agent)
+      .map((cursor) => [cursorKey(cursor), cursor] as const),
+  );
+  const prior = [...cache.cursors.entries()]
+    .filter(([, cursor]) => cursor.agent === agent);
+  const unchanged = prior.length === next.size
+    && prior.every(([key, cursor]) => {
+      const candidate = next.get(key);
+      return candidate != null && sameCursor(cursor, candidate);
+    });
+  if (unchanged) return false;
+  for (const [key, cursor] of cache.cursors) {
+    if (cursor.agent === agent) cache.cursors.delete(key);
+  }
+  for (const [key, cursor] of next) cache.cursors.set(key, cursor);
+  return true;
+}
+
+function sameQuotaEventForCache(left: UsageEvent, right: UsageEvent): boolean {
+  return JSON.stringify(cacheEvent(left)) === JSON.stringify(cacheEvent(right));
+}
+
+export interface QuotaCacheCoordinator {
   resumeCursors: (agent: AgentId) => CachedLogCursor[];
-  recordCursors: (
+  recordScan: (
     agent: AgentId,
-    incoming: CachedLogCursor[],
+    incomingEvents: UsageEvent[],
+    incomingCursors: CachedLogCursor[],
     now?: number,
   ) => Promise<void>;
-} {
+}
+
+export function createQuotaCacheCoordinator(deps: QuotaCacheCoordinatorDeps): QuotaCacheCoordinator {
   let state: QuotaServerCacheState | null = null;
   const current = (): QuotaServerCacheState => {
     if (state) return state;
@@ -368,25 +415,31 @@ export function createQuotaCacheCoordinator(deps: QuotaCacheCoordinatorDeps): {
     resumeCursors(agent) {
       return [...current().cursors.values()].filter((cursor) => cursor.agent === agent);
     },
-    async recordCursors(agent, incoming, now = Date.now()) {
+    async recordScan(
+      agent: AgentId,
+      incomingEvents: UsageEvent[],
+      incomingCursors: CachedLogCursor[],
+      now = Date.now(),
+    ): Promise<void> {
       const cache = current();
-      const next = new Map(
-        incoming
-          .filter((cursor) => cursor.agent === agent)
-          .map((cursor) => [cursorKey(cursor), cursor] as const),
-      );
-      const prior = [...cache.cursors.entries()]
-        .filter(([, cursor]) => cursor.agent === agent);
-      const unchanged = prior.length === next.size
-        && prior.every(([key, cursor]) => {
-          const candidate = next.get(key);
-          return candidate != null && sameCursor(cursor, candidate);
-        });
-      if (unchanged) return;
-      for (const [key, cursor] of cache.cursors) {
-        if (cursor.agent === agent) cache.cursors.delete(key);
+      let eventsChanged = false;
+      // 惰性清理：coordinator 的 events Map 只增不减会无限累积；写盘时机按 8 天保留期淘汰。
+      for (const [identity, prior] of cache.events) {
+        if (prior.ts < now - CACHE_RETENTION_MS) {
+          cache.events.delete(identity);
+          eventsChanged = true;
+        }
       }
-      for (const [key, cursor] of next) cache.cursors.set(key, cursor);
+      for (const event of incomingEvents) {
+        if (event.ts < now - CACHE_RETENTION_MS) continue;
+        const identity = serverQuotaEventIdentity(event);
+        const prior = cache.events.get(identity);
+        if (prior && sameQuotaEventForCache(prior, event)) continue;
+        cache.events.set(identity, event);
+        eventsChanged = true;
+      }
+      const cursorsChanged = replaceAgentCursors(cache, agent, incomingCursors);
+      if (!eventsChanged && !cursorsChanged) return;
       await deps.enqueue(
         deps.path,
         [...cache.events.values()],
@@ -407,12 +460,13 @@ export function quotaResumeCursors(agent: AgentId): CachedLogCursor[] {
   return quotaCacheCoordinator.resumeCursors(agent);
 }
 
-export function recordQuotaScanCursors(
+export function recordQuotaScan(
   agent: AgentId,
+  events: UsageEvent[],
   cursors: CachedLogCursor[],
   now = Date.now(),
 ): Promise<void> {
-  return quotaCacheCoordinator.recordCursors(agent, cursors, now);
+  return quotaCacheCoordinator.recordScan(agent, events, cursors, now);
 }
 
 // ── Bootstrap pagination (Step 5.9a) ──────────────────────────────────

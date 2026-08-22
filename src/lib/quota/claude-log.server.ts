@@ -13,6 +13,7 @@ import {
   readChunkFromEntry,
 } from "./file-inventory.server.ts";
 import type { CachedLogCursor } from "./quota-cache.ts";
+import { withCacheIdentity, scanResponseEvents } from "./quota-cache.server.ts";
 import { seedFileCursors, snapshotLogCursors } from "./quota-cursor.server.ts";
 
 const GROW_MS = 30 * 60 * 1000;
@@ -37,6 +38,7 @@ export interface ClaudeScanOptions {
 
 export interface ClaudeScanResult {
   events: UsageEvent[];
+  quotaCacheEvents: UsageEvent[];
   quotaCacheCursors: CachedLogCursor[];
   live: ClaudeLiveInfo | null;
   active: ClaudeLiveInfo[];
@@ -210,8 +212,10 @@ export function scanClaudeUsage(
   }
   const { live, active } = latestActivities(candidates);
 
+  withCacheIdentity(folded);
   return {
-    events: folded,
+    events: scanResponseEvents(folded, since),
+    quotaCacheEvents: folded,
     quotaCacheCursors: snapshotLogCursors("claude", state.files),
     live,
     active,
