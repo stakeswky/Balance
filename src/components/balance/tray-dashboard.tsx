@@ -16,7 +16,6 @@ import {
   formatResetIn,
   pickPreferredSubscription,
   preferredSubscriptionHint,
-  subscriptionLoad,
   weeklyQuotaRows,
   type WeeklyQuotaRow,
 } from "@/lib/quota/weekly-dashboard";
@@ -41,10 +40,10 @@ function WeekRow({
   now: number;
   preferred: boolean;
 }) {
-  const used = subscriptionLoad(row);
-  const remain = Math.max(0, 100 - used);
+  const used = row.usedPct;
+  const remain = row.remainPct;
   const remainText = remain.toFixed(remain >= 10 ? 0 : 1);
-  const usedText = row.usedPct.toFixed(row.usedPct >= 10 ? 0 : 1);
+  const usedText = used.toFixed(used >= 10 ? 0 : 1);
   const status = used >= 88 ? "critical" : used >= 72 ? "watch" : "ok";
   return (
     <article

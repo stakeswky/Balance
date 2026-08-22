@@ -34,6 +34,9 @@ test("tray popup highlights which subscription to use now", () => {
   assert.match(tray, /现在该用/);
   assert.match(tray, />推荐</);
   assert.match(tray, /pickPreferredSubscription/);
+  assert.match(tray, /function WeekRow[\s\S]*?const used = row\.usedPct;/);
+  assert.match(tray, /function WeekRow[\s\S]*?const remain = row\.remainPct;/);
+  assert.doesNotMatch(tray, /function WeekRow[\s\S]*?const used = subscriptionLoad\(row\)/);
   assert.match(tray, /overflow-hidden/);
   assert.doesNotMatch(tray, /RemainRing/);
 });
