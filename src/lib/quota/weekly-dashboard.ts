@@ -29,6 +29,8 @@ export interface WeeklyQuotaRow {
   planName: string;
   usedPct: number;
   remainPct: number;
+  windowUsedPct: number;
+  windowRemainPct: number;
   resetsAt: number;
   source: MeterDataSource;
   status: MeterSnapshot["status"];
@@ -62,6 +64,8 @@ export function weeklyQuotaRows(opts: {
       planName: official?.planLabel?.trim() || plan.name,
       usedPct,
       remainPct: Math.max(0, 100 - usedPct),
+      windowUsedPct: meter.windowPct,
+      windowRemainPct: Math.max(0, 100 - meter.windowPct),
       resetsAt: meter.weekResetsAt,
       source: meterDataSources(official).week,
       status: usedPct >= 88 ? "critical" : usedPct >= 72 ? "watch" : "ok",
@@ -87,4 +91,38 @@ export function weekSourceLabel(source: MeterDataSource): string {
   if (source === "official") return "官方";
   if (source === "official-stale") return "官方快照";
   return "本地估算";
+}
+
+export function subscriptionLoad(row: WeeklyQuotaRow): number {
+  return Math.max(row.usedPct, row.windowUsedPct);
+}
+
+export function pickPreferredSubscription(
+  rows: readonly WeeklyQuotaRow[],
+): WeeklyQuotaRow | null {
+  if (!rows.length) return null;
+  return rows.reduce((best, row) =>
+    subscriptionLoad(row) < subscriptionLoad(best) ? row : best,
+  );
+}
+
+export function preferredSubscriptionHint(
+  preferred: WeeklyQuotaRow,
+  rows: readonly WeeklyQuotaRow[],
+): { title: string; body: string } {
+  const name = preferred.agent === "claude" ? "Claude" : preferred.agent === "grok" ? "Grok" : "Codex";
+  const load = subscriptionLoad(preferred);
+  const othersTight = rows.some(
+    (row) => row.agent !== preferred.agent && subscriptionLoad(row) >= 70,
+  );
+  if (othersTight && load < 40) {
+    return { title: `现在用 ${name}`, body: `${name} 更宽裕，下一趟长任务走这一路。` };
+  }
+  if (load >= 68) {
+    return { title: `现在用 ${name}`, body: "各路都偏紧，短任务优先，重活等回补。" };
+  }
+  if (rows.length === 1) {
+    return { title: `现在用 ${name}`, body: "当前只有这一路可监控。" };
+  }
+  return { title: `现在用 ${name}`, body: `${name} 剩余最多，优先走这一路。` };
 }

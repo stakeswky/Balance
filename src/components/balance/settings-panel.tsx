@@ -122,17 +122,17 @@ export function SettingsPanel() {
       <Card>
         <div className="flex items-center justify-between gap-4">
           <div>
-            <CardTitle>简约模式</CardTitle>
+            <CardTitle>极客模式</CardTitle>
             <CardHint className="mt-1">
-              主页面只保留额度摘要、协同时间线、Agent 卡和 24 小时 token。
+              打开后主页面显示数据来源提示、5 小时窗口细节、实时流水和诊断信息。
             </CardHint>
           </div>
           <Switch
-            checked={minimalMode}
-            aria-label="简约模式"
+            checked={!minimalMode}
+            aria-label="极客模式"
             onCheckedChange={(on) => {
-              useQuota.getState().setMinimalMode(on);
-              toast.message(on ? "已开启简约模式" : "已恢复完整模式");
+              useQuota.getState().setMinimalMode(!on);
+              toast.message(on ? "已开启极客模式" : "已恢复简约模式");
             }}
           />
         </div>

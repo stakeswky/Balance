@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { OfficialSlice } from "./official.ts";
 import type { UsageEvent } from "./types.ts";
-import { formatResetIn, weekSourceLabel, weeklyQuotaRows } from "./weekly-dashboard.ts";
+import {
+  formatResetIn,
+  pickPreferredSubscription,
+  preferredSubscriptionHint,
+  weekSourceLabel,
+  weeklyQuotaRows,
+} from "./weekly-dashboard.ts";
 
 function event(partial: Partial<UsageEvent> = {}): UsageEvent {
   return {
@@ -65,6 +71,50 @@ test("weekly dashboard lists only monitored agents", () => {
   assert.equal(rows[0]?.remainPct, 63);
   assert.equal(rows[0]?.source, "official");
   assert.equal(rows[0]?.status, "ok");
+  assert.equal(rows[0]?.windowUsedPct, 10);
+});
+
+test("preferred subscription is the loosest window-or-week load", () => {
+  const rows = weeklyQuotaRows({
+    events: [],
+    availability: { claude: true, grok: true, codex: true },
+    demoMode: true,
+    official: {
+      claude: official({ agent: "claude", weekPct: 80, windowPct: 90 }),
+      grok: official({ agent: "grok", weekPct: 22, windowPct: 8, planLabel: "SuperGrok" }),
+      codex: official({ agent: "codex", weekPct: 50, windowPct: 46, planLabel: "ChatGPT Plus" }),
+    },
+    claudePlanId: "claude-max-20x",
+    grokPlanId: "grok-super",
+    codexPlanId: "chatgpt-plus",
+    weekBoostPct: 0,
+    now: 1_000,
+  });
+  const preferred = pickPreferredSubscription(rows);
+  assert.equal(preferred?.agent, "grok");
+  const hint = preferredSubscriptionHint(preferred!, rows);
+  assert.equal(hint.title, "现在用 Grok");
+  assert.match(hint.body, /更宽裕/);
+});
+
+test("preferred subscription keeps the first agent when loads tie", () => {
+  const rows = weeklyQuotaRows({
+    events: [],
+    availability: { claude: true, grok: true, codex: false },
+    demoMode: false,
+    official: {
+      claude: official({ agent: "claude", weekPct: 10, windowPct: 10 }),
+      grok: official({ agent: "grok", weekPct: 10, windowPct: 10, planLabel: "SuperGrok" }),
+      codex: null,
+    },
+    claudePlanId: "claude-max-20x",
+    grokPlanId: "grok-super",
+    codexPlanId: "chatgpt-plus",
+    weekBoostPct: 0,
+    now: 1_000,
+  });
+  assert.equal(pickPreferredSubscription(rows)?.agent, "claude");
+  assert.equal(pickPreferredSubscription([]), null);
 });
 
 test("weekly dashboard includes Claude Fable week limit when official reports it", () => {

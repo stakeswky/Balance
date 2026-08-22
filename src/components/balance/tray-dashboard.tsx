@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MeterBar } from "@/components/balance/meter-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { agentDotClass } from "@/lib/quota/agent";
+import { agentDotClass, agentTextClass } from "@/lib/quota/agent";
 import { visibleAgentIds } from "@/lib/quota/agent-availability";
 import { useQuota } from "@/lib/quota/store";
 import {
@@ -14,7 +14,9 @@ import {
 } from "@/lib/quota/watch";
 import {
   formatResetIn,
-  weekSourceLabel,
+  pickPreferredSubscription,
+  preferredSubscriptionHint,
+  subscriptionLoad,
   weeklyQuotaRows,
   type WeeklyQuotaRow,
 } from "@/lib/quota/weekly-dashboard";
@@ -30,64 +32,54 @@ function isTauriShell(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function RemainRing({ remainPct, agent }: { remainPct: number; agent: WeeklyQuotaRow["agent"] }) {
-  const remain = Math.max(0, Math.min(100, remainPct));
-  return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        "relative size-11 shrink-0 rounded-full",
-        agent === "claude" && "text-claude",
-        agent === "grok" && "text-grok",
-        agent === "codex" && "text-codex",
-      )}
-      style={{
-        background: `conic-gradient(currentColor ${remain}%, var(--color-line) 0)`,
-      }}
-    >
-      <span className="absolute inset-[3px] rounded-full bg-surface" />
-    </div>
-  );
-}
-
-function WeekRow({ row, now }: { row: WeeklyQuotaRow; now: number }) {
-  const remainText = row.remainPct.toFixed(row.remainPct >= 10 ? 0 : 1);
+function WeekRow({
+  row,
+  now,
+  preferred,
+}: {
+  row: WeeklyQuotaRow;
+  now: number;
+  preferred: boolean;
+}) {
+  const used = subscriptionLoad(row);
+  const remain = Math.max(0, 100 - used);
+  const remainText = remain.toFixed(remain >= 10 ? 0 : 1);
   const usedText = row.usedPct.toFixed(row.usedPct >= 10 ? 0 : 1);
+  const status = used >= 88 ? "critical" : used >= 72 ? "watch" : "ok";
   return (
-    <article className="rounded-xl bg-surface px-3.5 py-3 shadow-[var(--shadow-border)]">
-      <div className="flex items-start gap-3">
-        <RemainRing remainPct={row.remainPct} agent={row.agent} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className={cn("size-1.5 rounded-full", agentDotClass(row.agent))} />
-              <h2 className="truncate text-sm font-medium tracking-tight text-ink">{row.label}</h2>
-              <Badge tone={row.status}>{STATUS_COPY[row.status]}</Badge>
-            </div>
-            <p className="font-mono text-2xl leading-none font-medium tracking-tight tabular">
-              {remainText}
-              <span className="ml-0.5 text-sm text-mute">%</span>
-            </p>
-          </div>
-          <p className="mt-0.5 truncate text-xs text-mute">
-            {row.planName} · {weekSourceLabel(row.source)}
-          </p>
+    <article
+      className={cn(
+        "rounded-xl bg-surface px-3 py-2 shadow-[var(--shadow-border)]",
+        preferred && "shadow-[var(--shadow-border-hover)]",
+      )}
+      aria-current={preferred ? "true" : undefined}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={cn("size-1.5 rounded-full", agentDotClass(row.agent))} />
+          <h2 className="truncate text-sm font-medium tracking-tight text-ink">{row.label}</h2>
+          {preferred ? <Badge>推荐</Badge> : <Badge tone={status}>{STATUS_COPY[status]}</Badge>}
         </div>
+        <p className="font-mono text-xl leading-none font-medium tracking-tight tabular">
+          {remainText}
+          <span className="ml-0.5 text-xs text-mute">%</span>
+        </p>
       </div>
-      <div className="mt-3">
+      <div className="mt-2">
         <MeterBar
-          value={row.usedPct}
-          tone={row.status === "ok" ? row.agent : row.status === "watch" ? "warn" : "crit"}
-          label={`本周已用 ${usedText}%`}
+          value={used}
+          tone={used >= 88 ? "crit" : used >= 72 ? "warn" : row.agent}
         />
       </div>
-      <p className="mt-2 text-xs text-faint">{formatResetIn(row.resetsAt, now)}</p>
+      <p className="mt-1.5 text-[11px] text-faint">
+        本周已用 {usedText}% · {formatResetIn(row.resetsAt, now)}
+      </p>
       {row.fable ? (
-        <div className="mt-2.5 border-t border-line pt-2.5">
+        <div className="mt-2 border-t border-line pt-2">
           <MeterBar
             value={row.fable.usedPct}
             tone={row.fable.remainPct <= 12 ? "crit" : row.fable.remainPct <= 28 ? "warn" : "claude"}
-            label={`Fable 5 周额度${row.fable.stale ? " · 快照" : ""}`}
+            label={`Fable 5${row.fable.stale ? " · 快照" : ""}`}
           />
         </div>
       ) : null}
@@ -198,17 +190,16 @@ export function TrayDashboard() {
     ],
   );
   const monitored = visibleAgentIds(availability, demoMode, events).length;
+  const preferred = useMemo(() => pickPreferredSubscription(rows), [rows]);
+  const hint = preferred ? preferredSubscriptionHint(preferred, rows) : null;
 
   return (
-    <div className="flex h-dvh flex-col bg-canvas text-ink">
-      <header className="flex items-baseline justify-between px-4 pt-3 pb-2">
-        <div>
-          <p className="text-xs tracking-wide text-mute uppercase">余量</p>
-          <h1 className="text-sm font-medium tracking-tight">周限额</h1>
-        </div>
+    <div className="flex h-dvh flex-col overflow-hidden bg-canvas text-ink">
+      <header className="flex items-baseline justify-between px-4 pt-2 pb-1.5">
+        <p className="text-xs tracking-wide text-mute">余量 · 周限额</p>
         <p className="text-xs text-faint">{monitored ? `${monitored} 个订阅` : "未监控"}</p>
       </header>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 pb-3">
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-2">
         {!ready ? (
           <div className="rounded-xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
             正在读取本机配额…
@@ -222,10 +213,29 @@ export function TrayDashboard() {
             本机还没有检测到 Claude、Grok 或 Codex。
           </div>
         ) : (
-          rows.map((row) => <WeekRow key={row.agent} row={row} now={now} />)
+          <>
+            {hint && preferred ? (
+              <section
+                className="rounded-xl bg-surface px-3.5 py-2.5 shadow-[var(--shadow-border)]"
+                aria-labelledby="tray-pick-title"
+              >
+                <p className="text-xs text-mute">现在该用</p>
+                <h1
+                  id="tray-pick-title"
+                  className={cn("mt-0.5 text-lg font-medium tracking-tight", agentTextClass(preferred.agent))}
+                >
+                  {preferred.label}
+                </h1>
+                <p className="mt-1 text-xs leading-relaxed text-mute">{hint.body}</p>
+              </section>
+            ) : null}
+            {rows.map((row) => (
+              <WeekRow key={row.agent} row={row} now={now} preferred={row.agent === preferred?.agent} />
+            ))}
+          </>
         )}
       </div>
-      <footer className="border-t border-line px-3 py-2.5">
+      <footer className="border-t border-line px-3 py-2">
         <Button asChild className="w-full" size="sm">
           <a
             href="/__desktop/show-main"

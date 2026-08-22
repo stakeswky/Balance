@@ -24,6 +24,22 @@ const MAX_DISPLAY_EVENTS = 20_000;
 const MAX_CALIBRATION_EVENTS = 100_000;
 const MAX_ALERTS = 40;
 
+export const QUOTA_PERSIST_VERSION = 1;
+
+export function migrateQuotaPersist(
+  persisted: unknown,
+  fromVersion: number,
+): Record<string, unknown> {
+  const state =
+    persisted && typeof persisted === "object"
+      ? { ...(persisted as Record<string, unknown>) }
+      : {};
+  if (fromVersion < 1) {
+    state.minimalMode = true;
+  }
+  return state;
+}
+
 export interface QuotaAlert {
   id: string;
   ts: number;
@@ -276,7 +292,7 @@ export const useQuota = create<QuotaState>()(
       liveGrok: false,
       liveCodex: false,
       demoMode: false,
-      minimalMode: false,
+      minimalMode: true,
       agentAvailability: { ...EMPTY_AGENT_AVAILABILITY },
       captureEnabled: { ...ALL_AGENT_AVAILABILITY },
       onboardingComplete: false,
@@ -729,6 +745,8 @@ export const useQuota = create<QuotaState>()(
     }),
     {
       name: "balance-quota-v8",
+      version: QUOTA_PERSIST_VERSION,
+      migrate: migrateQuotaPersist,
       storage: createJSONStorage(() => {
         const memory = new Map<string, string>();
         const legacyNames = ["synq-quota-v8", "synq-quota-v7"];

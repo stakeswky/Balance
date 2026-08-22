@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { OfficialSlice } from "./official.ts";
 import { quotaEventIdentity } from "./quota-cache.ts";
-import { calibrationDataFrom, useQuota } from "./store.ts";
+import { calibrationDataFrom, migrateQuotaPersist, useQuota } from "./store.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
 import { CALIBRATION_RETENTION_MS } from "./types.ts";
 
@@ -95,19 +95,28 @@ test("the real store starts empty with every collector stopped", () => {
   assert.deepEqual(initialLive, [false, false, false]);
 });
 
-test("minimal mode defaults off, toggles, and is selected for persistence", () => {
+test("minimal mode defaults on, geek toggle persists, and v0 storage migrates to simple", () => {
   const eventsBefore = useQuota.getState().events;
-  assert.equal(initialState.minimalMode, false);
+  assert.equal(initialState.minimalMode, true);
 
-  useQuota.getState().setMinimalMode(true);
+  useQuota.getState().setMinimalMode(false);
 
   const state = useQuota.getState();
-  assert.equal(state.minimalMode, true);
+  assert.equal(state.minimalMode, false);
   assert.equal(state.events, eventsBefore);
   const partialize = useQuota.persist.getOptions().partialize;
   assert.ok(partialize);
   const persisted = partialize(state) as Partial<typeof state>;
-  assert.equal(persisted.minimalMode, true);
+  assert.equal(persisted.minimalMode, false);
+  assert.equal(useQuota.persist.getOptions().version, 1);
+
+  const fromV0False = migrateQuotaPersist({ minimalMode: false, demoMode: true }, 0);
+  assert.equal(fromV0False.minimalMode, true);
+  assert.equal(fromV0False.demoMode, true);
+  const fromV0Missing = migrateQuotaPersist({ demoMode: true }, 0);
+  assert.equal(fromV0Missing.minimalMode, true);
+  const fromV1Geek = migrateQuotaPersist({ minimalMode: false }, 1);
+  assert.equal(fromV1Geek.minimalMode, false);
 });
 
 test("demo can be enabled and disabled without losing real events or calibration samples", () => {
