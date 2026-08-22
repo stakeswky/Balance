@@ -65,6 +65,10 @@ export interface UsageEvent {
   reportedCost?: ProviderReportedCost;
   speed?: UsageSpeed;
   anomalies?: UsageAnomaly[];
+  /** 服务端计算的 sha256(agent\0id) 64 位十六进制身份；随 scanner 响应与 cache hydrate 下发浏览器。 */
+  cacheIdentity?: string;
+  /** 未知未来 cache model 的硬 fail-closed 开关；仅内存，不进入 UI 或持久化原文。 */
+  pricingDisabled?: boolean;
 }
 
 export interface SessionState {
