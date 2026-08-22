@@ -60,7 +60,9 @@ function claudeQuotaNote(slice: OfficialSlice | null): string | undefined {
 }
 
 export function Dashboard() {
-  const [view, setView] = useState<ViewId>("monitor");
+  const [view, setView] = useState<ViewId>(
+    import.meta.env.VITE_DESKTOP_UPDATER_E2E === "true" ? "settings" : "monitor",
+  );
   const [now, setNow] = useState(() => Date.now());
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [officialLoadState, setOfficialLoadState] = useState<OfficialLoadState>("loading");
