@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { OfficialSlice } from "./official.ts";
-import { useQuota } from "./store.ts";
+import { quotaEventIdentity } from "./quota-cache.ts";
+import { calibrationDataFrom, useQuota } from "./store.ts";
 import type { AgentId, UsageEvent } from "./types.ts";
+import { CALIBRATION_RETENTION_MS } from "./types.ts";
 
 const initialState = useQuota.getState();
 const initialEvents = [...initialState.events];
@@ -64,6 +66,11 @@ beforeEach(() => {
     liveClaude: true,
     liveGrok: false,
     liveCodex: false,
+    calibrationEventIndex: new Map(),
+    calibrationEvents: [],
+    quotaCacheHydrated: false,
+    cacheHistoryTruncated: false,
+    cacheTruncatedBeforeMs: null,
     quotaSamples: [{
       windowId: "sample-window",
       agent: "claude",
@@ -359,4 +366,107 @@ test("calibration retention keeps 20001 real events and trims display to 20000",
   for (let i = 1; i < state.realEvents.length; i++) {
     assert.ok(state.realEvents[i]!.ts >= state.realEvents[i - 1]!.ts);
   }
+});
+
+test("publishes first and final cache pages", () => {
+  const now = Date.now();
+  const cacheEvent1: UsageEvent = {
+    ...event("claude", "quota-cache:c1", now - 60_000),
+    cacheIdentity: "hash-c1",
+  };
+  const cacheEvent2: UsageEvent = {
+    ...event("claude", "quota-cache:c2", now - 30_000),
+    cacheIdentity: "hash-c2",
+  };
+  const cacheEvent3: UsageEvent = {
+    ...event("grok", "quota-cache:g1", now - 20_000),
+    cacheIdentity: "hash-g1",
+  };
+
+  // Intermediate page (publish:false) — must not update calibrationEvents
+  useQuota.getState().ingestQuotaCache([cacheEvent1], { publish: false, complete: false });
+  assert.deepEqual(useQuota.getState().calibrationEvents, []);
+  assert.equal(useQuota.getState().quotaCacheHydrated, false);
+
+  // First published page (publish:true, complete:false) — publishes sorted calibrationEvents
+  useQuota.getState().ingestQuotaCache([cacheEvent2], { publish: true, complete: false });
+  const afterFirst = useQuota.getState();
+  assert.equal(afterFirst.calibrationEvents.length, 2);
+  assert.ok(afterFirst.calibrationEvents[0]!.ts <= afterFirst.calibrationEvents[1]!.ts);
+  assert.equal(afterFirst.quotaCacheHydrated, false);
+
+  // Final page (publish:true, complete:true) — marks hydration complete
+  useQuota.getState().ingestQuotaCache([cacheEvent3], { publish: true, complete: true });
+  const afterFinal = useQuota.getState();
+  assert.equal(afterFinal.calibrationEvents.length, 3);
+  assert.equal(afterFinal.quotaCacheHydrated, true);
+  // Must be sorted by ts
+  for (let i = 1; i < afterFinal.calibrationEvents.length; i++) {
+    assert.ok(afterFinal.calibrationEvents[i]!.ts >= afterFinal.calibrationEvents[i - 1]!.ts);
+  }
+});
+
+test("real event replaces cached hash", () => {
+  const now = Date.now();
+  const cacheEv: UsageEvent = {
+    ...event("claude", "quota-cache:abc123", now - 60_000),
+    cacheIdentity: "sha256-identity-1",
+  };
+  // Ingest cache event first
+  useQuota.getState().ingestQuotaCache([cacheEv], { publish: true, complete: true });
+  assert.equal(useQuota.getState().calibrationEvents.length, 1);
+  assert.ok(useQuota.getState().calibrationEvents[0]!.id.startsWith("quota-cache:"));
+
+  // Now ingest a real event with the same cacheIdentity (same sha256 hash from server)
+  const realEv: UsageEvent = {
+    ...event("claude", "real-log-abc123", now - 60_000),
+    cacheIdentity: "sha256-identity-1",
+  };
+  useQuota.getState().ingestClaudeLogs([realEv], { replace: true });
+
+  // The real event must have replaced the cached one
+  const state = useQuota.getState();
+  assert.equal(state.calibrationEvents.length, 1);
+  assert.equal(state.calibrationEvents[0]!.id, "real-log-abc123");
+  assert.ok(!state.calibrationEvents[0]!.id.startsWith("quota-cache:"));
+});
+
+test("cache truncation boundary", () => {
+  const now = Date.now();
+  // Both null → null
+  assert.equal(calibrationDataFrom(null, null), null);
+
+  // Only memory boundary → memory boundary
+  assert.equal(calibrationDataFrom(now - 1000, null), now - 1000);
+
+  // Only cache boundary → cache boundary
+  assert.equal(calibrationDataFrom(null, now - 2000), now - 2000);
+
+  // Both present → take the later (larger) value so neither source masks the other
+  assert.equal(calibrationDataFrom(now - 1000, now - 2000), now - 1000);
+  assert.equal(calibrationDataFrom(now - 3000, now - 500), now - 500);
+});
+
+test("prunes expired calibration events on publish", () => {
+  const now = Date.now();
+  const expired: UsageEvent = {
+    ...event("claude", "quota-cache:old", now - CALIBRATION_RETENTION_MS - 1000),
+    cacheIdentity: "hash-old",
+  };
+  const fresh: UsageEvent = {
+    ...event("claude", "quota-cache:new", now - 60_000),
+    cacheIdentity: "hash-new",
+  };
+
+  // Ingest both without publishing first
+  useQuota.getState().ingestQuotaCache([expired, fresh], { publish: false, complete: false });
+
+  // Now publish — the expired event must be pruned
+  useQuota.getState().ingestQuotaCache([], { publish: true, complete: true });
+  const state = useQuota.getState();
+  assert.equal(state.calibrationEvents.length, 1);
+  assert.equal(state.calibrationEvents[0]!.id, "quota-cache:new");
+
+  // The index must also not contain the expired entry
+  assert.equal(state.calibrationEventIndex.size, 1);
 });
