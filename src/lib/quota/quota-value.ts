@@ -848,7 +848,9 @@ export function samplesFromOfficial(
     const stale = kind === "weekly" ? slice.weekStale : slice.windowStale;
     if (used == null || stale) return;
 
-    const sampledAt = slice.fetchedAt;
+    const sampledAt = kind === "weekly"
+      ? slice.weekFetchedAt ?? slice.fetchedAt
+      : slice.windowFetchedAt ?? slice.fetchedAt;
     if (!Number.isFinite(sampledAt) || sampledAt <= 0) return;
     if (sampledAt > now) return;
     const bounds = windowBounds(slice, kind, sampledAt);

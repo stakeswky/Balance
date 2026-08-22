@@ -11,11 +11,13 @@ import {
   claudeOauthAuthFromProcessEnvironment,
   claudeRetryAfterMs,
   claudeSnapshotPath,
+  claudeStatuslineSnapshotPath,
   clearOfficialCache,
   CODEX_USAGE_URL,
   GROK_BILLING_URL,
   legacyClaudeSnapshotPath,
   readClaudeOauthAuth,
+  readClaudeStatuslineSnapshot,
   readOfficialQuota,
   resolveClaudeSnapshotPath,
 } from "./official.server.ts";
@@ -853,4 +855,167 @@ test("Claude 429 backoff quota pools go stale in the cached slice", async () => 
   assert.equal(claudeCalls, 2);
   assert.equal(backedOff.claude?.quotaPools?.length, 2);
   assert.ok(backedOff.claude?.quotaPools?.every((pool) => pool.stale === true));
+});
+
+test("statusline snapshot merges fresh decimal windows without OAuth", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const statuslineSnapshotPath = join(home, "state", "claude-statusline.json");
+  mkdirSync(join(home, "state"), { recursive: true });
+  writeFileSync(statuslineSnapshotPath, `${JSON.stringify({
+    fetchedAt: now - 60_000,
+    rate_limits: {
+      five_hour: { used_percentage: 12.5, resets_at: now + 3_600_000 },
+      seven_day: { used_percentage: 34.25, resets_at: now + 4 * 24 * 3_600_000 },
+    },
+  })}\n`);
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    now,
+    skipCache: true,
+    statuslineSnapshotPath,
+    fetchImpl: async () => new Response("{}", { status: 500 }),
+    readClaudeAuth: async () => null,
+  });
+  assert.equal(q.claude?.windowPct, 12.5);
+  assert.equal(q.claude?.windowResetsAt, now + 3_600_000);
+  assert.equal(q.claude?.weekPct, 34.25);
+  assert.equal(q.claude?.windowStale, false);
+  assert.equal(q.claude?.weekStale, false);
+  assert.equal(q.claude?.windowFetchedAt, now - 60_000);
+  assert.equal(q.claude?.weekFetchedAt, now - 60_000);
+  assert.equal(q.claude?.source, "claude-statusline");
+});
+
+test("statusline precedence keeps OAuth week windows and quota pools", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const statuslineSnapshotPath = join(home, "state", "claude-statusline.json");
+  mkdirSync(join(home, "state"), { recursive: true });
+  writeFileSync(statuslineSnapshotPath, `${JSON.stringify({
+    fetchedAt: now - 30_000,
+    rate_limits: { five_hour: { used_percentage: 12.5, resets_at: now + 3_600_000 } },
+  })}\n`);
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      return new Response(JSON.stringify({
+        five_hour: { utilization: 24, resets_at: "2026-08-21T13:30:00Z" },
+        seven_day: { utilization: 40.25, resets_at: "2026-08-25T00:00:00Z" },
+        seven_day_sonnet: { utilization: 75.5, resets_at: "2026-08-25T00:00:00Z" },
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    now,
+    fetchImpl,
+    skipCache: true,
+    statuslineSnapshotPath,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+  assert.equal(q.claude?.windowPct, 12.5);
+  assert.equal(q.claude?.windowResetsAt, now + 3_600_000);
+  assert.equal(q.claude?.windowFetchedAt, now - 30_000);
+  assert.equal(q.claude?.windowStale, false);
+  assert.equal(q.claude?.weekPct, 40.25);
+  assert.equal(q.claude?.weekResetsAt, Date.parse("2026-08-25T00:00:00Z"));
+  assert.equal(q.claude?.weekFetchedAt, now);
+  assert.equal(q.claude?.source, "claude-statusline+oauth");
+  assert.equal(q.claude?.modelWeekLimits?.sonnet?.usedPct, 75.5);
+  const sonnetPool = q.claude?.quotaPools?.find((pool) => pool.id === "seven_day_sonnet");
+  assert.equal(sonnetPool?.stale, false);
+  assert.equal(sonnetPool?.fetchedAt, now);
+});
+
+test("statusline precedence rejects a percent-only window and survives the cache fast path", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const statuslineSnapshotPath = join(home, "state", "claude-statusline.json");
+  mkdirSync(join(home, "state"), { recursive: true });
+  writeFileSync(statuslineSnapshotPath, `${JSON.stringify({
+    fetchedAt: now - 30_000,
+    rate_limits: {
+      five_hour: { used_percentage: 12.5 },
+      seven_day: { used_percentage: 34.25, resets_at: now + 4 * 24 * 3_600_000 },
+    },
+  })}\n`);
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === CLAUDE_USAGE_URL) {
+      return new Response(JSON.stringify({
+        five_hour: { utilization: 24, resets_at: "2026-08-21T13:30:00Z" },
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  };
+  const readAt = () => readOfficialQuota({
+    home,
+    grokHome,
+    now,
+    fetchImpl,
+    statuslineSnapshotPath,
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+  });
+  const first = await readAt();
+  assert.equal(first.claude?.windowPct, 24);
+  assert.equal(first.claude?.windowResetsAt, Date.parse("2026-08-21T13:30:00Z"));
+  assert.equal(first.claude?.windowFetchedAt, now);
+  assert.equal(first.claude?.windowStale ?? false, false);
+  assert.equal(first.claude?.weekPct, 34.25);
+  assert.equal(first.claude?.weekFetchedAt, now - 30_000);
+  const cached = await readAt();
+  assert.equal(cached.claude?.windowPct, 24);
+  assert.equal(cached.claude?.weekPct, 34.25);
+  assert.equal(cached.claude?.weekFetchedAt, now - 30_000);
+});
+
+test("statusline snapshot resolver and freshness gates reject bad captures", () => {
+  assert.equal(
+    claudeStatuslineSnapshotPath("/Users/u", "darwin", {} as NodeJS.ProcessEnv),
+    join("/Users/u", "Library", "Application Support", "Balance", "claude-statusline.json"),
+  );
+  assert.equal(
+    claudeStatuslineSnapshotPath(
+      "/Users/u",
+      "win32",
+      { LOCALAPPDATA: "/tmp/local-app-data" } as NodeJS.ProcessEnv,
+    ),
+    join("/tmp/local-app-data", "Balance", "claude-statusline.json"),
+  );
+  assert.equal(
+    claudeStatuslineSnapshotPath("/Users/u", "win32", { LOCALAPPDATA: "" } as NodeJS.ProcessEnv),
+    join("/Users/u", "AppData", "Local", "Balance", "claude-statusline.json"),
+  );
+  assert.equal(
+    claudeStatuslineSnapshotPath(
+      "/home/u",
+      "linux",
+      { XDG_STATE_HOME: "/tmp/xdg-state" } as NodeJS.ProcessEnv,
+    ),
+    join("/tmp/xdg-state", "balance", "claude-statusline.json"),
+  );
+  assert.equal(
+    claudeStatuslineSnapshotPath("/home/u", "linux", { XDG_STATE_HOME: " " } as NodeJS.ProcessEnv),
+    join("/home/u", ".local", "state", "balance", "claude-statusline.json"),
+  );
+  const home = mkdtempSync(join(tmpdir(), "balance-statusline-read-"));
+  const path = join(home, "claude-statusline.json");
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const write = (fetchedAt: number) => writeFileSync(path, `${JSON.stringify({
+    fetchedAt,
+    rate_limits: { five_hour: { used_percentage: 12.5, resets_at: now + 3_600_000 } },
+  })}\n`);
+  write(now - 60_000);
+  assert.equal(readClaudeStatuslineSnapshot(path, now)?.windowPct, 12.5);
+  write(now + 6_000);
+  assert.equal(readClaudeStatuslineSnapshot(path, now), null);
+  write(now - 16 * 60_000);
+  assert.equal(readClaudeStatuslineSnapshot(path, now), null);
+  writeFileSync(path, "not json\n");
+  assert.equal(readClaudeStatuslineSnapshot(path, now), null);
 });

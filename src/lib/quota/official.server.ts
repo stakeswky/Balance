@@ -22,6 +22,7 @@ import {
   mergeGrokOfficial,
   parseClaudeHistoryPoints,
   parseClaudePlanHistory,
+  parseClaudeStatuslinePayload,
   parseClaudeUsagePayload,
   parseCodexRateLimitLog,
   parseCodexUsagePayload,
@@ -718,6 +719,7 @@ export async function readOfficialQuota(opts?: {
   skipCache?: boolean;
   cacheMs?: number;
   snapshotPath?: string;
+  statuslineSnapshotPath?: string;
 }): Promise<OfficialQuota> {
   const home = opts?.home ?? homedir();
   const now = opts?.now ?? Date.now();
@@ -726,6 +728,20 @@ export async function readOfficialQuota(opts?: {
   const claudeHistory = readClaudeOfficial(home, now);
   const log = readGrokLog(grokHome);
   const codexLog = readCodexOfficialFromSessions(codexHome);
+
+  const statuslinePath = opts?.statuslineSnapshotPath
+    ?? envPath(process.env.BALANCE_CLAUDE_STATUSLINE_PATH)
+    ?? envPath(process.env.SYNQ_CLAUDE_STATUSLINE_PATH)
+    ?? claudeStatuslineSnapshotPath(home, process.platform, process.env);
+  const statusline = readClaudeStatuslineSnapshot(statuslinePath, now);
+  const mergeClaudeSources = (live: OfficialSlice | null): OfficialSlice | null => {
+    const liveWithHistory = mergeClaudeOfficial(live, claudeHistory);
+    return mergeClaudeStatusline(
+      statusline,
+      live == null ? null : liveWithHistory,
+      live == null ? liveWithHistory : claudeHistory,
+    );
+  };
 
   const cacheMs = opts?.cacheMs ?? GROK_BILLING_CACHE_MS;
   const snapshotPath = opts?.snapshotPath ?? resolveClaudeSnapshotPath(home);
@@ -743,11 +759,10 @@ export async function readOfficialQuota(opts?: {
   const codexFresh = Boolean(codexHit && now - codexHit.at < cacheMs);
   if (claudeFresh && grokFresh && codexFresh) {
     return {
-      claude: mergeClaudeOfficial(
+      claude: mergeClaudeSources(
         claudeHit?.lastAttemptFailed
           ? staleOfficial(usableClaudeSlice(claudeHit, now))
           : claudeHit?.slice ?? null,
-        claudeHistory,
       ),
       grok: mergeGrokOfficial(grokHit?.slice ?? null, log),
       codex: codexHit?.slice ?? codexLog,
@@ -866,7 +881,7 @@ export async function readOfficialQuota(opts?: {
   }
 
   return {
-    claude: mergeClaudeOfficial(claudeLive, claudeHistory),
+    claude: mergeClaudeSources(claudeLive),
     grok: mergeGrokOfficial(grokLive, log),
     codex: codexLive ?? codexLog,
   };
@@ -895,4 +910,122 @@ export function clearOfficialCache(): void {
   claudeCache.clear();
   grokCache.clear();
   codexCache.clear();
+}
+
+const CLAUDE_STATUSLINE_STALE_MS = 15 * 60_000;
+
+// 与 collector 的 envPath 逐字同语义：空串/纯空白环境变量视为未设置。
+function envPath(value: string | undefined): string | undefined {
+  return value && value.trim() ? value : undefined;
+}
+
+export function claudeStatuslineSnapshotPath(
+  home = homedir(),
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (platform === "darwin") {
+    return join(home, "Library", "Application Support", "Balance", "claude-statusline.json");
+  }
+  if (platform === "win32") {
+    return join(
+      envPath(env.LOCALAPPDATA) ?? join(home, "AppData", "Local"),
+      "Balance",
+      "claude-statusline.json",
+    );
+  }
+  return join(
+    envPath(env.XDG_STATE_HOME) ?? join(home, ".local", "state"),
+    "balance",
+    "claude-statusline.json",
+  );
+}
+
+export function readClaudeStatuslineSnapshot(path: string, now = Date.now()): OfficialSlice | null {
+  const text = readText(path);
+  if (!text) return null;
+  try {
+    const stored = JSON.parse(text) as { fetchedAt?: unknown; rate_limits?: unknown };
+    const fetchedAt = Number(stored.fetchedAt);
+    if (
+      !Number.isFinite(fetchedAt)
+      || fetchedAt > now + 5_000
+      || now - fetchedAt > CLAUDE_STATUSLINE_STALE_MS
+    ) return null;
+    return parseClaudeStatuslinePayload({ rate_limits: stored.rate_limits }, {
+      fetchedAt,
+      source: "claude-statusline",
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function mergeClaudeStatusline(
+  statusline: OfficialSlice | null,
+  oauth: OfficialSlice | null,
+  fallback: OfficialSlice | null,
+): OfficialSlice | null {
+  const statusWindow = statusline?.windowPct != null
+    && Number.isFinite(statusline.windowPct)
+    && statusline.windowResetsAt != null
+    && Number.isFinite(statusline.windowResetsAt);
+  const statusWeek = statusline?.weekPct != null
+    && Number.isFinite(statusline.weekPct)
+    && statusline.weekResetsAt != null
+    && Number.isFinite(statusline.weekResetsAt);
+  const nonStatuslineBase = oauth ?? fallback;
+  if (!nonStatuslineBase && !statusWindow && !statusWeek) return null;
+  // oauth != null 时 base === oauth；否则 base === fallback。尾部 `...base` 已原样
+  // 带上 products/quotaPools/modelWeekLimits/modelWeekLimitsStale/prepaid/onDemand
+  // 及其 stale 位，返回对象里绝不能再对这些字段做显式二次覆盖——那会把 429/backoff
+  // 下 staleOfficial 标好的 modelWeekLimitsStale:true 无条件翻回 false，打红
+  // official.server.test.ts:482（"Claude last-success snapshot survives cache reset"）。
+  // 仅当两个来源都为空、base 是 statusline 合成体时才显式给空值。
+  const base: OfficialSlice = nonStatuslineBase ?? {
+    ...statusline!,
+    windowPct: null,
+    weekPct: null,
+    windowResetsAt: null,
+    weekResetsAt: null,
+    weekStartedAt: null,
+    windowDurationMs: null,
+    weekDurationMs: null,
+    windowStale: true,
+    weekStale: true,
+    products: [],
+    quotaPools: undefined,
+    modelWeekLimits: undefined,
+    modelWeekLimitsStale: undefined,
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+  };
+  const windowFetchedAt = statusWindow
+    ? statusline!.fetchedAt
+    : base.windowFetchedAt ?? base.fetchedAt;
+  const weekFetchedAt = statusWeek
+    ? statusline!.fetchedAt
+    : base.weekFetchedAt ?? base.fetchedAt;
+  return {
+    ...base,
+    windowPct: statusWindow ? statusline!.windowPct : base.windowPct,
+    weekPct: statusWeek ? statusline!.weekPct : base.weekPct,
+    windowResetsAt: statusWindow ? statusline!.windowResetsAt : base.windowResetsAt,
+    weekResetsAt: statusWeek ? statusline!.weekResetsAt : base.weekResetsAt,
+    weekStartedAt: statusWeek ? statusline!.weekStartedAt : base.weekStartedAt,
+    windowDurationMs: statusWindow ? statusline!.windowDurationMs : base.windowDurationMs,
+    weekDurationMs: statusWeek ? statusline!.weekDurationMs : base.weekDurationMs,
+    windowKind: statusWindow ? statusline!.windowKind : base.windowKind,
+    windowFetchedAt,
+    weekFetchedAt,
+    fetchedAt: Math.max(windowFetchedAt, weekFetchedAt),
+    source: statusWindow || statusWeek
+      ? oauth
+        ? "claude-statusline+oauth"
+        : "claude-statusline"
+      : base.source,
+    windowStale: statusWindow ? false : base.windowStale,
+    weekStale: statusWeek ? false : base.weekStale,
+  };
 }

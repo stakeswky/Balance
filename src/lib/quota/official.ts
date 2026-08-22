@@ -49,6 +49,8 @@ export interface OfficialSlice {
   modelWeekLimitsStale?: boolean;
   source: string;
   fetchedAt: number;
+  windowFetchedAt?: number;
+  weekFetchedAt?: number;
   windowKind: "five_hour" | "weekly";
 }
 
