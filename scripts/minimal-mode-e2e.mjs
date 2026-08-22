@@ -115,7 +115,7 @@ async function assertFullAgentCardDetails(page) {
     ]);
     assert.equal(await card.getByText("本周 token", { exact: true }).count(), 1);
     assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 1);
-    assert.equal(await card.getByText("本地价格覆盖率", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("可计价 token 覆盖率", { exact: true }).count(), 1);
     assert.equal(await card.getByText("价格版本", { exact: true }).count(), 1);
     assert.ok((await card.locator("dt").count()) > 2, `${heading} should keep full details`);
   }
@@ -142,6 +142,8 @@ async function assertMinimalAgentCardDetails(page) {
     "5h API 等价",
     "本周 credit 等价",
     "本地价格覆盖率",
+    "可计价 token 覆盖率",
+    "可计价事件覆盖率",
     "价格版本",
     "并行任务",
     "实时会话",
@@ -188,7 +190,7 @@ async function persistedMinimalMode(page) {
     return raw ? JSON.parse(raw).state?.minimalMode : undefined;
   });
 }
-async function newSeededPage(browser, { state, availability, viewport }) {
+async function newSeededPage(browser, { state, availability, viewport, persistVersion = 1 }) {
   const context = await browser.newContext({ viewport, locale: "zh-CN" });
   const diagnostics = { consoleErrors: [], pageErrors: [], requestFailures: [], httpErrors: [] };
   context.on("page", (openedPage) => attachDiagnostics(openedPage, diagnostics));
@@ -212,16 +214,39 @@ async function newSeededPage(browser, { state, availability, viewport }) {
   page.setDefaultTimeout(20_000);
   await page.goto(BASE, { waitUntil: "commit" });
   await page.evaluate(
-    (persistedState) =>
+    ({ persistedState, persistVersion: version }) =>
       localStorage.setItem(
         "balance-quota-v8",
-        JSON.stringify({ state: persistedState, version: 0 }),
+        JSON.stringify({ state: persistedState, version }),
       ),
-    state,
+    { persistedState: state, persistVersion },
   );
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "监控", exact: true }).waitFor();
   return { context, page, diagnostics };
+}
+function geekSwitch(page) {
+  return page.getByRole("switch", { name: "极客模式" });
+}
+async function assertAdvicePlanOneLine(page) {
+  const timeline = cardAround(page, "协同时间线");
+  const title = timeline.getByRole("heading", { name: "协同计划", exact: true });
+  const section = timeline.locator('[aria-labelledby="collaboration-plan-title"]');
+  const firstTip = section.locator("li").first();
+  await title.waitFor();
+  const titleBox = await title.boundingBox();
+  const tipBox = await firstTip.boundingBox();
+  const sectionBox = await section.boundingBox();
+  assert.ok(titleBox && tipBox && sectionBox, "collaboration plan boxes must exist");
+  assert.ok(
+    Math.abs(titleBox.y + titleBox.height / 2 - (tipBox.y + tipBox.height / 2)) <= 16,
+    `plan title and tips should share a row: title=${titleBox.y} tip=${tipBox.y}`,
+  );
+  assert.ok(
+    tipBox.x >= titleBox.x + titleBox.width - 8,
+    `tips should sit to the right of the title: titleX=${titleBox.x} tipX=${tipBox.x}`,
+  );
+  assert.ok(sectionBox.height <= 72, `collaboration plan too tall: ${sectionBox.height}`);
 }
 async function assertFullMode(page) {
   const timeline = cardAround(page, "协同时间线");
@@ -308,20 +333,38 @@ try {
     state: {
       onboardingComplete: true,
       demoMode: true,
-      minimalMode: false,
       adapterHint: true,
       agentAvailability: ALL_AGENTS,
     },
+    persistVersion: 0,
     availability: ALL_AGENTS,
     viewport: { width: 1280, height: 900 },
   });
   await page.getByRole("heading", { name: "Claude Code", exact: true }).waitFor();
-  await assertFullMode(page);
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem("balance-quota-v8");
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return parsed.version === 1 && parsed.state?.minimalMode === true;
+  });
+  await assertMinimalMode(page);
+  await assertAdvicePlanOneLine(page);
   await openView(page, "设置");
-  const minimalSwitch = page.getByRole("switch", { name: "简约模式" });
-  await minimalSwitch.waitFor();
-  assert.equal(await minimalSwitch.getAttribute("data-state"), "unchecked");
-  await minimalSwitch.click();
+  const geek = geekSwitch(page);
+  await geek.waitFor();
+  assert.equal(await geek.getAttribute("data-state"), "unchecked");
+  assert.equal(await persistedMinimalMode(page), true);
+  await geek.click();
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem("balance-quota-v8");
+    return raw ? JSON.parse(raw).state?.minimalMode === false : false;
+  });
+  assert.equal(await persistedMinimalMode(page), false);
+  await openView(page, "监控");
+  await assertFullMode(page);
+  await assertAdvicePlanOneLine(page);
+  await openView(page, "设置");
+  await geekSwitch(page).click();
   await page.waitForFunction(() => {
     const raw = localStorage.getItem("balance-quota-v8");
     return raw ? JSON.parse(raw).state?.minimalMode === true : false;
@@ -348,20 +391,17 @@ try {
   await page.getByRole("heading", { name: "协同时间线", exact: true }).waitFor();
   await assertMinimalMode(page);
   await openView(page, "设置");
-  assert.equal(
-    await page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
-    "checked",
-  );
+  assert.equal(await geekSwitch(page).getAttribute("data-state"), "unchecked");
   await page.setViewportSize({ width: 390, height: 844 });
   await openView(page, "监控");
   await assertMinimalMode(page);
+  await assertAdvicePlanOneLine(page);
   await assertNoOverflow(page);
   await assertMobileOrder(page);
   await page.screenshot({ path: mobileShot, fullPage: true });
   await page.setViewportSize({ width: 1280, height: 900 });
   await openView(page, "设置");
-  const checkedSwitch = page.getByRole("switch", { name: "简约模式" });
-  await checkedSwitch.click();
+  await geekSwitch(page).click();
   await page.waitForFunction(() => {
     const raw = localStorage.getItem("balance-quota-v8");
     return raw ? JSON.parse(raw).state?.minimalMode === false : false;
@@ -372,10 +412,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "实时流水", exact: true }).waitFor();
   await openView(page, "设置");
-  assert.equal(
-    await page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
-    "unchecked",
-  );
+  assert.equal(await geekSwitch(page).getAttribute("data-state"), "checked");
   await page.evaluate(() => {
     Object.defineProperty(Storage.prototype, "setItem", {
       configurable: true,
@@ -384,9 +421,9 @@ try {
       },
     });
   });
-  const blockedSwitch = page.getByRole("switch", { name: "简约模式" });
+  const blockedSwitch = geekSwitch(page);
   await blockedSwitch.click();
-  assert.equal(await blockedSwitch.getAttribute("data-state"), "checked");
+  assert.equal(await blockedSwitch.getAttribute("data-state"), "unchecked");
   await openView(page, "监控");
   await assertMinimalMode(page);
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -401,23 +438,21 @@ try {
       adapterHint: true,
       agentAvailability: ALL_AGENTS,
     },
+    persistVersion: 0,
     availability: ALL_AGENTS,
     viewport: { width: 1280, height: 900 },
   });
   await legacy.page.getByRole("heading", { name: "Claude Code", exact: true }).waitFor();
-  await assertFullMode(legacy.page);
+  await assertMinimalMode(legacy.page);
   await openView(legacy.page, "设置");
-  assert.equal(
-    await legacy.page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
-    "unchecked",
-  );
+  assert.equal(await geekSwitch(legacy.page).getAttribute("data-state"), "unchecked");
+  assert.equal(await persistedMinimalMode(legacy.page), true);
   assertDiagnostics(legacy.diagnostics);
   await legacy.context.close();
   const single = await newSeededPage(browser, {
     state: {
       onboardingComplete: true,
       demoMode: false,
-      minimalMode: true,
       adapterHint: true,
       agentAvailability: CLAUDE_ONLY,
     },
@@ -443,17 +478,13 @@ try {
   );
   await assertNoOverflow(single.page);
   await openView(single.page, "设置");
-  assert.equal(
-    await single.page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
-    "checked",
-  );
+  assert.equal(await geekSwitch(single.page).getAttribute("data-state"), "unchecked");
   assertDiagnostics(single.diagnostics);
   await single.context.close();
   const empty = await newSeededPage(browser, {
     state: {
       onboardingComplete: true,
       demoMode: false,
-      minimalMode: true,
       adapterHint: true,
       agentAvailability: NO_AGENTS,
     },
@@ -471,10 +502,7 @@ try {
     assert.equal(await empty.page.getByRole("heading", { name: heading, exact: true }).count(), 0);
   await assertNoOverflow(empty.page);
   await empty.page.getByRole("button", { name: "打开设置", exact: true }).click();
-  assert.equal(
-    await empty.page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
-    "checked",
-  );
+  assert.equal(await geekSwitch(empty.page).getAttribute("data-state"), "unchecked");
   assertDiagnostics(empty.diagnostics);
   await empty.context.close();
   console.log(
