@@ -547,7 +547,7 @@ export function Dashboard() {
           <div className="space-y-3">
             <section className="grid gap-3 lg:grid-cols-[minmax(0,17rem)_1fr]">
               {tighter ? (
-                <Card>
+                <Card className="self-start">
                   <p className="text-xs text-mute">更紧的窗口</p>
                   <p className="mt-2 font-mono text-5xl leading-none font-medium tracking-tight tabular">
                     {Math.max(0, 100 - tighterPct).toFixed(0)}

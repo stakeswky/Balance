@@ -33,5 +33,6 @@ test("monitor cards and dashboard use compact spacing", () => {
   assert.match(card, /p-3 shadow-\[var\(--shadow-border\)\] sm:p-4/);
   assert.match(dashboard, /px-4 py-4 sm:px-6 sm:py-5/);
   assert.match(dashboard, /space-y-3/);
+  assert.match(dashboard, /self-start/);
   assert.doesNotMatch(dashboard, /space-y-5/);
 });
