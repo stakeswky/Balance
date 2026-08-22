@@ -59,6 +59,42 @@ function isAvailabilityRequest(request) {
   if (!url.includes("/_serverFn/") || request.method() !== "GET") return false;
   return url.includes("cHVsbEFnZW50QXZhaWxhYmlsaXR5") || url.includes("pullAgentAvailability");
 }
+function attachDiagnostics(page, diagnostics) {
+  page.on("console", (msg) => {
+    if (msg.type() === "error") diagnostics.consoleErrors.push(msg.text());
+  });
+  page.on("pageerror", (error) => {
+    diagnostics.pageErrors.push(String(error?.message || error));
+  });
+  page.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText || "failed";
+    if (
+      request.url().includes("/_serverFn/") &&
+      !isAvailabilityRequest(request) &&
+      failure.includes("net::ERR_FAILED")
+    )
+      return;
+    diagnostics.requestFailures.push(`${request.method()} ${request.url()} ${failure}`);
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 400)
+      diagnostics.httpErrors.push(
+        `${response.status()} ${response.request().method()} ${response.url()}`,
+      );
+  });
+}
+function assertDiagnostics(diagnostics) {
+  const filteredConsoleErrors = diagnostics.consoleErrors.filter(
+    (message) => message !== "Failed to load resource: net::ERR_FAILED",
+  );
+  const entries = [
+    ...filteredConsoleErrors.map((content) => `console error: ${content}`),
+    ...diagnostics.pageErrors.map((content) => `pageerror: ${content}`),
+    ...diagnostics.requestFailures.map((content) => `request failed: ${content}`),
+    ...diagnostics.httpErrors.map((content) => `HTTP error: ${content}`),
+  ];
+  assert.equal(entries.length, 0, `runtime diagnostics found errors:\n${entries.join("\n")}`);
+}
 function cardAround(page, heading) {
   return page
     .getByRole("heading", { name: heading, exact: true })
@@ -75,6 +111,8 @@ async function persistedMinimalMode(page) {
 }
 async function newSeededPage(browser, { state, availability, viewport }) {
   const context = await browser.newContext({ viewport, locale: "zh-CN" });
+  const diagnostics = { consoleErrors: [], pageErrors: [], requestFailures: [], httpErrors: [] };
+  context.on("page", (openedPage) => attachDiagnostics(openedPage, diagnostics));
   await context.route("**/_serverFn/**", async (route) => {
     const request = route.request();
     if (isAvailabilityRequest(request)) {
@@ -101,7 +139,7 @@ async function newSeededPage(browser, { state, availability, viewport }) {
   );
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "监控", exact: true }).waitFor();
-  return { context, page };
+  return { context, page, diagnostics };
 }
 async function assertFullMode(page) {
   const timeline = cardAround(page, "协同时间线");
@@ -127,6 +165,19 @@ async function assertMinimalMode(page) {
     chartBox.width >= mainBox.width - 64,
     `token chart should span the content width: ${chartBox.width} < ${mainBox.width - 64}`,
   );
+}
+async function assertDesktopMinimalLayout(page) {
+  const cards = [
+    cardAround(page, "Claude Code"),
+    cardAround(page, "Grok"),
+    cardAround(page, "Codex"),
+  ];
+  const boxes = await Promise.all(cards.map((card) => card.boundingBox()));
+  boxes.forEach((box) => assert.ok(box, "desktop agent card must have bounds"));
+  assert.ok(Math.max(...boxes.map((box) => box.y)) - Math.min(...boxes.map((box) => box.y)) <= 1);
+  const timeline = cardAround(page, "协同时间线");
+  for (const lane of ["Claude", "Grok", "Codex"])
+    assert.equal(await timeline.getByText(lane, { exact: true }).count(), 1);
 }
 async function assertMobileOrder(page) {
   const cards = [
@@ -169,7 +220,7 @@ const browser = await chromium.launch({
   args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
 try {
-  const { context, page } = await newSeededPage(browser, {
+  const { context, page, diagnostics } = await newSeededPage(browser, {
     state: {
       onboardingComplete: true,
       demoMode: true,
@@ -194,6 +245,7 @@ try {
   assert.equal(await persistedMinimalMode(page), true);
   await openView(page, "监控");
   await assertMinimalMode(page);
+  await assertDesktopMinimalLayout(page);
   await assertNoOverflow(page);
   await page.getByRole("button", { name: "全部暂停", exact: true }).click();
   const resume = page.getByRole("button", { name: "开始协同", exact: true });
@@ -256,6 +308,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "实时流水", exact: true }).waitFor();
   await assertFullMode(page);
+  assertDiagnostics(diagnostics);
   await context.close();
   const legacy = await newSeededPage(browser, {
     state: {
@@ -274,6 +327,7 @@ try {
     await legacy.page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
     "unchecked",
   );
+  assertDiagnostics(legacy.diagnostics);
   await legacy.context.close();
   const single = await newSeededPage(browser, {
     state: {
@@ -309,6 +363,7 @@ try {
     await single.page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
     "checked",
   );
+  assertDiagnostics(single.diagnostics);
   await single.context.close();
   const empty = await newSeededPage(browser, {
     state: {
@@ -336,6 +391,7 @@ try {
     await empty.page.getByRole("switch", { name: "简约模式" }).getAttribute("data-state"),
     "checked",
   );
+  assertDiagnostics(empty.diagnostics);
   await empty.context.close();
   console.log(
     "PASS minimal mode covers persistence, storage failure, full/minimal layouts, non-target views, single/zero agents, and desktop/mobile viewports",
