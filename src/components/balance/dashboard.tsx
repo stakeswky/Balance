@@ -81,6 +81,7 @@ export function Dashboard() {
   const liveGrok = useQuota((s) => s.liveGrok);
   const liveCodex = useQuota((s) => s.liveCodex);
   const demoMode = useQuota((s) => s.demoMode);
+  const minimalMode = useQuota((s) => s.minimalMode);
   const claudeWriting = useQuota((s) => s.claudeWriting);
   const grokWriting = useQuota((s) => s.grokWriting);
   const codexWriting = useQuota((s) => s.codexWriting);
@@ -491,7 +492,7 @@ export function Dashboard() {
       />
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        {adapterHint && view === "monitor" && visibleAgents.length ? (
+        {adapterHint && !minimalMode && view === "monitor" && visibleAgents.length ? (
           <div className="mb-5 flex flex-col gap-3 rounded-xl bg-surface px-4 py-3 shadow-[var(--shadow-border)] sm:flex-row sm:items-center">
             <p className="flex-1 text-sm text-mute">
               {demoMode
@@ -685,7 +686,9 @@ export function Dashboard() {
               ) : null}
             </section>
 
-            <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+            <section
+              className={minimalMode ? "grid gap-5" : "grid gap-5 lg:grid-cols-[1.2fr_0.8fr]"}
+            >
               <Card>
                 <CardTitle>近 24 小时 token</CardTitle>
                 <CardHint className="mt-1">
@@ -695,13 +698,15 @@ export function Dashboard() {
                   <UsageChart agents={visibleAgents} events={visibleEvents} now={now} />
                 </div>
               </Card>
-              <Card>
-                <CardTitle>实时流水</CardTitle>
-                <CardHint className="mt-1">点一条看完整会话</CardHint>
-                <div className="mt-3">
-                  <EventFeed events={visibleEvents} now={now} onOpen={setSessionId} />
-                </div>
-              </Card>
+              {!minimalMode ? (
+                <Card>
+                  <CardTitle>实时流水</CardTitle>
+                  <CardHint className="mt-1">点一条看完整会话</CardHint>
+                  <div className="mt-3">
+                    <EventFeed events={visibleEvents} now={now} onOpen={setSessionId} />
+                  </div>
+                </Card>
+              ) : null}
             </section>
           </div>
         ) : null}
