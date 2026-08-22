@@ -29,6 +29,15 @@ test("collaboration plan keeps title and tips on one row", () => {
   assert.doesNotMatch(advice, /CardHint/);
 });
 
+test("tray popup highlights which subscription to use now", () => {
+  const tray = read("src/components/balance/tray-dashboard.tsx");
+  assert.match(tray, /现在该用/);
+  assert.match(tray, />推荐</);
+  assert.match(tray, /pickPreferredSubscription/);
+  assert.match(tray, /overflow-hidden/);
+  assert.doesNotMatch(tray, /RemainRing/);
+});
+
 test("monitor cards and dashboard use compact spacing", () => {
   const card = read("src/components/ui/card.tsx");
   const dashboard = read("src/components/balance/dashboard.tsx");

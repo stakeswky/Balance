@@ -423,8 +423,12 @@ try {
   const tray = await context.newPage();
   tray.setDefaultTimeout(20_000);
   await tray.goto(new URL("/tray", BASE).toString(), { waitUntil: "domcontentloaded" });
-  await tray.getByRole("heading", { name: "周限额", exact: true }).waitFor();
   await tray.getByText("3 个订阅", { exact: true }).waitFor();
+  await tray.getByText("现在该用", { exact: true }).waitFor();
+  await tray.getByText("推荐", { exact: true }).waitFor();
+  for (const name of ["Claude Code", "Grok", "Codex"]) {
+    assert.ok((await tray.getByText(name, { exact: true }).count()) >= 1, `${name} should appear in the tray`);
+  }
   await tray.close();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "协同时间线", exact: true }).waitFor();
