@@ -329,6 +329,7 @@ export function Dashboard() {
   const codexPlan = planById(codexPlanId);
   const official = useQuota((s) => s.official);
   const quotaSamples = useQuota((s) => s.quotaSamples);
+  const calibrationTruncatedBeforeMs = useQuota((s) => s.calibrationTruncatedBeforeMs);
   const claudeMeter = useMemo(
     () =>
       applyOfficial(
@@ -360,30 +361,30 @@ export function Dashboard() {
   );
   const claudeWeekVal = useMemo(
     () =>
-      quotaValueFor(analyticsEvents, "claude", official.claude, "weekly", now, quotaSamples ?? []),
-    [analyticsEvents, official.claude, now, quotaSamples],
+      quotaValueFor(analyticsEvents, "claude", official.claude, "weekly", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    [analyticsEvents, official.claude, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const claudeWinVal = useMemo(
     () =>
-      quotaValueFor(analyticsEvents, "claude", official.claude, "five_hour", now, quotaSamples ?? []),
-    [analyticsEvents, official.claude, now, quotaSamples],
+      quotaValueFor(analyticsEvents, "claude", official.claude, "five_hour", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    [analyticsEvents, official.claude, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const grokWeekVal = useMemo(
-    () => quotaValueFor(analyticsEvents, "grok", official.grok, "weekly", now, quotaSamples ?? []),
-    [analyticsEvents, official.grok, now, quotaSamples],
+    () => quotaValueFor(analyticsEvents, "grok", official.grok, "weekly", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    [analyticsEvents, official.grok, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const grokWinVal = useMemo(
-    () => quotaValueFor(analyticsEvents, "grok", official.grok, "five_hour", now, quotaSamples ?? []),
-    [analyticsEvents, official.grok, now, quotaSamples],
+    () => quotaValueFor(analyticsEvents, "grok", official.grok, "five_hour", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    [analyticsEvents, official.grok, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const codexWeekVal = useMemo(
-    () => quotaValueFor(analyticsEvents, "codex", official.codex, "weekly", now, quotaSamples ?? []),
-    [analyticsEvents, official.codex, now, quotaSamples],
+    () => quotaValueFor(analyticsEvents, "codex", official.codex, "weekly", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    [analyticsEvents, official.codex, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const codexWinVal = useMemo(
     () =>
-      quotaValueFor(analyticsEvents, "codex", official.codex, "five_hour", now, quotaSamples ?? []),
-    [analyticsEvents, official.codex, now, quotaSamples],
+      quotaValueFor(analyticsEvents, "codex", official.codex, "five_hour", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    [analyticsEvents, official.codex, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const claudePoolViews = useMemo<QuotaPoolView[]>(() => {
     const slice = official.claude;
@@ -395,10 +396,11 @@ export function Dashboard() {
         pool,
         now,
         quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
       );
       return valuation ? [{ pool, valuation }] : [];
     });
-  }, [official.claude, analyticsEvents, now, quotaSamples]);
+  }, [official.claude, analyticsEvents, now, quotaSamples, calibrationTruncatedBeforeMs]);
   const combinedUsd = visibleAgents.reduce((sum, agent) => {
     if (agent === "claude") return sum + claudeWeekVal.l1Usd;
     if (agent === "grok") return sum + grokWeekVal.l1Usd;

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
@@ -25,6 +27,7 @@ mkdirSync(SHOT_DIR, { recursive: true });
 
 const AVAILABILITY_ID = "cHVsbEFnZW50QXZhaWxhYmlsaXR5";
 const OFFICIAL_ID = "cHVsbE9mZmljaWFsUXVvdGE";
+const HISTORY_ID = "cHVsbE9mZmljaWFsSGlzdG9yeQ";
 
 function productionServerFnId(name) {
   const ssrDir = resolve(".vercel/output/functions/__server.func/_ssr");
@@ -43,6 +46,25 @@ const AVAILABILITY_IDS = [AVAILABILITY_ID, productionServerFnId("pullAgentAvaila
   Boolean,
 );
 const OFFICIAL_IDS = [OFFICIAL_ID, productionServerFnId("pullOfficialQuota")].filter(Boolean);
+const HISTORY_IDS = [HISTORY_ID, productionServerFnId("pullOfficialHistory")].filter(Boolean);
+const BOOTSTRAP_IDS = [
+  Buffer.from("pullQuotaBootstrap").toString("base64url"),
+  productionServerFnId("pullQuotaBootstrap"),
+].filter(Boolean);
+const CLAUDE_USAGE_IDS = [
+  Buffer.from("pullClaudeUsage").toString("base64url"),
+  productionServerFnId("pullClaudeUsage"),
+].filter(Boolean);
+const GROK_USAGE_IDS = [
+  Buffer.from("pullGrokUsage").toString("base64url"),
+  productionServerFnId("pullGrokUsage"),
+].filter(Boolean);
+const CODEX_USAGE_IDS = [
+  Buffer.from("pullCodexUsage").toString("base64url"),
+  productionServerFnId("pullCodexUsage"),
+].filter(Boolean);
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+const E2E_NOW = Date.now();
 const VIEWPORTS = {
   desktop: { width: 1280, height: 900 },
   mobile: { width: 390, height: 844 },
@@ -64,6 +86,27 @@ function serialized(result) {
 }
 
 function officialSlice(partial = {}) {
+  const fetchedAt = partial.fetchedAt ?? Date.now();
+  const defaultResetsAt = E2E_NOW + 5 * 24 * 60 * 60 * 1000;
+  const modelWeekLimits = "modelWeekLimits" in partial
+    ? partial.modelWeekLimits
+    : { fable: { usedPct: 26, resetsAt: defaultResetsAt } };
+  const poolStale = partial.modelWeekLimitsStale ?? false;
+  const quotaPools = partial.quotaPools ?? (modelWeekLimits
+    ? Object.entries(modelWeekLimits).map(([model, limit]) => ({
+        id: `seven_day_${model}`,
+        kind: "model-week",
+        usagePercent: limit.usedPct,
+        startsAt: (limit.resetsAt ?? defaultResetsAt) - 7 * 24 * 60 * 60 * 1000,
+        resetsAt: limit.resetsAt ?? defaultResetsAt,
+        durationMs: 7 * 24 * 60 * 60 * 1000,
+        models: [model],
+        exactUsedUsd: null,
+        exactLimitUsd: null,
+        fetchedAt,
+        stale: poolStale,
+      }))
+    : []);
   return {
     agent: "claude",
     windowPct: 24,
@@ -79,13 +122,88 @@ function officialSlice(partial = {}) {
     prepaidBalance: null,
     onDemandUsed: null,
     onDemandCap: null,
-    modelWeekLimits: {
-      fable: { usedPct: 26, resetsAt: null },
-    },
+    modelWeekLimits,
+    quotaPools,
     source: "oauth-usage",
-    fetchedAt: Date.now(),
+    fetchedAt,
     windowKind: "five_hour",
     ...partial,
+  };
+}
+
+function cachedQuotaEvent(event) {
+  return {
+    idHash: createHash("sha256")
+      .update(`${event.agent}\0${event.id}`, "utf8")
+      .digest("hex"),
+    agent: event.agent,
+    model: event.model,
+    modelRaw: event.modelRaw,
+    ts: event.ts,
+    tokensIn: event.tokensIn,
+    tokensOut: event.tokensOut,
+    cacheRead: event.cacheRead,
+    cacheWrite: event.cacheWrite,
+  };
+}
+
+function usageEvent(id, ts, tokensIn = 1_000_000) {
+  return {
+    id,
+    agent: "claude",
+    model: "sonnet",
+    modelRaw: "claude-sonnet-5",
+    ts,
+    sessionId: "quota-e2e",
+    task: "额度 E2E fixture",
+    tokensIn,
+    tokensOut: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoningMin: 0,
+  };
+}
+
+function priorWindowFixture() {
+  const resetAt = E2E_NOW - 60 * 60 * 1000;
+  const startAt = resetAt - FIVE_HOURS_MS;
+  // Generate enough history points to produce sufficient slopes for calibration
+  const points = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30];
+  const step = Math.floor((resetAt - startAt) / (points.length + 1));
+  const history = points.map((windowPct, index) => officialSlice({
+    fetchedAt: startAt + (index + 1) * step,
+    windowPct,
+    windowResetsAt: resetAt,
+    windowDurationMs: FIVE_HOURS_MS,
+    source: "quota-e2e-history",
+  }));
+  const historicalEvents = points.slice(1).map((_, index) =>
+    usageEvent(`prior-${index}`, startAt + (index + 1) * step - 1_000),
+  );
+  const currentMixEvent = usageEvent("current-mix", E2E_NOW - 1_000, 1_000);
+  return { history, events: [...historicalEvents, currentMixEvent] };
+}
+
+const PRIOR = priorWindowFixture();
+
+function persistedState(extra = {}) {
+  return {
+    onboardingComplete: true,
+    demoMode: false,
+    adapterHint: false,
+    agentAvailability: { claude: true, grok: false, codex: false },
+    captureEnabled: { claude: true, grok: false, codex: false },
+    events: [],
+    realEvents: [],
+    liveClaude: false,
+    liveGrok: false,
+    liveCodex: false,
+    official: { claude: null, grok: null, codex: null },
+    quotaSamples: [],
+    calibrationTruncatedBeforeMs: null,
+    cacheHistoryTruncated: false,
+    cacheTruncatedBeforeMs: null,
+    ...extra,
   };
 }
 
@@ -107,7 +225,7 @@ const SCENARIOS = {
       "官方窗口剩余",
       "5 小时窗（官方）",
       "本周额度（官方）",
-      "Fable 5 周额度（官方）",
+      "Fable 5 周池（官方）",
       "24%",
       "34%",
       "26%",
@@ -128,7 +246,7 @@ const SCENARIOS = {
       "34%",
       "充足",
     ],
-    absent: ["5 小时窗（官方）", "Fable 5 周额度（官方）"],
+    absent: ["5 小时窗（官方）", "Fable 5 周池（官方）"],
   },
   stale: {
     official: {
@@ -150,10 +268,10 @@ const SCENARIOS = {
       "官方快照窗口剩余",
       "5 小时窗（官方快照）",
       "本周额度（官方快照）",
-      "Fable 5 周额度（官方快照）",
+      "Fable 5 周池（官方快照）",
       "96%",
       "95%",
-      "94%",
+      "94.0%",
       "官方快照",
     ],
     absent: ["5 小时窗（官方）", "本周额度（官方）", "将尽"],
@@ -170,11 +288,118 @@ const SCENARIOS = {
     ],
     absent: ["5 小时窗（官方）", "本周额度（官方）"],
   },
+  pools: {
+    official: {
+      claude: officialSlice({
+        fetchedAt: E2E_NOW,
+        quotaPools: [
+          {
+            id: "seven_day_sonnet",
+            kind: "model-week",
+            usagePercent: 75.5,
+            startsAt: E2E_NOW - 2 * 24 * 60 * 60 * 1000,
+            resetsAt: E2E_NOW + 5 * 24 * 60 * 60 * 1000,
+            durationMs: 7 * 24 * 60 * 60 * 1000,
+            models: ["sonnet"],
+            exactUsedUsd: null,
+            exactLimitUsd: null,
+            fetchedAt: E2E_NOW,
+            stale: false,
+          },
+          {
+            id: "seven_day_opus",
+            kind: "model-week",
+            usagePercent: 10.25,
+            startsAt: E2E_NOW - 2 * 24 * 60 * 60 * 1000,
+            resetsAt: E2E_NOW + 5 * 24 * 60 * 60 * 1000,
+            durationMs: 7 * 24 * 60 * 60 * 1000,
+            models: ["opus"],
+            exactUsedUsd: null,
+            exactLimitUsd: null,
+            fetchedAt: E2E_NOW,
+            stale: false,
+          },
+          {
+            id: "seven_day_fable",
+            kind: "model-week",
+            usagePercent: 26,
+            startsAt: E2E_NOW - 2 * 24 * 60 * 60 * 1000,
+            resetsAt: E2E_NOW + 5 * 24 * 60 * 60 * 1000,
+            durationMs: 7 * 24 * 60 * 60 * 1000,
+            models: ["fable"],
+            exactUsedUsd: null,
+            exactLimitUsd: null,
+            fetchedAt: E2E_NOW,
+            stale: false,
+          },
+          {
+            id: "extra_usage",
+            kind: "extra-usage",
+            usagePercent: 42.5,
+            startsAt: null,
+            resetsAt: null,
+            durationMs: null,
+            models: [],
+            exactUsedUsd: 42.5,
+            exactLimitUsd: 100,
+            fetchedAt: E2E_NOW,
+            stale: false,
+          },
+        ],
+      }),
+      grok: null,
+      codex: null,
+    },
+    history: [],
+    present: [
+      "Sonnet 周池（官方）",
+      "Opus 周池（官方）",
+      "Fable 5 周池（官方）",
+      "已用 $42.5 / 上限 $100 · 精确剩余 $57.5",
+    ],
+    absent: ["估算额外用量剩余", "快照仅供参考"],
+    accessibilityNames: ["独立额度池"],
+  },
+  "historical-prior": {
+    state: { events: PRIOR.events, realEvents: PRIOR.events },
+    bootstrapEvents: PRIOR.events.map(cachedQuotaEvent),
+    official: {
+      claude: officialSlice({
+        fetchedAt: E2E_NOW,
+        windowPct: 1,
+        windowResetsAt: E2E_NOW + 4 * 60 * 60 * 1000,
+        windowDurationMs: FIVE_HOURS_MS,
+      }),
+      grok: null,
+      codex: null,
+    },
+    history: PRIOR.history,
+    present: ["· 检测到本机日志之外的额度消耗", "无可用校准"],
+    absent: ["当前窗口样本"],
+  },
+  truncated: {
+    state: {
+      calibrationTruncatedBeforeMs: E2E_NOW - 30 * 60 * 1000,
+    },
+    official: {
+      claude: officialSlice({
+        fetchedAt: E2E_NOW,
+        windowPct: 8,
+        windowResetsAt: E2E_NOW + 4 * 60 * 60 * 1000,
+        windowDurationMs: FIVE_HOURS_MS,
+      }),
+      grok: null,
+      codex: null,
+    },
+    history: [],
+    present: ["· 本地校准历史已截断，区间已关闭", "样本不足"],
+    absent: ["当前窗口样本", "历史窗口先验"],
+  },
 };
 
 function isRequest(request, ids, name) {
   const url = request.url();
-  if (request.method() !== "GET" || !url.includes("/_serverFn/")) return false;
+  if (!url.includes("/_serverFn/")) return false;
   if (ids.some((id) => url.includes(id)) || url.includes(name)) return true;
   try {
     const encoded = new URL(url).pathname.split("/_serverFn/")[1]?.split("/")[0];
@@ -206,27 +431,13 @@ async function runScenario(browser, scenarioName, viewportName) {
   const held = [];
   let officialSeen = 0;
   const serverFnRequests = [];
-  await context.addInitScript(() => {
+  const scannerBodies = [];
+  await context.addInitScript((state) => {
     localStorage.setItem(
       "balance-quota-v8",
-      JSON.stringify({
-        state: {
-          onboardingComplete: true,
-          demoMode: false,
-          adapterHint: false,
-          agentAvailability: { claude: true, grok: false, codex: false },
-          captureEnabled: { claude: true, grok: false, codex: false },
-          events: [],
-          realEvents: [],
-          liveClaude: false,
-          liveGrok: false,
-          liveCodex: false,
-          official: { claude: null, grok: null, codex: null },
-        },
-        version: 0,
-      }),
+      JSON.stringify({ state, version: 0 }),
     );
-  });
+  }, persistedState(scenario.state ?? {}));
   await context.route(/https:\/\/(grok\.com|fonts\.(gstatic|googleapis)\.com)\//, async (route) => {
     const type = route.request().resourceType();
     await route.fulfill({
@@ -252,6 +463,61 @@ async function runScenario(browser, scenarioName, viewportName) {
       });
       return;
     }
+    if (isRequest(request, BOOTSTRAP_IDS, "pullQuotaBootstrap")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-tss-serialized": "true" },
+        body: serialized({
+          events: scenario.bootstrapEvents ?? [],
+          nextOffset: null,
+          savedAt: scenario.bootstrapEvents?.length ? E2E_NOW : null,
+          historyTruncated: false,
+          truncatedBeforeMs: null,
+          snapshotKey: scenario.bootstrapEvents?.length ? "a".repeat(64) : null,
+          restart: false,
+        }),
+      });
+      return;
+    }
+    if (isRequest(request, CLAUDE_USAGE_IDS, "pullClaudeUsage")) {
+      scannerBodies.push(request.postData() ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-tss-serialized": "true" },
+        body: serialized({ events: [], live: null, active: [], roots: [], filesRead: 0 }),
+      });
+      return;
+    }
+    if (isRequest(request, GROK_USAGE_IDS, "pullGrokUsage")) {
+      scannerBodies.push(request.postData() ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-tss-serialized": "true" },
+        body: serialized({ events: [], live: null, active: [], roots: [], filesRead: 0 }),
+      });
+      return;
+    }
+    if (isRequest(request, CODEX_USAGE_IDS, "pullCodexUsage")) {
+      scannerBodies.push(request.postData() ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-tss-serialized": "true" },
+        body: serialized({
+          events: [],
+          live: null,
+          active: [],
+          roots: [],
+          filesRead: 0,
+          official: null,
+          officialHistory: [],
+        }),
+      });
+      return;
+    }
     if (isRequest(request, OFFICIAL_IDS, "pullOfficialQuota")) {
       officialSeen += 1;
       if (scenario.mode === "error") {
@@ -268,6 +534,18 @@ async function runScenario(browser, scenarioName, viewportName) {
         body: serialized(scenario.official ?? { claude: null, grok: null, codex: null }),
       });
       return;
+    }
+    if (isRequest(request, HISTORY_IDS, "pullOfficialHistory")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-tss-serialized": "true" },
+        body: serialized(scenario.history ?? []),
+      });
+      return;
+    }
+    if (new URL(request.url()).pathname.includes("_serverFn")) {
+      throw new Error(`unmocked serverFn in isolated quota E2E: ${request.url()}`);
     }
     await route.continue();
   });
@@ -319,6 +597,25 @@ async function runScenario(browser, scenarioName, viewportName) {
       });
       if (alertCount !== 0) throw new Error(`stale quota emitted ${alertCount} alerts`);
     }
+    for (const name of scenario.accessibilityNames ?? []) {
+      await page.getByLabel(name, { exact: true }).waitFor({ state: "visible" });
+    }
+    if (scenario.bootstrapEvents?.length) {
+      const l1 = page.getByTestId("quota-claude-weekly-l1");
+      await l1.waitFor({ state: "visible" });
+      const l1Before = await l1.textContent();
+      const samplesBefore = await page.evaluate(() => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        return raw ? (JSON.parse(raw).state.quotaSamples?.length ?? 0) : 0;
+      });
+      await page.waitForTimeout(3_000);
+      assert.ok(scannerBodies.length > 0, "scanner must be called at least once");
+      assert.equal(await l1.textContent(), l1Before);
+      assert.equal(await page.evaluate(() => {
+        const raw = localStorage.getItem("balance-quota-v8");
+        return raw ? (JSON.parse(raw).state.quotaSamples?.length ?? 0) : 0;
+      }), samplesBefore);
+    }
     const size = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
@@ -334,7 +631,7 @@ async function runScenario(browser, scenarioName, viewportName) {
     ) {
       throw new Error(JSON.stringify(diagnostics));
     }
-    if ((scenarioName === "full" || scenarioName === "stale") && viewportName === "desktop") {
+    if ((scenarioName === "full" || scenarioName === "stale" || scenarioName === "pools" || scenarioName === "historical-prior" || scenarioName === "truncated") && viewportName === "desktop") {
       await page.screenshot({
         path: shotPath(`quota-source-${scenarioName}-${viewportName}.png`),
         fullPage: true,
