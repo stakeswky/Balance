@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { costBreakdown } from "./cost.ts";
+import { costBreakdown, costBreakdownCacheStats } from "./cost.ts";
 import { grokReportedCost } from "./grok-jsonl.ts";
 import type { UsageEvent } from "./types.ts";
 
@@ -256,4 +256,50 @@ test("verified Grok ticks override an ambiguous aggregated-turn recomputation", 
   assert.equal(cost.totalUsd, 7.2);
   assert.equal(cost.costSource, "provider-reported");
   assert.notEqual(cost.recomputedUsd, cost.reportedUsd);
+});
+
+test("cost cache reuses identity but invalidates after mutation", () => {
+  const event = ev({ tokensIn: 1_000 });
+  const before = costBreakdownCacheStats();
+  const first = costBreakdown(event);
+  const second = costBreakdown(event);
+  assert.equal(first, second);
+  event.tokensIn = 2_000;
+  const third = costBreakdown(event);
+  assert.notEqual(third.totalUsd, first.totalUsd);
+  const after = costBreakdownCacheStats();
+  assert.equal(after.hits - before.hits, 1);
+  assert.equal(after.misses - before.misses, 2);
+});
+
+test("cost cache invalidates on ts change", () => {
+  const event = ev({ tokensIn: 1_000, ts: 100 });
+  const before = costBreakdownCacheStats();
+  costBreakdown(event);
+  event.ts = 200;
+  costBreakdown(event);
+  const after = costBreakdownCacheStats();
+  assert.equal(after.misses - before.misses, 2);
+  assert.equal(after.hits - before.hits, 0);
+});
+
+test("cost cache invalidates on reportedCost semantics/usdValue change", () => {
+  const event = ev({
+    agent: "grok",
+    model: "grok-4.6",
+    modelRaw: "grok-4.6",
+    tokensIn: 100_000,
+    reportedCost: grokReportedCost(72_000_000_000, { "grok-4.6": 72_000_000_000 }, "grok-cli-1.0.0"),
+  });
+  const before = costBreakdownCacheStats();
+  const first = costBreakdown(event);
+  costBreakdown(event); // hit
+  event.reportedCost!.usdValue = 9.99;
+  const afterUsd = costBreakdown(event);
+  assert.notEqual(afterUsd.totalUsd, first.totalUsd);
+  event.reportedCost!.semantics = "provider-internal";
+  costBreakdown(event);
+  const after = costBreakdownCacheStats();
+  assert.equal(after.hits - before.hits, 1);
+  assert.equal(after.misses - before.misses, 3);
 });
