@@ -295,6 +295,16 @@ async function assertDesktopMinimalLayout(page) {
   const timeline = cardAround(page, "协同时间线");
   for (const lane of ["Claude", "Grok", "Codex"])
     assert.equal(await timeline.getByText(lane, { exact: true }).count(), 1);
+  const tight = page
+    .getByText("更紧的窗口", { exact: true })
+    .locator("xpath=ancestor::div[contains(@class,'rounded-2xl')][1]");
+  const tightBox = await tight.boundingBox();
+  const timelineBox = await timeline.boundingBox();
+  assert.ok(tightBox && timelineBox, "tight window and timeline cards must have bounds");
+  assert.ok(
+    Math.abs(tightBox.y + tightBox.height - (timelineBox.y + timelineBox.height)) <= 2,
+    `top row cards should share a bottom edge: tight=${tightBox.y + tightBox.height} timeline=${timelineBox.y + timelineBox.height}`,
+  );
 }
 async function assertMobileOrder(page) {
   const cards = [

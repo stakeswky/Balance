@@ -34,6 +34,7 @@ test("monitor cards and dashboard use compact spacing", () => {
   const dashboard = read("src/components/balance/dashboard.tsx");
   assert.match(card, /p-3 shadow-\[var\(--shadow-border\)\] sm:p-4/);
   assert.match(dashboard, /h-dvh overflow-hidden/);
-  assert.match(dashboard, /self-start/);
+  assert.match(dashboard, /flex h-full flex-col/);
+  assert.doesNotMatch(dashboard, /self-start/);
   assert.doesNotMatch(dashboard, /space-y-5/);
 });
