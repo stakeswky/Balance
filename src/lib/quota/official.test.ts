@@ -11,12 +11,14 @@ import {
   parseClaudeUsagePayload,
   slicesFromClaudeHistory,
   parseCodexRateLimitLog,
+  parseCodexRateLimits,
   parseCodexUsagePayload,
   parseGrokBillingLog,
   parseGrokBillingLogAll,
   parseGrokBillingPayload,
   codexPlanIdFromLabel,
 } from "./official.ts";
+import { windowBounds } from "./quota-value.ts";
 
 function grokLine(percent: number, timestamp: string): string {
   return JSON.stringify({
@@ -443,4 +445,32 @@ test("ambiguous pro label preserves the user's current tier", () => {
   assert.equal(nextCodexPlanId("chatgpt-pro-20x", "ChatGPT Pro"), "chatgpt-pro-20x");
   assert.equal(nextCodexPlanId("chatgpt-plus", "ChatGPT Pro"), "chatgpt-plus");
   assert.equal(nextCodexPlanId("chatgpt-plus", "ChatGPT Pro 20×"), "chatgpt-pro-20x");
+});
+
+/**
+ * Evidence-URL: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs
+ * Evidence-Checked: 2026-08-22
+ * Evidence-Fields: used_percent: f64、resets_in_seconds 可为 0
+ * Sanitized-Fixture: {"used_percent":12.5,"resets_in_seconds":0}
+ */
+test("Codex relative reset seconds use the rate-limit line timestamp", () => {
+  const fetchedAt = Date.parse("2026-08-21T10:00:00Z");
+  const result = parseCodexRateLimits({
+    primary: {
+      used_percent: 20.5,
+      window_minutes: 299,
+      resets_in_seconds: 1_794,
+    },
+  }, { fetchedAt, source: "session-rate-limits", planType: "plus" })!;
+  assert.equal(result.windowResetsAt, fetchedAt + 1_794_000);
+  assert.equal(result.windowPct, 20.5);
+});
+
+test("Codex preserves an explicit zero-second reset boundary", () => {
+  const fetchedAt = Date.parse("2026-08-21T10:00:00Z");
+  const result = parseCodexRateLimits({
+    primary: { used_percent: 0, window_minutes: 300, resets_in_seconds: 0 },
+  }, { fetchedAt, source: "session-rate-limits", planType: "plus" })!;
+  assert.equal(result.windowResetsAt, fetchedAt);
+  assert.equal(windowBounds(result, "five_hour", fetchedAt).rolling, true);
 });

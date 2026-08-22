@@ -463,26 +463,30 @@ interface CodexWindow {
   resetsAt: number | null;
 }
 
-function parseCodexWindow(raw: unknown): CodexWindow | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  if (o.used_percent == null && o.usedPercent == null) return null;
-  const usedPercent = clampPct(num(o.used_percent ?? o.usedPercent));
-  const seconds =
-    o.limit_window_seconds != null
-      ? num(o.limit_window_seconds)
-      : o.window_minutes != null
-        ? num(o.window_minutes) * 60
-        : o.window_seconds != null
-          ? num(o.window_seconds)
-          : 0;
-  const resetRaw = o.reset_at ?? o.resets_at;
+function parseCodexWindow(raw: unknown, fetchedAt: number): CodexWindow | null {
+  const value = record(raw);
+  if (!value || (value.used_percent == null && value.usedPercent == null)) return null;
+  const usedPercent = clampPct(num(value.used_percent ?? value.usedPercent));
+  const windowSeconds = value.limit_window_seconds != null
+    ? num(value.limit_window_seconds)
+    : value.window_minutes != null
+      ? num(value.window_minutes) * 60
+      : value.window_seconds != null
+        ? num(value.window_seconds)
+        : 0;
+  const absolute = value.reset_at ?? value.resets_at;
+  const relativeRaw = value.resets_in_seconds;
+  const relativeSeconds = relativeRaw == null || relativeRaw === ""
+    ? null
+    : Number(relativeRaw);
   let resetsAt: number | null = null;
-  if (resetRaw != null) {
-    const n = num(resetRaw);
-    if (n > 0) resetsAt = n > 1e12 ? n : n * 1000;
+  if (absolute != null) {
+    const parsed = num(absolute);
+    if (parsed > 0) resetsAt = parsed >= 1_000_000_000_000 ? parsed : parsed * 1000;
+  } else if (relativeSeconds != null && Number.isFinite(relativeSeconds) && relativeSeconds >= 0) {
+    resetsAt = fetchedAt + relativeSeconds * 1000;
   }
-  return { usedPercent, windowSeconds: seconds, resetsAt };
+  return { usedPercent, windowSeconds, resetsAt };
 }
 
 function isWeeklyWindow(w: CodexWindow): boolean {
@@ -548,11 +552,11 @@ export function parseCodexRateLimits(
 ): OfficialSlice | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
-  const primary = parseCodexWindow(o.primary ?? o.primary_window);
-  const secondary = parseCodexWindow(o.secondary ?? o.secondary_window);
+  const fetchedAt = opts?.fetchedAt ?? Date.now();
+  const primary = parseCodexWindow(o.primary ?? o.primary_window, fetchedAt);
+  const secondary = parseCodexWindow(o.secondary ?? o.secondary_window, fetchedAt);
   if (!primary && !secondary && o.rate_limit == null) return null;
   const planType = opts?.planType ?? (typeof o.plan_type === "string" ? o.plan_type : null);
-  const fetchedAt = opts?.fetchedAt ?? Date.now();
   const slice = emptyOfficial("codex", opts?.source ?? "session-rate-limits", fetchedAt, codexPlanLabelFromType(planType));
   const credits = o.credits && typeof o.credits === "object" ? (o.credits as Record<string, unknown>) : {};
   if (credits.balance != null) slice.prepaidBalance = num(credits.balance);
@@ -569,10 +573,10 @@ export function parseCodexUsagePayload(
     ? root.rate_limit
     : root) as Record<string, unknown>;
   const planType = typeof root.plan_type === "string" ? root.plan_type : null;
-  const primary = parseCodexWindow(rate.primary_window ?? rate.primary);
-  const secondary = parseCodexWindow(rate.secondary_window ?? rate.secondary);
-  if (!primary && !secondary && planType == null) return null;
   const fetchedAt = opts?.fetchedAt ?? Date.now();
+  const primary = parseCodexWindow(rate.primary_window ?? rate.primary, fetchedAt);
+  const secondary = parseCodexWindow(rate.secondary_window ?? rate.secondary, fetchedAt);
+  if (!primary && !secondary && planType == null) return null;
   const slice = emptyOfficial("codex", opts?.source ?? "wham-usage", fetchedAt, codexPlanLabelFromType(planType));
   applyCodexWindows(slice, primary, secondary);
   const extra = root.additional_rate_limits;
@@ -583,7 +587,7 @@ export function parseCodexUsagePayload(
       const name = String(o.limit_name ?? o.metered_feature ?? "");
       if (!name) continue;
       const nested = (o.rate_limit && typeof o.rate_limit === "object" ? o.rate_limit : o) as Record<string, unknown>;
-      const win = parseCodexWindow(nested.primary_window ?? nested.primary) ?? parseCodexWindow(nested);
+      const win = parseCodexWindow(nested.primary_window ?? nested.primary, fetchedAt) ?? parseCodexWindow(nested, fetchedAt);
       slice.products.push({ product: name, usagePercent: win ? win.usedPercent : null });
     }
   }
