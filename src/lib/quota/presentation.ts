@@ -73,6 +73,26 @@ export function formatWeekResetLabel(
   return `${prefix} ${clock} · ${formatDuration(remain)}`;
 }
 
+export interface WeekResetHint {
+  label: string;
+  title: string;
+  dateTime: string;
+}
+
+export function formatWeekResetHint(
+  resetsAt: number | null | undefined,
+  now: number,
+  opts?: { timeZone?: string },
+): WeekResetHint | null {
+  if (resetsAt == null || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  const remain = resetsAt - now;
+  return {
+    label: remain <= 0 ? "等待刷新" : `${formatDuration(remain)}后刷新`,
+    title: `${formatResetClock(resetsAt, opts?.timeZone)} 刷新`,
+    dateTime: new Date(resetsAt).toISOString(),
+  };
+}
+
 export function formatCredits(value: number): string {
   if (!Number.isFinite(value)) return "0";
   return Math.max(0, Math.round(value)).toLocaleString("en-US");

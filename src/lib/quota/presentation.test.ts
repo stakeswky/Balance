@@ -8,6 +8,7 @@ import {
   effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
+  formatWeekResetHint,
   formatWeekResetLabel,
   primaryUsagePercent,
   primaryWindowLabel,
@@ -240,6 +241,29 @@ test("Fable prefix does not reuse the generic weekly copy", () => {
       prefix: "Fable 5 周限额刷新",
     }),
     "Fable 5 周限额刷新 8月27日 04:59 · 4 天 0 小时",
+  );
+});
+
+test("week reset hint keeps relative time visible and absolute time in its title", () => {
+  assert.deepEqual(
+    formatWeekResetHint(WEEK_RESET, FOUR_DAYS_BEFORE, { timeZone: "Asia/Shanghai" }),
+    {
+      label: "4 天 0 小时后刷新",
+      title: "8月27日 04:59 刷新",
+      dateTime: "2026-08-26T20:59:00.000Z",
+    },
+  );
+});
+
+test("week reset hint handles missing and elapsed timestamps", () => {
+  assert.equal(formatWeekResetHint(null, FOUR_DAYS_BEFORE), null);
+  assert.deepEqual(
+    formatWeekResetHint(WEEK_RESET, WEEK_RESET + 60_000, { timeZone: "Asia/Shanghai" }),
+    {
+      label: "等待刷新",
+      title: "8月27日 04:59 刷新",
+      dateTime: "2026-08-26T20:59:00.000Z",
+    },
   );
 });
 
