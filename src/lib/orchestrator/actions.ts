@@ -1,13 +1,8 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { createServerFn } from "@tanstack/react-start";
-import { setResponseStatus } from "@tanstack/react-start/server";
 import { z } from "zod";
-import { CrossSiteRequestError } from "../auth/isolation.server.ts";
-import { assertQuotaRequestAllowed } from "../quota/local-request.server.ts";
-import { isDesktopRuntime } from "../runtime-mode.ts";
-import { quotaCapacityEvidenceSchema } from "./planner.server.ts";
-import { orchestratorSettingsSchema } from "./settings.server.ts";
+import { assertOrchestratorRequestAllowed } from "./request-guard.server.ts";
+import { orchestratorSettingsSchema, quotaCapacityEvidenceSchema } from "./schemas.ts";
 import { getOrchestratorSupervisor } from "./supervisor.server.ts";
 
 const authorizationSchema = z.string().min(1).max(128);
@@ -21,59 +16,77 @@ const repositoryPathSchema = z
   .refine(isAbsolute, "repository path must be absolute");
 const baseShaSchema = z.string().regex(/^[a-f0-9]{40,64}$/);
 
-const authorizedInputSchema = z.object({
-  authorization: authorizationSchema,
-}).strict();
+const authorizedInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+  })
+  .strict();
 
-const saveSettingsInputSchema = z.object({
-  authorization: authorizationSchema,
-  settings: orchestratorSettingsSchema,
-}).strict();
+const saveSettingsInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+    settings: orchestratorSettingsSchema,
+  })
+  .strict();
 
-const validateRepositoryInputSchema = z.object({
-  authorization: authorizationSchema,
-  repoPath: repositoryPathSchema,
-}).strict();
+const validateRepositoryInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+    repoPath: repositoryPathSchema,
+  })
+  .strict();
 
-const quotaEvidenceByAgentSchema = z.object({
-  claude: quotaCapacityEvidenceSchema,
-  codex: quotaCapacityEvidenceSchema,
-  grok: quotaCapacityEvidenceSchema,
-}).strict();
+const quotaEvidenceByAgentSchema = z
+  .object({
+    claude: quotaCapacityEvidenceSchema,
+    codex: quotaCapacityEvidenceSchema,
+    grok: quotaCapacityEvidenceSchema,
+  })
+  .strict();
 
-const analyzePlanInputSchema = z.object({
-  authorization: authorizationSchema,
-  repositoryPath: repositoryPathSchema,
-  prompt: z.string().trim().min(1).max(20_000),
-  coordinator: z.union([z.literal("auto"), agentSchema]),
-  quotaEvidence: quotaEvidenceByAgentSchema,
-}).strict();
+const analyzePlanInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+    repositoryPath: repositoryPathSchema,
+    prompt: z.string().trim().min(1).max(20_000),
+    coordinator: z.union([z.literal("auto"), agentSchema]),
+    quotaEvidence: quotaEvidenceByAgentSchema,
+  })
+  .strict();
 
-const confirmedRepositorySchema = z.object({
-  path: repositoryPathSchema,
-  device: z.number().int().nonnegative().safe(),
-  inode: z.number().int().nonnegative().safe(),
-  baseSha: baseShaSchema,
-}).strict();
+const confirmedRepositorySchema = z
+  .object({
+    path: repositoryPathSchema,
+    device: z.number().int().nonnegative().safe(),
+    inode: z.number().int().nonnegative().safe(),
+    baseSha: baseShaSchema,
+  })
+  .strict();
 
-const startRunInputSchema = z.object({
-  authorization: authorizationSchema,
-  runId: runIdSchema,
-  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  trustedRepository: z.literal(true),
-  confirmedRepository: confirmedRepositorySchema,
-}).strict();
+const startRunInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+    runId: runIdSchema,
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    trustedRepository: z.literal(true),
+    confirmedRepository: confirmedRepositorySchema,
+  })
+  .strict();
 
-const getRunInputSchema = z.object({
-  authorization: authorizationSchema,
-  runId: runIdSchema,
-  afterSeq: z.number().int().nonnegative().optional(),
-}).strict();
+const getRunInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+    runId: runIdSchema,
+    afterSeq: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 
-const runInputSchema = z.object({
-  authorization: authorizationSchema,
-  runId: runIdSchema,
-}).strict();
+const runInputSchema = z
+  .object({
+    authorization: authorizationSchema,
+    runId: runIdSchema,
+  })
+  .strict();
 
 export const orchestratorActionInputSchemas = {
   getSettings: authorizedInputSchema,
@@ -86,29 +99,6 @@ export const orchestratorActionInputSchemas = {
   cancelRun: runInputSchema,
   listRuns: authorizedInputSchema,
 } as const;
-
-function capabilityDigest(value: string): Buffer {
-  return createHash("sha256").update(value, "utf8").digest();
-}
-
-export function isOrchestratorCapabilityAllowed(
-  authorization: string,
-  expected: string | undefined,
-): boolean {
-  if (!expected || expected.length > 128) return false;
-  return timingSafeEqual(capabilityDigest(authorization), capabilityDigest(expected));
-}
-
-export function assertOrchestratorRequestAllowed(
-  authorization: string,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  assertQuotaRequestAllowed();
-  if (!isDesktopRuntime(env)) return;
-  if (isOrchestratorCapabilityAllowed(authorization, env.BALANCE_ORCHESTRATOR_TOKEN)) return;
-  setResponseStatus(403, "Forbidden");
-  throw new CrossSiteRequestError();
-}
 
 export const getNativeAgentSettings = createServerFn({ method: "POST" })
   .validator((value: unknown) => orchestratorActionInputSchemas.getSettings.parse(value))

@@ -19,30 +19,28 @@ const SAMPLE = `{
   }
 }`;
 
-const ADAPTER: Record<
-  AgentId,
-  { name: string; path: string; detail: string; textClass: string }
-> = {
-  claude: {
-    name: "Claude Code",
-    path: "~/.claude/projects/**/*.jsonl",
-    detail: "会话 token 读 jsonl；5h / 7d 读桌面历史，Fable 周额度优先读 Claude OAuth usage。",
-    textClass: "text-claude",
-  },
-  grok: {
-    name: "Grok CLI / Grok Build",
-    path: "~/.grok/sessions/**/updates.jsonl",
-    detail: "会话 token 读 updates.jsonl；周额度读官方账单接口，日志作后备。",
-    textClass: "text-grok",
-  },
-  codex: {
-    name: "Codex CLI",
-    path: "~/.codex/sessions/**/rollout-*.jsonl",
-    detail:
-      "会话 token 读 token_count.last_token_usage；订阅百分比读官方 /wham/usage，jsonl rate_limits 作后备。",
-    textClass: "text-codex",
-  },
-};
+const ADAPTER: Record<AgentId, { name: string; path: string; detail: string; textClass: string }> =
+  {
+    claude: {
+      name: "Claude Code",
+      path: "~/.claude/projects/**/*.jsonl",
+      detail: "会话 token 读 jsonl；5h / 7d 读桌面历史，Fable 周额度优先读 Claude OAuth usage。",
+      textClass: "text-claude",
+    },
+    grok: {
+      name: "Grok CLI / Grok Build",
+      path: "~/.grok/sessions/**/updates.jsonl",
+      detail: "会话 token 读 updates.jsonl；周额度读官方账单接口，日志作后备。",
+      textClass: "text-grok",
+    },
+    codex: {
+      name: "Codex CLI",
+      path: "~/.codex/sessions/**/rollout-*.jsonl",
+      detail:
+        "会话 token 读 token_count.last_token_usage；订阅百分比读官方 /wham/usage，jsonl rate_limits 作后备。",
+      textClass: "text-codex",
+    },
+  };
 
 const DEFAULT_LABEL: Record<AgentId, string> = {
   claude: "默认 Claude",
@@ -63,90 +61,95 @@ export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
   }, [agent, agents]);
 
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
-      <Card>
-        <CardTitle>适配器</CardTitle>
-        <CardHint className="mt-1">
-          Sidecar 只读监听已启用 Agent 的会话落盘，订阅百分比走官方接口。
-        </CardHint>
-        <ul className="mt-4 space-y-3 text-sm">
-          {agents.map((id) => (
-            <li key={id} className="rounded-xl bg-raised px-3 py-3">
-              <p className={`font-medium ${ADAPTER[id].textClass}`}>{ADAPTER[id].name}</p>
-              <p className="mt-1 font-mono text-xs text-mute">{ADAPTER[id].path}</p>
-              <p className="mt-1 text-xs text-mute">{ADAPTER[id].detail}</p>
-            </li>
-          ))}
-        </ul>
-        {agents.length ? (
-          <p className="mt-4 text-xs leading-relaxed text-mute">
-            采集打开时只读轮询本机 jsonl 并按事件标识去重。无需粘贴；右侧仍可手动并入。
-          </p>
-        ) : (
-          <p className="mt-4 rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
-            暂无可用适配器。请到设置重新检测本机 Agent，或开启演示数据。
-          </p>
-        )}
-      </Card>
+    <section>
+      <div className="mb-3">
+        <CardTitle>高级导入与协议</CardTitle>
+        <CardHint className="mt-1">原插件页的适配器说明、手动导入和事件协议统一放在这里。</CardHint>
+      </div>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card>
+          <CardTitle>适配器</CardTitle>
+          <CardHint className="mt-1">
+            Sidecar 只读监听已启用 Agent 的会话落盘，订阅百分比走官方接口。
+          </CardHint>
+          <ul className="mt-4 space-y-3 text-sm">
+            {agents.map((id) => (
+              <li key={id} className="rounded-xl bg-raised px-3 py-3">
+                <p className={`font-medium ${ADAPTER[id].textClass}`}>{ADAPTER[id].name}</p>
+                <p className="mt-1 font-mono text-xs text-mute">{ADAPTER[id].path}</p>
+                <p className="mt-1 text-xs text-mute">{ADAPTER[id].detail}</p>
+              </li>
+            ))}
+          </ul>
+          {agents.length ? (
+            <p className="mt-4 text-xs leading-relaxed text-mute">
+              采集打开时只读轮询本机 jsonl 并按事件标识去重。无需粘贴；右侧仍可手动并入。
+            </p>
+          ) : (
+            <p className="mt-4 rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
+              暂无可用适配器。请到设置重新检测本机 Agent，或开启演示数据。
+            </p>
+          )}
+        </Card>
 
-      <Card>
-        <CardTitle>导入用量</CardTitle>
-        <CardHint className="mt-1">支持单条 JSON、数组，或 Claude Code 风格 JSONL。</CardHint>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {agents.map((id) => (
+        <Card>
+          <CardTitle>导入用量</CardTitle>
+          <CardHint className="mt-1">支持单条 JSON、数组，或 Claude Code 风格 JSONL。</CardHint>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {agents.map((id) => (
+              <Button
+                key={id}
+                variant={selectedAgent === id ? id : "secondary"}
+                onClick={() => setAgent(id)}
+              >
+                {DEFAULT_LABEL[id]}
+              </Button>
+            ))}
+          </div>
+          {agents.length === 0 ? (
+            <p className="mt-4 rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
+              当前没有导入目标。重新检测或开启演示后即可并入用量。
+            </p>
+          ) : null}
+          <Textarea
+            className="mt-3"
+            value={blob}
+            onChange={(e) => setBlob(e.target.value)}
+            spellCheck={false}
+            aria-label="用量 JSON"
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
             <Button
-              key={id}
-              variant={selectedAgent === id ? id : "secondary"}
-              onClick={() => setAgent(id)}
-            >
-              {DEFAULT_LABEL[id]}
-            </Button>
-          ))}
-        </div>
-        {agents.length === 0 ? (
-          <p className="mt-4 rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
-            当前没有导入目标。重新检测或开启演示后即可并入用量。
-          </p>
-        ) : null}
-        <Textarea
-          className="mt-3"
-          value={blob}
-          onChange={(e) => setBlob(e.target.value)}
-          spellCheck={false}
-          aria-label="用量 JSON"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            disabled={!selectedAgent}
-            onClick={() => {
-              if (!selectedAgent) return;
-              const n = importText(blob, selectedAgent);
-              if (n) toast.success(`已并入 ${n} 条事件`);
-              else toast.error("没有解析到有效用量");
-            }}
-          >
-            并入额度
-          </Button>
-          {agents.includes("claude") ? (
-            <Button
-              variant="claude"
+              disabled={!selectedAgent}
               onClick={() => {
-                const n = loadImported();
-                if (n) toast.success(`已载入 ${n} 条 Claude Code 记录`);
+                if (!selectedAgent) return;
+                const n = importText(blob, selectedAgent);
+                if (n) toast.success(`已并入 ${n} 条事件`);
                 else toast.error("没有解析到有效用量");
               }}
             >
-              载入 Claude 导出
+              并入额度
             </Button>
-          ) : null}
-        </div>
-      </Card>
+            {agents.includes("claude") ? (
+              <Button
+                variant="claude"
+                onClick={() => {
+                  const n = loadImported();
+                  if (n) toast.success(`已载入 ${n} 条 Claude Code 记录`);
+                  else toast.error("没有解析到有效用量");
+                }}
+              >
+                载入 Claude 导出
+              </Button>
+            ) : null}
+          </div>
+        </Card>
 
-      <Card className="lg:col-span-2">
-        <CardTitle>事件协议</CardTitle>
-        <CardHint className="mt-1">本地 sidecar 或 CI 钩子按此形状推送即可。</CardHint>
-        <pre className="mt-4 overflow-x-auto rounded-xl bg-raised p-4 font-mono text-xs leading-relaxed text-mute">
-{`type UsageEvent = {
+        <Card className="lg:col-span-2">
+          <CardTitle>事件协议</CardTitle>
+          <CardHint className="mt-1">本地 sidecar 或 CI 钩子按此形状推送即可。</CardHint>
+          <pre className="mt-4 overflow-x-auto rounded-xl bg-raised p-4 font-mono text-xs leading-relaxed text-mute">
+            {`type UsageEvent = {
   agent: "claude" | "grok" | "codex"
   model: string
   timestamp: number | ISO8601
@@ -160,8 +163,9 @@ export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
     reasoning_minutes?: number   // Codex
   }
 }`}
-        </pre>
-      </Card>
-    </div>
+          </pre>
+        </Card>
+      </div>
+    </section>
   );
 }

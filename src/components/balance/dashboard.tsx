@@ -6,7 +6,6 @@ import { AgentCard } from "@/components/balance/agent-card";
 import { EventFeed } from "@/components/balance/event-feed";
 import { Header, type ViewId } from "@/components/balance/header";
 import { formatDuration, formatUsd } from "@/components/balance/format";
-import { PluginPanel } from "@/components/balance/plugin-panel";
 import { ReportPanel } from "@/components/balance/report-panel";
 import { SessionDialog } from "@/components/balance/session-dialog";
 import { SettingsPanel } from "@/components/balance/settings-panel";
@@ -40,6 +39,7 @@ import type { OfficialLoadState } from "@/lib/quota/quota-label";
 import { useQuota } from "@/lib/quota/store";
 import { useTheme } from "@/lib/theme";
 import { AGENT_LABEL } from "@/lib/quota/agent";
+import { getOrchestratorAuthorization } from "@/lib/orchestrator/capability";
 import {
   pullClaudeUsage,
   pullCodexUsage,
@@ -110,6 +110,10 @@ export function Dashboard() {
   );
 
   useEffect(() => {
+    getOrchestratorAuthorization();
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     let inFlight = false;
     const checkAlerts = (t = Date.now()) => {
@@ -159,9 +163,10 @@ export function Dashboard() {
           });
         }
         const weekAvailable = sources == null || sources.week === "official";
-        const weekTriggered = kind !== "weekly" && weekAvailable
-          ? state.claimAlertLatch(weekKey, meter.weekPct, state.alertWeekPct)
-          : false;
+        const weekTriggered =
+          kind !== "weekly" && weekAvailable
+            ? state.claimAlertLatch(weekKey, meter.weekPct, state.alertWeekPct)
+            : false;
         if (decision.weekTriggered && weekTriggered) {
           const message = `${name} 本周额度已用 ${meter.weekPct.toFixed(0)}%`;
           toast.error(message);
@@ -210,14 +215,11 @@ export function Dashboard() {
             "Claude Code",
           );
         }
-        const fableAvailable = claudeFableLimit != null &&
+        const fableAvailable =
+          claudeFableLimit != null &&
           (state.demoMode || !state.official.claude?.modelWeekLimitsStale);
         const fableTriggered = fableAvailable
-          ? state.claimAlertLatch(
-              "claudeFable",
-              claudeFableLimit.usedPct,
-              state.alertWeekPct,
-            )
+          ? state.claimAlertLatch("claudeFable", claudeFableLimit.usedPct, state.alertWeekPct)
           : false;
         if (
           claudeFableLimit &&
@@ -361,7 +363,10 @@ export function Dashboard() {
   );
   const codexMeter = useMemo(
     () =>
-      applyOfficial(meterFor(analyticsEvents, "codex", codexPlan, now, weekBoostPct), official.codex),
+      applyOfficial(
+        meterFor(analyticsEvents, "codex", codexPlan, now, weekBoostPct),
+        official.codex,
+      ),
     [analyticsEvents, codexPlan, now, weekBoostPct, official.codex],
   );
   const claudeSources = meterDataSources(official.claude);
@@ -373,29 +378,80 @@ export function Dashboard() {
   );
   const claudeWeekVal = useMemo(
     () =>
-      quotaValueFor(analyticsEvents, "claude", official.claude, "weekly", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+      quotaValueFor(
+        analyticsEvents,
+        "claude",
+        official.claude,
+        "weekly",
+        now,
+        quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
+      ),
     [analyticsEvents, official.claude, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const claudeWinVal = useMemo(
     () =>
-      quotaValueFor(analyticsEvents, "claude", official.claude, "five_hour", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+      quotaValueFor(
+        analyticsEvents,
+        "claude",
+        official.claude,
+        "five_hour",
+        now,
+        quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
+      ),
     [analyticsEvents, official.claude, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const grokWeekVal = useMemo(
-    () => quotaValueFor(analyticsEvents, "grok", official.grok, "weekly", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    () =>
+      quotaValueFor(
+        analyticsEvents,
+        "grok",
+        official.grok,
+        "weekly",
+        now,
+        quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
+      ),
     [analyticsEvents, official.grok, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const grokWinVal = useMemo(
-    () => quotaValueFor(analyticsEvents, "grok", official.grok, "five_hour", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    () =>
+      quotaValueFor(
+        analyticsEvents,
+        "grok",
+        official.grok,
+        "five_hour",
+        now,
+        quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
+      ),
     [analyticsEvents, official.grok, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const codexWeekVal = useMemo(
-    () => quotaValueFor(analyticsEvents, "codex", official.codex, "weekly", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+    () =>
+      quotaValueFor(
+        analyticsEvents,
+        "codex",
+        official.codex,
+        "weekly",
+        now,
+        quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
+      ),
     [analyticsEvents, official.codex, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const codexWinVal = useMemo(
     () =>
-      quotaValueFor(analyticsEvents, "codex", official.codex, "five_hour", now, quotaSamples ?? [], calibrationTruncatedBeforeMs),
+      quotaValueFor(
+        analyticsEvents,
+        "codex",
+        official.codex,
+        "five_hour",
+        now,
+        quotaSamples ?? [],
+        calibrationTruncatedBeforeMs,
+      ),
     [analyticsEvents, official.codex, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
   const claudePoolViews = useMemo<QuotaPoolView[]>(() => {
@@ -775,7 +831,7 @@ export function Dashboard() {
           </div>
         ) : null}
 
-        {view === "settings" ? <SettingsPanel /> : null}
+        {view === "settings" ? <SettingsPanel agents={visibleAgents} /> : null}
 
         {view === "report" ? (
           <ReportPanel
@@ -795,8 +851,6 @@ export function Dashboard() {
             onOpenSession={setSessionId}
           />
         ) : null}
-
-        {view === "plugin" ? <PluginPanel agents={visibleAgents} /> : null}
       </main>
     </div>
   );

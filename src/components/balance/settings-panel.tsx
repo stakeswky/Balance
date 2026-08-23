@@ -2,6 +2,8 @@ import { Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PlansPanel } from "@/components/balance/plans-panel";
+import { NativeAgentSettings } from "@/components/balance/native-agent-settings";
+import { PluginPanel } from "@/components/balance/plugin-panel";
 import { UpdateCard } from "@/components/balance/update-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
@@ -43,7 +45,7 @@ function CaptureToggle({
   );
 }
 
-export function SettingsPanel() {
+export function SettingsPanel({ agents }: { agents: readonly AgentId[] }) {
   const [detecting, setDetecting] = useState(false);
   const liveClaude = useQuota((s) => s.liveClaude);
   const liveGrok = useQuota((s) => s.liveGrok);
@@ -79,6 +81,7 @@ export function SettingsPanel() {
   return (
     <div className="space-y-5">
       <UpdateCard />
+      <NativeAgentSettings />
       <Card>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -185,6 +188,8 @@ export function SettingsPanel() {
           </Button>
         ) : null}
       </Card>
+
+      <PluginPanel agents={agents} />
     </div>
   );
 }

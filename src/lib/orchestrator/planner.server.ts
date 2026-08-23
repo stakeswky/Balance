@@ -1,10 +1,6 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
-import {
-  buildPlanCommand,
-  extractStructuredPlan,
-  type AgentCommand,
-} from "./adapters.ts";
+import { buildPlanCommand, extractStructuredPlan, type AgentCommand } from "./adapters.ts";
 import { assignTasks, chooseCoordinator } from "./capacity.ts";
 import type { RepositorySnapshot } from "./git.server.ts";
 import {
@@ -13,6 +9,7 @@ import {
   parseOrchestratorPlan,
   serializeOverlappingTasks,
 } from "./plan.ts";
+import { quotaCapacityEvidenceSchema } from "./schemas.ts";
 import type { RunStore } from "./run-store.server.ts";
 import type {
   AgentCapacity,
@@ -27,24 +24,25 @@ import type {
 } from "./types.ts";
 
 const agentSchema = z.enum(["claude", "codex", "grok"]);
-const finiteNonnegative = z.number().finite().nonnegative();
-const nullableFiniteNonnegative = finiteNonnegative.nullable();
-export const quotaCapacityEvidenceSchema: z.ZodType<QuotaCapacityEvidence> = z.object({
-  remainingLowUsd: nullableFiniteNonnegative,
-  totalHighUsd: nullableFiniteNonnegative,
-  valueConfidence: z.enum(["none", "low", "medium", "high"]),
-  officialRemainingPct: z.number().finite().min(0).max(100).nullable(),
-}).strict();
-export const analyzeRequestSchema = z.object({
-  repositoryPath: z.string().min(1).max(4_096).refine(isAbsolute, "repository path must be absolute"),
-  prompt: z.string().trim().min(1).max(100_000),
-  coordinator: z.union([z.literal("auto"), agentSchema]),
-  quotaEvidence: z.object({
-    claude: quotaCapacityEvidenceSchema,
-    codex: quotaCapacityEvidenceSchema,
-    grok: quotaCapacityEvidenceSchema,
-  }).strict(),
-}).strict();
+export { quotaCapacityEvidenceSchema } from "./schemas.ts";
+export const analyzeRequestSchema = z
+  .object({
+    repositoryPath: z
+      .string()
+      .min(1)
+      .max(4_096)
+      .refine(isAbsolute, "repository path must be absolute"),
+    prompt: z.string().trim().min(1).max(100_000),
+    coordinator: z.union([z.literal("auto"), agentSchema]),
+    quotaEvidence: z
+      .object({
+        claude: quotaCapacityEvidenceSchema,
+        codex: quotaCapacityEvidenceSchema,
+        grok: quotaCapacityEvidenceSchema,
+      })
+      .strict(),
+  })
+  .strict();
 
 export interface AnalyzeRequest {
   repositoryPath: string;
@@ -71,8 +69,10 @@ export interface PlannerDependencies {
 }
 
 function runIdAt(timestamp: number, randomHex: string): string {
-  if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw new Error("planner time must be a nonnegative integer");
-  if (!/^[0-9a-f]{12}$/.test(randomHex)) throw new Error("planner randomness must be 12 lowercase hex characters");
+  if (!Number.isSafeInteger(timestamp) || timestamp < 0)
+    throw new Error("planner time must be a nonnegative integer");
+  if (!/^[0-9a-f]{12}$/.test(randomHex))
+    throw new Error("planner randomness must be 12 lowercase hex characters");
   const compact = new Date(timestamp).toISOString().replace(/[-:T]/g, "").slice(0, 14);
   return `run_${compact}_${randomHex}`;
 }
@@ -102,17 +102,25 @@ function validationIssues(error: unknown): unknown[] {
       message: issue.message.slice(0, 1_000),
     }));
   }
-  return [{ path: [], code: "invalid_output", message: error instanceof Error ? error.message.slice(0, 1_000) : "invalid output" }];
+  return [
+    {
+      path: [],
+      code: "invalid_output",
+      message: error instanceof Error ? error.message.slice(0, 1_000) : "invalid output",
+    },
+  ];
 }
 
 function validateSuccessRates(
   input: Record<NativeAgentId, number | null>,
 ): Record<NativeAgentId, number | null> {
-  const schema = z.object({
-    claude: z.number().finite().min(0).max(1).nullable(),
-    codex: z.number().finite().min(0).max(1).nullable(),
-    grok: z.number().finite().min(0).max(1).nullable(),
-  }).strict();
+  const schema = z
+    .object({
+      claude: z.number().finite().min(0).max(1).nullable(),
+      codex: z.number().finite().min(0).max(1).nullable(),
+      grok: z.number().finite().min(0).max(1).nullable(),
+    })
+    .strict();
   return schema.parse(input);
 }
 
@@ -149,7 +157,9 @@ export async function analyzePlan(
   try {
     request = analyzeRequestSchema.parse(input) as AnalyzeRequest;
   } catch (error) {
-    throw new Error(`invalid quota evidence or analyze request: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `invalid quota evidence or analyze request: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const now = dependencies.now();
   const runId = runIdAt(now, dependencies.randomHex(6));
@@ -163,7 +173,10 @@ export async function analyzePlan(
   if (!coordinatorRuntime.ok || !coordinatorRuntime.path) {
     throw new Error(`selected coordinator ${coordinator} is not available`);
   }
-  const schemaPath = await dependencies.createSchemaFile(runId, orchestratorPlanJsonSchema as object);
+  const schemaPath = await dependencies.createSchemaFile(
+    runId,
+    orchestratorPlanJsonSchema as object,
+  );
   if (!isAbsolute(schemaPath)) throw new Error("planner schema file must use an absolute path");
   const inlineSchema = JSON.stringify(orchestratorPlanJsonSchema);
   const abortController = new AbortController();
@@ -222,7 +235,10 @@ export async function analyzePlan(
     resultBranch: null,
     integrationWorktree: null,
     repositoryTrustedAt: null,
-    error: assignment.status === "capacity_blocked" ? assignment.diagnostics.join("\n").slice(0, 20_000) : null,
+    error:
+      assignment.status === "capacity_blocked"
+        ? assignment.diagnostics.join("\n").slice(0, 20_000)
+        : null,
     draft,
     tasks: assignment.tasks.map((task) => ({
       ...task,

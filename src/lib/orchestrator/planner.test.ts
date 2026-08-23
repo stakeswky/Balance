@@ -69,10 +69,13 @@ function probe(agent: NativeAgentId, ok = true): AgentRuntimeProbe {
   };
 }
 
-async function harness(outputs: string[], options: {
-  runtimeOverrides?: Partial<Record<NativeAgentId, AgentRuntimeProbe>>;
-  official?: Partial<Record<NativeAgentId, number>>;
-} = {}) {
+async function harness(
+  outputs: string[],
+  options: {
+    runtimeOverrides?: Partial<Record<NativeAgentId, AgentRuntimeProbe>>;
+    official?: Partial<Record<NativeAgentId, number>>;
+  } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "balance-planner-"));
   const store = createRunStore(root);
   await store.initialize();
@@ -102,7 +105,11 @@ async function harness(outputs: string[], options: {
       return runtimes[agent];
     },
     async runPlanCommand(input) {
-      calls.push({ agent: input.agent, prompt: input.command.args.join(" "), args: input.command.args });
+      calls.push({
+        agent: input.agent,
+        prompt: input.command.args.join(" "),
+        args: input.command.args,
+      });
       const line = outputs[outputIndex++] ?? outputs.at(-1)!;
       return { stdoutLines: [line], events: [] };
     },
@@ -147,19 +154,28 @@ test("generates a confirmable draft with server-selected coordinator and preserv
   assert.equal(draft.coordinator, "claude");
   assert.equal(draft.repositoryPath, "/repo/project");
   assert.equal(draft.assignedTasks.length, 2);
-  assert.deepEqual(draft.plan.tasks[0]!.verificationCommands, [{ executable: "npm", args: ["run", "test:api"] }]);
-  assert.equal(draft.plan.tasks[1]!.dependsOn.includes("api"), true, "overlapping files must serialize");
+  assert.deepEqual(draft.plan.tasks[0]!.verificationCommands, [
+    { executable: "npm", args: ["run", "test:api"] },
+  ]);
+  assert.equal(
+    draft.plan.tasks[1]!.dependsOn.includes("api"),
+    true,
+    "overlapping files must serialize",
+  );
   assert.match(draft.fingerprint, /^[0-9a-f]{64}$/);
   assert.deepEqual(h.inspections, [{ path: "/repo/project", mode: "analyze" }]);
   assert.equal(h.schemaCalls.length, 1);
   assert.equal(h.calls.length, 1);
   assert.match(h.calls[0]!.prompt, /only analyze|只分析/i);
   assert.match(h.calls[0]!.prompt, /Claude.*Codex.*Grok|claude.*codex.*grok/i);
-  assert.doesNotMatch(h.calls[0]!.prompt, /Gemini/i);
+  assert.match(h.calls[0]!.prompt, /claude, codex, and grok/i);
   const stored = await h.store.get(draft.runId);
   assert.equal(stored?.status, "draft");
   assert.deepEqual(stored?.draft, draft);
-  assert.equal(stored?.tasks.every((task) => task.status === "queued"), true);
+  assert.equal(
+    stored?.tasks.every((task) => task.status === "queued"),
+    true,
+  );
 });
 
 test("honors an eligible manual coordinator and rejects an unavailable one", async () => {
@@ -174,13 +190,18 @@ test("honors an eligible manual coordinator and rejects an unavailable one", asy
     runtimeOverrides: { codex: probe("codex", false) },
   });
   unavailable.request.coordinator = "codex";
-  await assert.rejects(() => analyzePlan(unavailable.request, unavailable.dependencies), /coordinator|eligible|available/i);
+  await assert.rejects(
+    () => analyzePlan(unavailable.request, unavailable.dependencies),
+    /coordinator|eligible|available/i,
+  );
   assert.deepEqual(await unavailable.store.list(), []);
 });
 
 test("retries one invalid structure with bounded Zod issues and creates no half-run after two failures", async () => {
   const plan = validPlan();
-  const invalid = JSON.stringify({ structured_output: { ...plan, tasks: [{ ...plan.tasks[0], size: "huge" }] } });
+  const invalid = JSON.stringify({
+    structured_output: { ...plan, tasks: [{ ...plan.tasks[0], size: "huge" }] },
+  });
   const repaired = await harness([invalid, JSON.stringify({ structured_output: plan })]);
   const draft = await analyzePlan(repaired.request, repaired.dependencies);
   assert.equal(repaired.calls.length, 2);
@@ -189,7 +210,10 @@ test("retries one invalid structure with bounded Zod issues and creates no half-
   assert.ok(await repaired.store.get(draft.runId));
 
   const failed = await harness([invalid, invalid]);
-  await assert.rejects(() => analyzePlan(failed.request, failed.dependencies), /two|twice|两次|invalid/i);
+  await assert.rejects(
+    () => analyzePlan(failed.request, failed.dependencies),
+    /two|twice|两次|invalid/i,
+  );
   assert.equal(failed.calls.length, 2);
   assert.deepEqual(await failed.store.list(), []);
 });
@@ -211,12 +235,19 @@ test("creates a visible capacity_blocked plan without task assignments", async (
 test("rejects forged or non-finite quota evidence before running a native planner", async () => {
   const h = await harness([JSON.stringify({ structured_output: validPlan() })]);
   h.request.quotaEvidence.claude.officialRemainingPct = Number.NaN;
-  await assert.rejects(() => analyzePlan(h.request, h.dependencies), /quota|finite|number|evidence/i);
+  await assert.rejects(
+    () => analyzePlan(h.request, h.dependencies),
+    /quota|finite|number|evidence/i,
+  );
   assert.equal(h.calls.length, 0);
   assert.deepEqual(await h.store.list(), []);
 
   const forged = await harness([JSON.stringify({ structured_output: validPlan() })]);
-  (forged.request.quotaEvidence.claude as QuotaCapacityEvidence & { enabled: boolean }).enabled = true;
-  await assert.rejects(() => analyzePlan(forged.request, forged.dependencies), /quota|unrecognized|evidence/i);
+  (forged.request.quotaEvidence.claude as QuotaCapacityEvidence & { enabled: boolean }).enabled =
+    true;
+  await assert.rejects(
+    () => analyzePlan(forged.request, forged.dependencies),
+    /quota|unrecognized|evidence/i,
+  );
   assert.equal(forged.calls.length, 0);
 });
