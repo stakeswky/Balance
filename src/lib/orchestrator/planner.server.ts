@@ -29,20 +29,20 @@ import type {
 const agentSchema = z.enum(["claude", "codex", "grok"]);
 const finiteNonnegative = z.number().finite().nonnegative();
 const nullableFiniteNonnegative = finiteNonnegative.nullable();
-const quotaEvidenceSchema: z.ZodType<QuotaCapacityEvidence> = z.object({
+export const quotaCapacityEvidenceSchema: z.ZodType<QuotaCapacityEvidence> = z.object({
   remainingLowUsd: nullableFiniteNonnegative,
   totalHighUsd: nullableFiniteNonnegative,
   valueConfidence: z.enum(["none", "low", "medium", "high"]),
   officialRemainingPct: z.number().finite().min(0).max(100).nullable(),
 }).strict();
-const analyzeRequestSchema = z.object({
+export const analyzeRequestSchema = z.object({
   repositoryPath: z.string().min(1).max(4_096).refine(isAbsolute, "repository path must be absolute"),
   prompt: z.string().trim().min(1).max(100_000),
   coordinator: z.union([z.literal("auto"), agentSchema]),
   quotaEvidence: z.object({
-    claude: quotaEvidenceSchema,
-    codex: quotaEvidenceSchema,
-    grok: quotaEvidenceSchema,
+    claude: quotaCapacityEvidenceSchema,
+    codex: quotaCapacityEvidenceSchema,
+    grok: quotaCapacityEvidenceSchema,
   }).strict(),
 }).strict();
 

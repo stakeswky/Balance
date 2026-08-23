@@ -37,7 +37,7 @@ export function isAllowedQuotaFetchSite(site: string | null): boolean {
   return site === null || site === "same-origin" || site === "none";
 }
 
-interface QuotaRequestRuntime {
+export interface QuotaRequestRuntime {
   peerAddress(): string | undefined;
 }
 

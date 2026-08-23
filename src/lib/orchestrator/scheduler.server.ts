@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { buildExecuteCommand } from "./adapters.ts";
+import { buildExecuteCommand, type AgentCommand } from "./adapters.ts";
 import type {
   RepositorySnapshot,
   abortCherryPick,
@@ -59,6 +59,12 @@ export interface SchedulerDependencies {
   stateRoot: string;
   maxConcurrency?: 1 | 2 | 3;
   conflictedFiles?(integrationPath: string): Promise<string[]>;
+  prepareAgentCommand?(input: {
+    command: AgentCommand;
+    agent: NativeAgentId;
+    runId: string;
+    taskId: string;
+  }): Promise<{ command: AgentCommand; secrets: readonly string[]; cleanup(): Promise<void> }>;
 }
 
 class CancelledError extends Error {
@@ -158,27 +164,42 @@ export async function resolveIntegrationConflict(input: {
     ].join("\n"),
     expectedFiles: input.conflictFiles.length > 0 ? [...input.conflictFiles] : task.expectedFiles,
   };
-  const command = buildExecuteCommand({
+  const baseCommand = buildExecuteCommand({
     agent: input.run.coordinator,
     binaryPath: runtime.path,
     worktreePath: input.integrationPath,
     task: conflictTask,
   });
-  const process = dependencies.startProcess({
-    command,
-    agent: input.run.coordinator,
-    signal: input.signal,
-    async onEvent(event) {
-      await dependencies.store.appendEvent({
-        runId: input.run.id,
-        taskId: input.taskId,
-        agent: input.run.coordinator,
-        at: dependencies.now(),
-        event,
-      });
-    },
-  });
-  const result = await process.completion;
+  const prepared = dependencies.prepareAgentCommand
+    ? await dependencies.prepareAgentCommand({
+      command: baseCommand,
+      agent: input.run.coordinator,
+      runId: input.run.id,
+      taskId: `conflict:${input.taskId}`,
+    })
+    : { command: baseCommand, secrets: [], cleanup: async () => undefined };
+  let process: RunningProcess;
+  try {
+    process = dependencies.startProcess({
+      command: prepared.command,
+      agent: input.run.coordinator,
+      signal: input.signal,
+      secrets: prepared.secrets,
+      async onEvent(event) {
+        await dependencies.store.appendEvent({
+          runId: input.run.id,
+          taskId: input.taskId,
+          agent: input.run.coordinator,
+          at: dependencies.now(),
+          event,
+        });
+      },
+    });
+  } catch (error) {
+    await prepared.cleanup();
+    throw error;
+  }
+  const result = await process.completion.finally(() => prepared.cleanup());
   if (input.signal.aborted) throw new CancelledError();
   if (result.exitCode !== 0) throw new Error(`coordinator conflict repair exited with code ${result.exitCode}`);
   for (const verificationCommand of task.verificationCommands) {
@@ -267,29 +288,45 @@ export async function scheduleRun(
     if (!runtime.ok || !runtime.path) throw new Error(`${task.assignedAgent} native CLI is unavailable`);
     const controller = new AbortController();
     taskControllers.set(taskId, controller);
-    const command = buildExecuteCommand({
+    const baseCommand = buildExecuteCommand({
       agent: task.assignedAgent,
       binaryPath: runtime.path,
       worktreePath: worktree.path,
       task,
     });
+    const prepared = dependencies.prepareAgentCommand
+      ? await dependencies.prepareAgentCommand({
+        command: baseCommand,
+        agent: task.assignedAgent,
+        runId: request.runId,
+        taskId,
+      })
+      : { command: baseCommand, secrets: [], cleanup: async () => undefined };
     await markTask(taskId, (state) => ({ ...state, status: "running" }));
-    const process = dependencies.startProcess({
-      command,
-      agent: task.assignedAgent,
-      signal: controller.signal,
-      async onEvent(event) {
-        await dependencies.store.appendEvent({
-          runId: request.runId,
-          taskId,
-          agent: task.assignedAgent,
-          at: dependencies.now(),
-          event,
-        });
-      },
-    });
+    let process: RunningProcess;
+    try {
+      process = dependencies.startProcess({
+        command: prepared.command,
+        agent: task.assignedAgent,
+        signal: controller.signal,
+        secrets: prepared.secrets,
+        async onEvent(event) {
+          await dependencies.store.appendEvent({
+            runId: request.runId,
+            taskId,
+            agent: task.assignedAgent,
+            at: dependencies.now(),
+            event,
+          });
+        },
+      });
+    } catch (error) {
+      taskControllers.delete(taskId);
+      await prepared.cleanup();
+      throw error;
+    }
     runningProcesses.set(taskId, process);
-    const processResult = await process.completion;
+    const processResult = await process.completion.finally(() => prepared.cleanup());
     runningProcesses.delete(taskId);
     taskControllers.delete(taskId);
     if (cancelRequested) throw new CancelledError();

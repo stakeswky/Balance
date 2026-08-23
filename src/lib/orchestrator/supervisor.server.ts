@@ -1,0 +1,379 @@
+import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { lstat, realpath } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import {
+  prepareAgentSessionEnvironment,
+  verifyGrokIsolation,
+  type AgentCommand,
+} from "./adapters.ts";
+import {
+  abortCherryPick,
+  assertOriginalHeadUnchanged,
+  cherryPickTask,
+  commitTaskWorktree,
+  createIntegrationWorktree,
+  createTaskWorktree,
+  inspectRepository,
+  removeRegisteredWorktree,
+} from "./git.server.ts";
+import { atomicWritePrivateJson, ensurePrivateDirectory, orchestratorStateDir } from "./paths.server.ts";
+import { analyzePlan, type AnalyzeRequest } from "./planner.server.ts";
+import { startAgentProcess, type ProcessRunResult } from "./process-runner.server.ts";
+import { createRunStore, type RunStore } from "./run-store.server.ts";
+import { scheduleRun, type ScheduleHandle, type StartRunRequest } from "./scheduler.server.ts";
+import {
+  loadOrchestratorSettings,
+  saveOrchestratorSettings,
+} from "./settings.server.ts";
+import { discoverNativeAgents } from "./runtime.server.ts";
+import type {
+  AgentRuntimeProbe,
+  NativeAgentId,
+  OrchestratorRun,
+  OrchestratorSettings,
+  PlanDraft,
+  RepositoryValidation,
+  RunEventRecord,
+  RunStatus,
+  VerificationCommand,
+} from "./types.ts";
+
+export interface RunSnapshot {
+  run: OrchestratorRun;
+  events: RunEventRecord[];
+  nextSeq: number;
+}
+
+export interface RunSummary {
+  id: string;
+  status: RunStatus;
+  repositoryPath: string;
+  coordinator: NativeAgentId;
+  resultBranch: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface OrchestratorSupervisor {
+  initialize(): Promise<void>;
+  getSettings(): Promise<OrchestratorSettings>;
+  saveSettings(settings: OrchestratorSettings): Promise<OrchestratorSettings>;
+  detectRuntimes(): Promise<Record<NativeAgentId, AgentRuntimeProbe>>;
+  validateRepository(repoPath: string): Promise<RepositoryValidation>;
+  analyze(input: AnalyzeRequest): Promise<PlanDraft>;
+  start(input: StartRunRequest): Promise<{ runId: string }>;
+  get(runId: string, afterSeq?: number): Promise<RunSnapshot>;
+  cancel(runId: string): Promise<OrchestratorRun>;
+  list(): Promise<RunSummary[]>;
+  shutdown(): Promise<void>;
+}
+
+function verificationExecutable(command: VerificationCommand, cwd: string): { executable: string; args: string[] } {
+  if (command.executable === "git") {
+    return {
+      executable: "/usr/bin/git",
+      args: [
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "core.fsmonitor=false",
+        "-c", "diff.external=",
+        "-c", "core.attributesFile=/dev/null",
+        ...command.args,
+      ],
+    };
+  }
+  if (command.executable === "./gradlew") {
+    return { executable: join(cwd, "gradlew"), args: command.args };
+  }
+  return { executable: "/usr/bin/env", args: [command.executable, ...command.args] };
+}
+
+async function runVerificationCommand(
+  command: VerificationCommand,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<ProcessRunResult> {
+  const runRoot = cwd.endsWith("/integration") ? dirname(cwd) : dirname(dirname(cwd));
+  const verificationRoot = join(runRoot, "verification");
+  const home = join(verificationRoot, "home");
+  const temporary = join(verificationRoot, "tmp");
+  await ensurePrivateDirectory(home);
+  await ensurePrivateDirectory(temporary);
+  const resolved = verificationExecutable(command, cwd);
+  if (command.executable === "./gradlew") {
+    const metadata = await lstat(resolved.executable);
+    if (metadata.isSymbolicLink() || !metadata.isFile() || (metadata.mode & 0o111) === 0) {
+      throw new Error("./gradlew must be a non-symlink executable regular file");
+    }
+    const canonical = await realpath(resolved.executable);
+    const canonicalCwd = await realpath(cwd);
+    if (!canonical.startsWith(`${canonicalCwd}/`)) throw new Error("./gradlew escaped the task worktree");
+  }
+  return new Promise((resolveResult) => {
+    execFile(resolved.executable, resolved.args, {
+      cwd,
+      signal,
+      timeout: 30 * 60 * 1_000,
+      maxBuffer: 20 * 1024 * 1024,
+      env: {
+        HOME: home,
+        TMPDIR: temporary,
+        LANG: "en_US.UTF-8",
+        LC_ALL: "en_US.UTF-8",
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        CI: "1",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_EXTERNAL_DIFF: "",
+        GIT_DIFF_OPTS: "",
+        GIT_ATTR_NOSYSTEM: "1",
+      },
+    }, (error, stdout, stderr) => {
+      const code = typeof (error as NodeJS.ErrnoException | null)?.code === "number"
+        ? (error as NodeJS.ErrnoException & { code: number }).code
+        : error
+          ? -1
+          : 0;
+      resolveResult({
+        exitCode: code,
+        signal: ((error as { signal?: NodeJS.Signals } | null)?.signal ?? null),
+        stdoutLines: String(stdout).split(/\r?\n/).filter(Boolean),
+        stderrLines: String(stderr).split(/\r?\n/).filter(Boolean),
+      });
+    });
+  });
+}
+
+class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
+  readonly #stateRoot: string;
+  readonly #store: RunStore;
+  readonly #active = new Map<string, ScheduleHandle>();
+  #releaseLock: (() => Promise<void>) | null = null;
+  #initializing: Promise<void> | null = null;
+  #shutdown = false;
+
+  constructor(stateRoot = orchestratorStateDir()) {
+    this.#stateRoot = stateRoot;
+    this.#store = createRunStore(stateRoot);
+  }
+
+  initialize(): Promise<void> {
+    this.#initializing ??= (async () => {
+      await this.#store.initialize();
+      this.#releaseLock = await this.#store.acquireInstanceLock();
+      await this.#store.recoverInterrupted();
+      await this.#store.pruneExpired(Date.now());
+    })().catch((error) => {
+      this.#initializing = null;
+      throw error;
+    });
+    return this.#initializing;
+  }
+
+  async getSettings(): Promise<OrchestratorSettings> {
+    await this.initialize();
+    return (await loadOrchestratorSettings({ root: this.#stateRoot })).settings;
+  }
+
+  async saveSettings(settings: OrchestratorSettings): Promise<OrchestratorSettings> {
+    await this.initialize();
+    return saveOrchestratorSettings(settings, { root: this.#stateRoot });
+  }
+
+  async detectRuntimes(): Promise<Record<NativeAgentId, AgentRuntimeProbe>> {
+    const settings = await this.getSettings();
+    return discoverNativeAgents(settings);
+  }
+
+  async validateRepository(repoPath: string): Promise<RepositoryValidation> {
+    await this.initialize();
+    try {
+      const snapshot = await inspectRepository(repoPath, "analyze");
+      return {
+        valid: true,
+        reasons: [],
+        canonicalPath: snapshot.root,
+        device: snapshot.device,
+        inode: snapshot.inode,
+        branch: snapshot.branch,
+        baseSha: snapshot.head,
+        dirty: snapshot.dirty,
+      };
+    } catch (error) {
+      return {
+        valid: false,
+        reasons: [(error instanceof Error ? error.message : String(error)).slice(0, 2_000)],
+        canonicalPath: null,
+        device: null,
+        inode: null,
+        branch: null,
+        baseSha: null,
+        dirty: null,
+      };
+    }
+  }
+
+  async #runtimeFor(agent: NativeAgentId): Promise<AgentRuntimeProbe> {
+    return (await this.detectRuntimes())[agent];
+  }
+
+  async #prepareCommand(command: AgentCommand, agent: NativeAgentId, runId: string) {
+    const environment = await prepareAgentSessionEnvironment({
+      agent,
+      runRoot: join(this.#stateRoot, "runs", runId),
+    });
+    const prepared = { ...command, env: environment.env };
+    if (agent === "grok") await verifyGrokIsolation(command.command, environment);
+    return { command: prepared, secrets: environment.secrets, cleanup: environment.cleanup };
+  }
+
+  async analyze(input: AnalyzeRequest): Promise<PlanDraft> {
+    await this.initialize();
+    const runtimes = await this.detectRuntimes();
+    const settings = await this.getSettings();
+    return analyzePlan(input, {
+      inspectRepository,
+      runtimeFor: (agent) => Promise.resolve(runtimes[agent]),
+      runPlanCommand: async ({ command, agent, signal }) => {
+        const environment = await prepareAgentSessionEnvironment({
+          agent,
+          runRoot: join(this.#stateRoot, "planning", randomBytes(12).toString("hex")),
+        });
+        try {
+          if (agent === "grok") await verifyGrokIsolation(command.command, environment);
+          const events: import("./types.ts").OrchestratorEvent[] = [];
+          const process = startAgentProcess({
+            command: { ...command, env: environment.env },
+            agent,
+            signal,
+            secrets: environment.secrets,
+            onEvent(event) { events.push(event); },
+          });
+          const result = await process.completion;
+          if (result.exitCode !== 0) throw new Error(`planner exited with code ${result.exitCode}`);
+          return { stdoutLines: result.stdoutLines, events };
+        } finally {
+          await environment.cleanup();
+        }
+      },
+      createSchemaFile: async (runId, schema) => {
+        const path = join(this.#stateRoot, "planning", runId, "plan-schema.json");
+        await atomicWritePrivateJson(path, schema);
+        return path;
+      },
+      recentSuccessRates: async () => {
+        const runs = await this.#store.list();
+        const result = { claude: null, codex: null, grok: null } as Record<NativeAgentId, number | null>;
+        for (const agent of ["claude", "codex", "grok"] as const) {
+          const recent = runs.flatMap((run) => run.tasks).filter((task) =>
+            task.assignedAgent === agent && ["completed", "failed"].includes(task.status)).slice(0, 20);
+          result[agent] = recent.length ? recent.filter((task) => task.status === "completed").length / recent.length : null;
+        }
+        return result;
+      },
+      loadSettings: () => Promise.resolve(settings),
+      detectRuntimes: () => Promise.resolve(runtimes),
+      store: this.#store,
+      now: Date.now,
+      randomHex: (bytes) => randomBytes(bytes).toString("hex"),
+    });
+  }
+
+  async start(input: StartRunRequest): Promise<{ runId: string }> {
+    await this.initialize();
+    if (this.#shutdown) throw new Error("orchestrator is shutting down");
+    if (this.#active.has(input.runId)) throw new Error("orchestrator run is already active");
+    const settings = await this.getSettings();
+    const handle = await scheduleRun(input, {
+      store: this.#store,
+      inspectRepository,
+      createIntegrationWorktree,
+      createTaskWorktree,
+      commitTaskWorktree,
+      cherryPickTask,
+      abortCherryPick,
+      assertOriginalHeadUnchanged,
+      removeRegisteredWorktree,
+      runtimeFor: (agent) => this.#runtimeFor(agent),
+      startProcess: startAgentProcess,
+      runVerification: ({ command, cwd, signal }) => runVerificationCommand(command, cwd, signal),
+      now: Date.now,
+      stateRoot: this.#stateRoot,
+      maxConcurrency: settings.globalMaxConcurrency,
+      prepareAgentCommand: ({ command, agent, runId }) => this.#prepareCommand(command, agent, runId),
+    });
+    this.#active.set(input.runId, handle);
+    void handle.completion.then(
+      () => this.#active.delete(input.runId),
+      () => this.#active.delete(input.runId),
+    );
+    return { runId: input.runId };
+  }
+
+  async get(runId: string, afterSeq = 0): Promise<RunSnapshot> {
+    await this.initialize();
+    const run = await this.#store.get(runId);
+    if (!run) throw new Error(`orchestrator run not found: ${runId}`);
+    const events = await this.#store.events(runId, afterSeq);
+    return { run, events, nextSeq: events.at(-1)?.seq ?? afterSeq };
+  }
+
+  async cancel(runId: string): Promise<OrchestratorRun> {
+    await this.initialize();
+    const handle = this.#active.get(runId);
+    if (handle) {
+      await handle.cancel();
+      return handle.completion;
+    }
+    const run = await this.#store.get(runId);
+    if (!run) throw new Error(`orchestrator run not found: ${runId}`);
+    return run;
+  }
+
+  async list(): Promise<RunSummary[]> {
+    await this.initialize();
+    return (await this.#store.list()).map((run) => ({
+      id: run.id,
+      status: run.status,
+      repositoryPath: run.repositoryPath,
+      coordinator: run.coordinator,
+      resultBranch: run.resultBranch,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+    }));
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.#shutdown) return;
+    this.#shutdown = true;
+    await Promise.allSettled([...this.#active.values()].map((handle) => handle.cancel()));
+    await Promise.allSettled([...this.#active.values()].map((handle) => handle.completion));
+    await this.#store.recoverInterrupted();
+    if (this.#releaseLock) await this.#releaseLock();
+    this.#releaseLock = null;
+  }
+}
+
+declare global {
+  var __balanceOrchestratorSupervisorPromise__: Promise<OrchestratorSupervisor> | undefined;
+  var __balanceOrchestratorShutdownHook__: (() => Promise<void>) | undefined;
+}
+
+export function getOrchestratorSupervisor(): Promise<OrchestratorSupervisor> {
+  globalThis.__balanceOrchestratorSupervisorPromise__ ??= (async () => {
+    const supervisor = new LocalOrchestratorSupervisor();
+    await supervisor.initialize();
+    return supervisor;
+  })().catch((error) => {
+    globalThis.__balanceOrchestratorSupervisorPromise__ = undefined;
+    throw error;
+  });
+  globalThis.__balanceOrchestratorShutdownHook__ ??= async () => {
+    const supervisor = await globalThis.__balanceOrchestratorSupervisorPromise__;
+    await supervisor?.shutdown();
+  };
+  Reflect.set(globalThis, Symbol.for("balance.orchestrator.shutdown"), globalThis.__balanceOrchestratorShutdownHook__);
+  return globalThis.__balanceOrchestratorSupervisorPromise__;
+}
