@@ -206,3 +206,53 @@ test("cancel moves through cancelling, stops in-flight processes and starts no l
   assert.equal([...h.controllers.values()].every((item) => item.cancelled), true);
   assert.equal([...h.controllers.keys()].includes("finish"), false);
 });
+
+test("aborts a cherry-pick conflict and gives the coordinator one verified repair attempt", async () => {
+  const h = await harness();
+  let pickCount = 0;
+  let conflictStarts = 0;
+  let conflictPrompt = "";
+  const originalStart = h.dependencies.startProcess;
+  h.dependencies.cherryPickTask = async () => {
+    pickCount += 1;
+    h.calls.push(`pick:${pickCount}`);
+    if (pickCount === 2) throw new Error("CONFLICT");
+  };
+  h.dependencies.conflictedFiles = async () => ["ui.ts", "shared.ts"];
+  h.dependencies.startProcess = (input) => {
+    if (input.command.cwd.endsWith("/integration")) {
+      conflictStarts += 1;
+      conflictPrompt = input.command.args.join(" ");
+      h.calls.push("start:conflict");
+      return { pid: 999, completion: Promise.resolve({ exitCode: 0, signal: null, stdoutLines: [], stderrLines: [] }), async cancel() {} };
+    }
+    return originalStart(input);
+  };
+  const result = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(result.status, "completed");
+  assert.equal(conflictStarts, 1);
+  assert.match(conflictPrompt, /ui\.ts/);
+  assert.match(conflictPrompt, /shared\.ts/);
+  assert.match(conflictPrompt, /UI|Implement UI/);
+  assert.ok(h.calls.indexOf("abort") < h.calls.indexOf("start:conflict"));
+  assert.equal(h.calls.filter((call) => call === "commit:fix(orchestrator): resolve ui integration conflict").length, 1);
+  assert.equal(h.calls.some((call) => call.startsWith("verify:integration:git diff --check")), true);
+});
+
+test("does not retry a failed coordinator conflict repair", async () => {
+  const h = await harness();
+  let conflictStarts = 0;
+  const originalStart = h.dependencies.startProcess;
+  h.dependencies.cherryPickTask = async () => { throw new Error("CONFLICT"); };
+  h.dependencies.conflictedFiles = async () => ["core.ts"];
+  h.dependencies.startProcess = (input) => {
+    if (input.command.cwd.endsWith("/integration")) {
+      conflictStarts += 1;
+      return { pid: 999, completion: Promise.resolve({ exitCode: 7, signal: null, stdoutLines: [], stderrLines: [] }), async cancel() {} };
+    }
+    return originalStart(input);
+  };
+  const result = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(result.status, "failed");
+  assert.equal(conflictStarts, 1);
+});
