@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupSessions, meterDataSources, officialOnlyMeter } from "./engine.ts";
+import { formatTokens, groupSessions, meterDataSources, officialOnlyMeter } from "./engine.ts";
 import type { OfficialSlice } from "./official.ts";
 import { timelineSessions } from "./timeline-sessions.ts";
 import { WINDOW_MS, eventsForActivity, type MeterSnapshot, type UsageEvent } from "./types.ts";
@@ -124,4 +124,15 @@ test("timelineSessions draws separate blocks for actors sharing a parent session
   );
   assert.equal(blocks.length, 2);
   assert.deepEqual(blocks.map((block) => block.id).sort(), ["agent-a", "agent-b"]);
+});
+
+test("formatTokens switches to B once the billions place is at least 1", () => {
+  assert.equal(formatTokens(258_000_000), "258M");
+  assert.equal(formatTokens(999_000_000), "999M");
+  assert.equal(formatTokens(1_000_000_000), "1.0B");
+  assert.equal(formatTokens(1_371_000_000), "1.4B");
+  assert.equal(formatTokens(1_889_000_000), "1.9B");
+  assert.equal(formatTokens(10_000_000_000), "10B");
+  assert.equal(formatTokens(1_500_000), "1.5M");
+  assert.equal(formatTokens(12_000), "12k");
 });
