@@ -52,16 +52,24 @@ test("builds auditable plan commands for Claude, Codex and Grok", () => {
   assert.deepEqual(buildPlanCommand({ ...common, agent: "claude" }), {
     command: "/native/agent",
     args: [
-      "-p", "Plan this change",
-      "--output-format", "stream-json",
+      "-p",
+      "Plan this change",
+      "--output-format",
+      "stream-json",
       "--verbose",
       "--strict-mcp-config",
-      "--mcp-config", "{}",
-      "--setting-sources", "",
-      "--settings", "{}",
-      "--permission-mode", "plan",
-      "--json-schema", '{"type":"object"}',
-      "--allowedTools", "Read,Glob,Grep",
+      "--mcp-config",
+      "{}",
+      "--setting-sources",
+      "",
+      "--settings",
+      "{}",
+      "--permission-mode",
+      "plan",
+      "--json-schema",
+      '{"type":"object"}',
+      "--allowedTools",
+      "Read,Glob,Grep",
     ],
     cwd: "/repo with spaces",
     env: {},
@@ -69,14 +77,29 @@ test("builds auditable plan commands for Claude, Codex and Grok", () => {
   assert.deepEqual(buildPlanCommand({ ...common, agent: "codex" }), {
     command: "/native/agent",
     args: [
-      "exec", "--json",
-      "--ignore-user-config", "--ignore-rules", "--strict-config",
-      "--disable", "hooks", "--disable", "plugins", "--disable", "apps",
-      "--disable", "browser_use", "--disable", "multi_agent",
-      "-c", 'approval_policy="never"',
-      "--cd", "/repo with spaces",
-      "--sandbox", "read-only",
-      "--output-schema", "/private/schema.json",
+      "exec",
+      "--json",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--strict-config",
+      "--disable",
+      "hooks",
+      "--disable",
+      "plugins",
+      "--disable",
+      "apps",
+      "--disable",
+      "browser_use",
+      "--disable",
+      "multi_agent",
+      "-c",
+      'approval_policy="never"',
+      "--cd",
+      "/repo with spaces",
+      "--sandbox",
+      "read-only",
+      "--output-schema",
+      "/private/schema.json",
       "Plan this change",
     ],
     cwd: "/repo with spaces",
@@ -85,13 +108,22 @@ test("builds auditable plan commands for Claude, Codex and Grok", () => {
   assert.deepEqual(buildPlanCommand({ ...common, agent: "grok" }), {
     command: "/native/agent",
     args: [
-      "-p", "Plan this change",
-      "--output-format", "json",
-      "--no-auto-update", "--disable-web-search", "--no-subagents", "--verbatim",
-      "--sandbox", "read-only",
-      "--permission-mode", "plan",
-      "--json-schema", '{"type":"object"}',
-      "--tools", "Read,Glob,Grep",
+      "-p",
+      "Plan this change",
+      "--output-format",
+      "json",
+      "--no-auto-update",
+      "--disable-web-search",
+      "--no-subagents",
+      "--verbatim",
+      "--sandbox",
+      "read-only",
+      "--permission-mode",
+      "plan",
+      "--json-schema",
+      '{"type":"object"}',
+      "--tools",
+      "Read,Glob,Grep",
     ],
     cwd: "/repo with spaces",
     env: {},
@@ -100,28 +132,68 @@ test("builds auditable plan commands for Claude, Codex and Grok", () => {
 
 test("builds constrained execute commands without unsafe approval flags", () => {
   const commands = (["claude", "codex", "grok"] as const).map((agent) =>
-    buildExecuteCommand({ agent, binaryPath: `/native/${agent}`, worktreePath: "/task tree", task }),
+    buildExecuteCommand({
+      agent,
+      binaryPath: `/native/${agent}`,
+      worktreePath: "/task tree",
+      task,
+    }),
   );
   assert.deepEqual(commands[0]!.args.slice(0, 15), [
-    "-p", commands[0]!.args[1],
-    "--output-format", "stream-json", "--verbose",
-    "--strict-mcp-config", "--mcp-config", "{}",
-    "--setting-sources", "", "--settings", "{}",
-    "--permission-mode", "dontAsk", "--allowedTools",
+    "-p",
+    commands[0]!.args[1],
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "{}",
+    "--setting-sources",
+    "",
+    "--settings",
+    "{}",
+    "--permission-mode",
+    "dontAsk",
+    "--allowedTools",
   ]);
   assert.equal(commands[0]!.args.at(-1), "Read,Edit,Write,Glob,Grep,Bash");
   assert.deepEqual(commands[1]!.args.slice(0, 19), [
-    "exec", "--json", "--ignore-user-config", "--ignore-rules", "--strict-config",
-    "--disable", "hooks", "--disable", "plugins", "--disable", "apps",
-    "--disable", "browser_use", "--disable", "multi_agent",
-    "-c", 'approval_policy="never"', "--cd", "/task tree",
+    "exec",
+    "--json",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--strict-config",
+    "--disable",
+    "hooks",
+    "--disable",
+    "plugins",
+    "--disable",
+    "apps",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "multi_agent",
+    "-c",
+    'approval_policy="never"',
+    "--cd",
+    "/task tree",
   ]);
   assert.deepEqual(commands[1]!.args.slice(19, 21), ["--sandbox", "workspace-write"]);
   assert.deepEqual(commands[2]!.args.slice(0, 14), [
-    "-p", commands[2]!.args[1],
-    "--output-format", "streaming-json",
-    "--no-auto-update", "--disable-web-search", "--no-subagents", "--verbatim",
-    "--sandbox", "workspace", "--permission-mode", "dontAsk", "--tools", "Read,Edit,Write,Glob,Grep,Bash",
+    "-p",
+    commands[2]!.args[1],
+    "--output-format",
+    "streaming-json",
+    "--no-auto-update",
+    "--disable-web-search",
+    "--no-subagents",
+    "--verbatim",
+    "--sandbox",
+    "workspace",
+    "--permission-mode",
+    "dontAsk",
+    "--tools",
+    "Read,Edit,Write,Glob,Grep,Bash",
   ]);
   for (const command of commands) {
     assert.equal(command.cwd, "/task tree");
@@ -134,7 +206,10 @@ test("builds constrained execute commands without unsafe approval flags", () => 
       "--dangerously-skip-permissions",
       "--always-approve",
     ]) {
-      assert.doesNotMatch(serialized, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+      assert.doesNotMatch(
+        serialized,
+        new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+      );
     }
   }
 });
@@ -207,7 +282,10 @@ test("uses each agent's explicit config home and never links unrelated files", a
     });
     const variable = agent === "codex" ? "CODEX_HOME" : "GROK_HOME";
     const isolatedConfig = session.env[variable]!;
-    assert.equal(await realpath(join(isolatedConfig, "auth.json")), await realpath(join(root, `external-${agent}`, "auth.json")));
+    assert.equal(
+      await realpath(join(isolatedConfig, "auth.json")),
+      await realpath(join(root, `external-${agent}`, "auth.json")),
+    );
     await assert.rejects(() => lstat(join(isolatedConfig, "config.toml")));
     await session.cleanup();
   }
@@ -218,7 +296,11 @@ test("cleanup refuses a swapped agent-home parent and preserves the outside dire
   const sourceHome = join(root, "home");
   const runRoot = join(root, "run");
   await mkdir(sourceHome);
-  const session = await prepareAgentSessionEnvironment({ agent: "codex", runRoot, sourceEnv: { HOME: sourceHome } });
+  const session = await prepareAgentSessionEnvironment({
+    agent: "codex",
+    runRoot,
+    sourceEnv: { HOME: sourceHome },
+  });
   const canonicalRun = await realpath(runRoot);
   const agentHomeRoot = join(canonicalRun, "agent-home");
   const heldAgentHomeRoot = join(canonicalRun, "held-agent-home");
@@ -241,9 +323,16 @@ test("fails Grok isolation inspection closed for every external configuration so
   const sourceHome = join(root, "home");
   await mkdir(join(sourceHome, ".grok"), { recursive: true });
   await writeFile(join(sourceHome, ".grok", "auth.json"), "auth", { mode: 0o600 });
-  const session = await prepareAgentSessionEnvironment({ agent: "grok", runRoot: join(root, "run"), sourceEnv: { HOME: sourceHome } });
+  const session = await prepareAgentSessionEnvironment({
+    agent: "grok",
+    runRoot: join(root, "run"),
+    sourceEnv: { HOME: sourceHome },
+  });
   const clean = join(root, "clean-grok");
-  await executable(clean, "printf '%s\\n' '{\"hooks\":[],\"plugins\":[],\"mcpServers\":{},\"configSources\":{\"layers\":[]}}'");
+  await executable(
+    clean,
+    'printf \'%s\\n\' \'{"hooks":[],"plugins":[],"mcpServers":{},"configSources":{"layers":[]}}\'',
+  );
   await verifyGrokIsolation(clean, session);
 
   const dirtyShapes = [
@@ -255,14 +344,20 @@ test("fails Grok isolation inspection closed for every external configuration so
   for (const [index, shape] of dirtyShapes.entries()) {
     const binary = join(root, `dirty-grok-${index}`);
     await executable(binary, `printf '%s\\n' '${shape}'`);
-    await assert.rejects(() => verifyGrokIsolation(binary, session), /isolation|hook|plugin|mcp|config/i);
+    await assert.rejects(
+      () => verifyGrokIsolation(binary, session),
+      /isolation|hook|plugin|mcp|config/i,
+    );
   }
   const malformed = join(root, "malformed-grok");
   await executable(malformed, "printf 'not-json\\n'");
   await assert.rejects(() => verifyGrokIsolation(malformed, session), /JSON|inspect/i);
   const incomplete = join(root, "incomplete-grok");
   await executable(incomplete, "printf '%s\\n' '{}'");
-  await assert.rejects(() => verifyGrokIsolation(incomplete, session), /incomplete|isolation|inspect/i);
+  await assert.rejects(
+    () => verifyGrokIsolation(incomplete, session),
+    /incomplete|isolation|inspect/i,
+  );
   const leaking = join(root, "leaking-grok");
   await executable(leaking, "printf 'token: leaked-inspect-token\\n' >&2; exit 4");
   await assert.rejects(
@@ -277,19 +372,33 @@ test("fails Grok isolation inspection closed for every external configuration so
 });
 
 test("normalizes known Claude JSONL events and preserves unknown or broken output as diagnostics", () => {
-  assert.deepEqual(normalizeAgentLine("claude", "stdout", '{"type":"system","subtype":"init","session_id":"s1"}'), [
-    { type: "session_started", sessionId: "s1" },
-  ]);
-  assert.deepEqual(normalizeAgentLine("claude", "stdout", '{"type":"assistant","message":{"content":[{"type":"text","text":"hello"},{"type":"tool_use","name":"Read","input":{"file_path":"src/a.ts"}}]}}'), [
-    { type: "message", text: "hello" },
-    { type: "tool_started", tool: "Read", detail: '{"file_path":"src/a.ts"}' },
-  ]);
-  assert.deepEqual(normalizeAgentLine("claude", "stdout", '{"type":"result","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3}}'), [
-    { type: "usage", inputTokens: 10, outputTokens: 4, cachedInputTokens: 3 },
-  ]);
-  assert.deepEqual(normalizeAgentLine("claude", "stdout", '{"type":"new_vendor_event","value":1}'), [
-    { type: "diagnostic", stream: "stdout", message: '{"type":"new_vendor_event","value":1}' },
-  ]);
+  assert.deepEqual(
+    normalizeAgentLine("claude", "stdout", '{"type":"system","subtype":"init","session_id":"s1"}'),
+    [{ type: "session_started", sessionId: "s1" }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "claude",
+      "stdout",
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"hello"},{"type":"tool_use","name":"Read","input":{"file_path":"src/a.ts"}}]}}',
+    ),
+    [
+      { type: "message", text: "hello" },
+      { type: "tool_started", tool: "Read", detail: '{"file_path":"src/a.ts"}' },
+    ],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "claude",
+      "stdout",
+      '{"type":"result","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3}}',
+    ),
+    [{ type: "usage", inputTokens: 10, outputTokens: 4, cachedInputTokens: 3 }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine("claude", "stdout", '{"type":"new_vendor_event","value":1}'),
+    [{ type: "diagnostic", stream: "stdout", message: '{"type":"new_vendor_event","value":1}' }],
+  );
   assert.deepEqual(normalizeAgentLine("claude", "stdout", "broken json"), [
     { type: "diagnostic", stream: "stdout", message: "broken json" },
   ]);
@@ -299,44 +408,86 @@ test("normalizes known Claude JSONL events and preserves unknown or broken outpu
 });
 
 test("normalizes Codex and Grok sessions, messages, tools and usage", () => {
-  assert.deepEqual(normalizeAgentLine("codex", "stdout", '{"type":"thread.started","thread_id":"thread-7"}'), [
-    { type: "session_started", sessionId: "thread-7" },
-  ]);
-  assert.deepEqual(normalizeAgentLine("codex", "stdout", '{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}'), [
-    { type: "tool_started", tool: "command_execution", detail: "npm test" },
-  ]);
-  assert.deepEqual(normalizeAgentLine("codex", "stdout", '{"type":"item.completed","item":{"type":"agent_message","text":"implemented"}}'), [
-    { type: "message", text: "implemented" },
-  ]);
-  assert.deepEqual(normalizeAgentLine("codex", "stdout", '{"type":"turn.completed","usage":{"input_tokens":20,"output_tokens":8,"cached_input_tokens":5}}'), [
-    { type: "usage", inputTokens: 20, outputTokens: 8, cachedInputTokens: 5 },
-  ]);
-  assert.deepEqual(normalizeAgentLine("grok", "stdout", '{"type":"session.started","session_id":"grok-2"}'), [
-    { type: "session_started", sessionId: "grok-2" },
-  ]);
-  assert.deepEqual(normalizeAgentLine("grok", "stdout", '{"type":"tool_call","name":"Write","arguments":{"path":"a.ts"}}'), [
-    { type: "tool_started", tool: "Write", detail: '{"path":"a.ts"}' },
-  ]);
-  assert.deepEqual(normalizeAgentLine("grok", "stdout", '{"type":"result","output":"done","usage":{"input_tokens":7,"output_tokens":2,"cached_input_tokens":1}}'), [
-    { type: "message", text: "done" },
-    { type: "usage", inputTokens: 7, outputTokens: 2, cachedInputTokens: 1 },
-  ]);
+  assert.deepEqual(
+    normalizeAgentLine("codex", "stdout", '{"type":"thread.started","thread_id":"thread-7"}'),
+    [{ type: "session_started", sessionId: "thread-7" }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "codex",
+      "stdout",
+      '{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}',
+    ),
+    [{ type: "tool_started", tool: "command_execution", detail: "npm test" }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "codex",
+      "stdout",
+      '{"type":"item.completed","item":{"type":"agent_message","text":"implemented"}}',
+    ),
+    [{ type: "message", text: "implemented" }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "codex",
+      "stdout",
+      '{"type":"turn.completed","usage":{"input_tokens":20,"output_tokens":8,"cached_input_tokens":5}}',
+    ),
+    [{ type: "usage", inputTokens: 20, outputTokens: 8, cachedInputTokens: 5 }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine("grok", "stdout", '{"type":"session.started","session_id":"grok-2"}'),
+    [{ type: "session_started", sessionId: "grok-2" }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "grok",
+      "stdout",
+      '{"type":"tool_call","name":"Write","arguments":{"path":"a.ts"}}',
+    ),
+    [{ type: "tool_started", tool: "Write", detail: '{"path":"a.ts"}' }],
+  );
+  assert.deepEqual(
+    normalizeAgentLine(
+      "grok",
+      "stdout",
+      '{"type":"result","output":"done","usage":{"input_tokens":7,"output_tokens":2,"cached_input_tokens":1}}',
+    ),
+    [
+      { type: "message", text: "done" },
+      { type: "usage", inputTokens: 7, outputTokens: 2, cachedInputTokens: 1 },
+    ],
+  );
 });
 
 test("extracts the final structured plan for every provider without trusting unknown wrappers", () => {
   const plan = { title: "Plan", summary: "Summary", tasks: [] };
-  assert.deepEqual(extractStructuredPlan("claude", [
-    '{"type":"assistant","message":{"content":[]}}',
-    JSON.stringify({ type: "result", structured_output: plan }),
-  ]), plan);
-  assert.deepEqual(extractStructuredPlan("codex", [
-    '{"type":"thread.started","thread_id":"x"}',
-    JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(plan) } }),
-  ]), plan);
-  assert.deepEqual(extractStructuredPlan("grok", [
-    JSON.stringify({ structured_output: plan }),
-  ]), plan);
-  assert.throws(() => extractStructuredPlan("claude", ["bad", '{"type":"unknown"}']), /structured plan/i);
+  assert.deepEqual(
+    extractStructuredPlan("claude", [
+      '{"type":"assistant","message":{"content":[]}}',
+      JSON.stringify({ type: "result", structured_output: plan }),
+    ]),
+    plan,
+  );
+  assert.deepEqual(
+    extractStructuredPlan("codex", [
+      '{"type":"thread.started","thread_id":"x"}',
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: JSON.stringify(plan) },
+      }),
+    ]),
+    plan,
+  );
+  assert.deepEqual(
+    extractStructuredPlan("grok", [JSON.stringify({ structured_output: plan })]),
+    plan,
+  );
+  assert.throws(
+    () => extractStructuredPlan("claude", ["bad", '{"type":"unknown"}']),
+    /structured plan/i,
+  );
 });
 
 test("redacts explicit secrets, encoded paths and common credential shapes", () => {
@@ -355,16 +506,22 @@ test("redacts explicit secrets, encoded paths and common credential shapes", () 
   ].join(" | ");
   const redacted = redactAgentOutput(raw, secrets);
   for (const forbidden of [
-    "bearer-value", "api-secret", "oauth-secret", "plain-token",
-    secretPath, JSON.stringify(secretPath), encodeURIComponent(secretPath),
-    "env-secret-123", "desktop-capability",
+    "bearer-value",
+    "api-secret",
+    "oauth-secret",
+    "plain-token",
+    secretPath,
+    JSON.stringify(secretPath),
+    encodeURIComponent(secretPath),
+    "env-secret-123",
+    "desktop-capability",
   ]) {
     assert.equal(redacted.includes(forbidden), false, `leaked ${forbidden}`);
   }
   assert.match(redacted, /\[REDACTED\]/);
 });
 
-test("redacts every non-empty injected environment value before diagnostics reach the UI", async () => {
+test("redacts private environment paths and tokens without corrupting ordinary output", async () => {
   const root = await temporaryDirectory("redact-env");
   const home = join(root, "home");
   await mkdir(home);
@@ -373,12 +530,15 @@ test("redacts every non-empty injected environment value before diagnostics reac
     runRoot: join(root, "run"),
     sourceEnv: { HOME: home, LANG: "custom-locale", BALANCE_ORCHESTRATOR_TOKEN: "desktop-token" },
   });
-  const raw = [...Object.values(session.env).filter((value): value is string => Boolean(value)), "desktop-token"].join(" | ");
+  const raw = `${session.env.HOME} | ${session.env.TMPDIR} | ${session.env.CODEX_HOME} | desktop-token | input_tokens=10 | locale=${session.env.LANG} | no_color=${session.env.NO_COLOR}`;
   const safe = redactAgentOutput(raw, session.secrets);
-  for (const value of Object.values(session.env)) {
-    if (value) assert.equal(safe.includes(value), false, `leaked injected env value ${value}`);
+  for (const value of [session.env.HOME, session.env.TMPDIR, session.env.CODEX_HOME]) {
+    if (value) assert.equal(safe.includes(value), false, `leaked private env path ${value}`);
   }
   assert.equal(safe.includes("desktop-token"), false);
+  assert.match(safe, /input_tokens=10/);
+  assert.match(safe, /locale=custom-locale/);
+  assert.match(safe, /no_color=1/);
   const events = normalizeAgentLine("codex", "stderr", safe);
   assert.equal(events[0]?.type, "diagnostic");
   assert.equal(JSON.stringify(events).includes(home), false);
@@ -387,12 +547,18 @@ test("redacts every non-empty injected environment value before diagnostics reac
 
 test("supports all and only the three native agents", () => {
   const agents: NativeAgentId[] = ["claude", "codex", "grok"];
-  assert.deepEqual(agents.map((agent) => buildPlanCommand({
-    agent,
-    binaryPath: `/bin/${agent}`,
-    repositoryPath: "/repo",
-    prompt: "plan",
-    schemaPath: "/schema",
-    inlineSchema: "{}",
-  }).command), ["/bin/claude", "/bin/codex", "/bin/grok"]);
+  assert.deepEqual(
+    agents.map(
+      (agent) =>
+        buildPlanCommand({
+          agent,
+          binaryPath: `/bin/${agent}`,
+          repositoryPath: "/repo",
+          prompt: "plan",
+          schemaPath: "/schema",
+          inlineSchema: "{}",
+        }).command,
+    ),
+    ["/bin/claude", "/bin/codex", "/bin/grok"],
+  );
 });

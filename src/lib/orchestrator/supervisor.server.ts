@@ -17,15 +17,16 @@ import {
   inspectRepository,
   removeRegisteredWorktree,
 } from "./git.server.ts";
-import { atomicWritePrivateJson, ensurePrivateDirectory, orchestratorStateDir } from "./paths.server.ts";
+import {
+  atomicWritePrivateJson,
+  ensurePrivateDirectory,
+  orchestratorStateDir,
+} from "./paths.server.ts";
 import { analyzePlan, type AnalyzeRequest } from "./planner.server.ts";
 import { startAgentProcess, type ProcessRunResult } from "./process-runner.server.ts";
 import { createRunStore, type RunStore } from "./run-store.server.ts";
 import { scheduleRun, type ScheduleHandle, type StartRunRequest } from "./scheduler.server.ts";
-import {
-  loadOrchestratorSettings,
-  saveOrchestratorSettings,
-} from "./settings.server.ts";
+import { loadOrchestratorSettings, saveOrchestratorSettings } from "./settings.server.ts";
 import { discoverNativeAgents } from "./runtime.server.ts";
 import type {
   AgentRuntimeProbe,
@@ -69,15 +70,22 @@ export interface OrchestratorSupervisor {
   shutdown(): Promise<void>;
 }
 
-function verificationExecutable(command: VerificationCommand, cwd: string): { executable: string; args: string[] } {
+function verificationExecutable(
+  command: VerificationCommand,
+  cwd: string,
+): { executable: string; args: string[] } {
   if (command.executable === "git") {
     return {
       executable: "/usr/bin/git",
       args: [
-        "-c", "core.hooksPath=/dev/null",
-        "-c", "core.fsmonitor=false",
-        "-c", "diff.external=",
-        "-c", "core.attributesFile=/dev/null",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "diff.external=",
+        "-c",
+        "core.attributesFile=/dev/null",
         ...command.args,
       ],
     };
@@ -107,42 +115,49 @@ async function runVerificationCommand(
     }
     const canonical = await realpath(resolved.executable);
     const canonicalCwd = await realpath(cwd);
-    if (!canonical.startsWith(`${canonicalCwd}/`)) throw new Error("./gradlew escaped the task worktree");
+    if (!canonical.startsWith(`${canonicalCwd}/`))
+      throw new Error("./gradlew escaped the task worktree");
   }
   return new Promise((resolveResult) => {
-    execFile(resolved.executable, resolved.args, {
-      cwd,
-      signal,
-      timeout: 30 * 60 * 1_000,
-      maxBuffer: 20 * 1024 * 1024,
-      env: {
-        HOME: home,
-        TMPDIR: temporary,
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
-        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        CI: "1",
-        GIT_TERMINAL_PROMPT: "0",
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_SYSTEM: "/dev/null",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_EXTERNAL_DIFF: "",
-        GIT_DIFF_OPTS: "",
-        GIT_ATTR_NOSYSTEM: "1",
+    execFile(
+      resolved.executable,
+      resolved.args,
+      {
+        cwd,
+        signal,
+        timeout: 30 * 60 * 1_000,
+        maxBuffer: 20 * 1024 * 1024,
+        env: {
+          HOME: home,
+          TMPDIR: temporary,
+          LANG: "en_US.UTF-8",
+          LC_ALL: "en_US.UTF-8",
+          PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+          CI: "1",
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_EXTERNAL_DIFF: "",
+          GIT_DIFF_OPTS: "",
+          GIT_ATTR_NOSYSTEM: "1",
+        },
       },
-    }, (error, stdout, stderr) => {
-      const code = typeof (error as NodeJS.ErrnoException | null)?.code === "number"
-        ? (error as NodeJS.ErrnoException & { code: number }).code
-        : error
-          ? -1
-          : 0;
-      resolveResult({
-        exitCode: code,
-        signal: ((error as { signal?: NodeJS.Signals } | null)?.signal ?? null),
-        stdoutLines: String(stdout).split(/\r?\n/).filter(Boolean),
-        stderrLines: String(stderr).split(/\r?\n/).filter(Boolean),
-      });
-    });
+      (error, stdout, stderr) => {
+        const code =
+          typeof (error as NodeJS.ErrnoException | null)?.code === "number"
+            ? (error as NodeJS.ErrnoException & { code: number }).code
+            : error
+              ? -1
+              : 0;
+        resolveResult({
+          exitCode: code,
+          signal: (error as { signal?: NodeJS.Signals } | null)?.signal ?? null,
+          stdoutLines: String(stdout).split(/\r?\n/).filter(Boolean),
+          stderrLines: String(stderr).split(/\r?\n/).filter(Boolean),
+        });
+      },
+    );
   });
 }
 
@@ -249,7 +264,9 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
             agent,
             signal,
             secrets: environment.secrets,
-            onEvent(event) { events.push(event); },
+            onEvent(event) {
+              events.push(event);
+            },
           });
           const result = await process.completion;
           if (result.exitCode !== 0) throw new Error(`planner exited with code ${result.exitCode}`);
@@ -265,11 +282,21 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       },
       recentSuccessRates: async () => {
         const runs = await this.#store.list();
-        const result = { claude: null, codex: null, grok: null } as Record<NativeAgentId, number | null>;
+        const result = { claude: null, codex: null, grok: null } as Record<
+          NativeAgentId,
+          number | null
+        >;
         for (const agent of ["claude", "codex", "grok"] as const) {
-          const recent = runs.flatMap((run) => run.tasks).filter((task) =>
-            task.assignedAgent === agent && ["completed", "failed"].includes(task.status)).slice(0, 20);
-          result[agent] = recent.length ? recent.filter((task) => task.status === "completed").length / recent.length : null;
+          const recent = runs
+            .flatMap((run) => run.tasks)
+            .filter(
+              (task) =>
+                task.assignedAgent === agent && ["completed", "failed"].includes(task.status),
+            )
+            .slice(0, 20);
+          result[agent] = recent.length
+            ? recent.filter((task) => task.status === "completed").length / recent.length
+            : null;
         }
         return result;
       },
@@ -302,7 +329,8 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       now: Date.now,
       stateRoot: this.#stateRoot,
       maxConcurrency: settings.globalMaxConcurrency,
-      prepareAgentCommand: ({ command, agent, runId }) => this.#prepareCommand(command, agent, runId),
+      prepareAgentCommand: ({ command, agent, runId }) =>
+        this.#prepareCommand(command, agent, runId),
     });
     this.#active.set(input.runId, handle);
     void handle.completion.then(
@@ -348,7 +376,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   async shutdown(): Promise<void> {
     if (this.#shutdown) return;
     this.#shutdown = true;
-    await Promise.allSettled([...this.#active.values()].map((handle) => handle.cancel()));
+    await Promise.allSettled([...this.#active.values()].map((handle) => handle.interrupt()));
     await Promise.allSettled([...this.#active.values()].map((handle) => handle.completion));
     await this.#store.recoverInterrupted();
     if (this.#releaseLock) await this.#releaseLock();
@@ -374,6 +402,10 @@ export function getOrchestratorSupervisor(): Promise<OrchestratorSupervisor> {
     const supervisor = await globalThis.__balanceOrchestratorSupervisorPromise__;
     await supervisor?.shutdown();
   };
-  Reflect.set(globalThis, Symbol.for("balance.orchestrator.shutdown"), globalThis.__balanceOrchestratorShutdownHook__);
+  Reflect.set(
+    globalThis,
+    Symbol.for("balance.orchestrator.shutdown"),
+    globalThis.__balanceOrchestratorShutdownHook__,
+  );
   return globalThis.__balanceOrchestratorSupervisorPromise__;
 }

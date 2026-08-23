@@ -1,7 +1,7 @@
 # Balance 原生 Agent 总调度规格
 
 日期：2026-08-23
-状态：已确认
+状态：已实现
 目标版本：Balance 0.4.x
 适用平台：macOS Apple Silicon 桌面版与本机开发模式
 
@@ -315,7 +315,24 @@ interface OrchestratorDraftPlan {
     expectedFiles: string[];
     acceptanceCriteria: string[];
     verificationCommands: Array<{
-      executable: "npm" | "pnpm" | "yarn" | "bun" | "cargo" | "go" | "git" | "node" | "python3" | "pytest" | "make" | "cmake" | "xcodebuild" | "swift" | "gradle" | "test" | "./gradlew";
+      executable:
+        | "npm"
+        | "pnpm"
+        | "yarn"
+        | "bun"
+        | "cargo"
+        | "go"
+        | "git"
+        | "node"
+        | "python3"
+        | "pytest"
+        | "make"
+        | "cmake"
+        | "xcodebuild"
+        | "swift"
+        | "gradle"
+        | "test"
+        | "./gradlew";
       args: string[];
     }>;
     preferredAgent: NativeAgentId | null;
@@ -499,21 +516,21 @@ listOrchestratorRuns(): Promise<RunSummary[]>
 
 ## 13. 失败与恢复
 
-| 场景 | 行为 |
-| --- | --- |
-| CLI 不存在或版本探测失败 | Agent 不参与自动分配，设置显示原因 |
-| CLI 未登录 | 当前任务失败并提示用户在原生 CLI 完成登录 |
-| 额度未知 | 默认不自动分配；用户可在设置允许参与 |
-| 计划结构无效 | 同一负责人重试一次，仍失败则结束分析 |
-| 创建 worktree 失败 | 不启动 Agent，运行 failed |
-| Agent 非零退出 | 保存 stderr，任务 failed，不集成 |
-| Agent 超时 | 终止进程组，任务 failed |
-| 用户取消 | 停止新任务，终止活动任务，运行 cancelled |
-| 验收失败 | 任务 failed，保留 worktree 和日志 |
-| cherry-pick 冲突 | 负责人尝试一次；仍冲突则 abort 并 failed |
-| sidecar 重启 | 非终态运行改为 interrupted，不自动续跑 |
-| 原仓库 HEAD 改变 | 运行 failed，不触碰用户 checkout |
-| 磁盘不足 | 停止新任务，保存能写入的诊断并 failed |
+| 场景                     | 行为                                      |
+| ------------------------ | ----------------------------------------- |
+| CLI 不存在或版本探测失败 | Agent 不参与自动分配，设置显示原因        |
+| CLI 未登录               | 当前任务失败并提示用户在原生 CLI 完成登录 |
+| 额度未知                 | 默认不自动分配；用户可在设置允许参与      |
+| 计划结构无效             | 同一负责人重试一次，仍失败则结束分析      |
+| 创建 worktree 失败       | 不启动 Agent，运行 failed                 |
+| Agent 非零退出           | 保存 stderr，任务 failed，不集成          |
+| Agent 超时               | 终止进程组，任务 failed                   |
+| 用户取消                 | 停止新任务，终止活动任务，运行 cancelled  |
+| 验收失败                 | 任务 failed，保留 worktree 和日志         |
+| cherry-pick 冲突         | 负责人尝试一次；仍冲突则 abort 并 failed  |
+| sidecar 重启             | 非终态运行改为 interrupted，不自动续跑    |
+| 原仓库 HEAD 改变         | 运行 failed，不触碰用户 checkout          |
+| 磁盘不足                 | 停止新任务，保存能写入的诊断并 failed     |
 
 ## 14. 非目标
 

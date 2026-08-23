@@ -5,15 +5,8 @@ import {
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
 import type { Readable } from "node:stream";
-import {
-  normalizeAgentLine,
-  redactAgentOutput,
-  type AgentCommand,
-} from "./adapters.ts";
-import type {
-  NativeAgentId,
-  OrchestratorEvent,
-} from "./types.ts";
+import { normalizeAgentLine, redactAgentOutput, type AgentCommand } from "./adapters.ts";
+import type { NativeAgentId, OrchestratorEvent } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 45 * 60 * 1_000;
 const MAX_TIMEOUT_MS = 120 * 60 * 1_000;
@@ -252,7 +245,11 @@ export function startAgentProcess(input: {
     if (outputFailure) return;
     if (bytes.byteLength > MAX_LINE_BYTES) {
       outputFailure = new Error("Native agent output exceeded the 1 MiB logical line limit");
-      emitEvent({ type: "process_failed", category: "output_limit", message: outputFailure.message });
+      emitEvent({
+        type: "process_failed",
+        category: "output_limit",
+        message: outputFailure.message,
+      });
       void cancelInternal();
       return;
     }
@@ -301,6 +298,7 @@ export function startAgentProcess(input: {
       detached: true,
       shell: false,
     });
+    child.stdin.end();
   } catch (error) {
     const spawnError = redactedError(error);
     emitEvent({ type: "process_failed", category: "spawn", message: spawnError.message });
@@ -323,10 +321,7 @@ export function startAgentProcess(input: {
     stderrReader.source.removeListener("end", stderrReader.onEnd);
   };
 
-  const finishCompletion = (
-    result: ProcessRunResult | null,
-    error: Error | null,
-  ): void => {
+  const finishCompletion = (result: ProcessRunResult | null, error: Error | null): void => {
     if (settled) return;
     settled = true;
     void eventQueue.then(() => {
@@ -362,11 +357,23 @@ export function startAgentProcess(input: {
       return;
     }
     if (timedOut) {
-      emitEvent({ type: "process_failed", category: "timeout", message: `Native agent timed out after ${timeoutMs}ms` });
+      emitEvent({
+        type: "process_failed",
+        category: "timeout",
+        message: `Native agent timed out after ${timeoutMs}ms`,
+      });
     } else if (cancelRequested || input.signal.aborted) {
-      emitEvent({ type: "process_failed", category: "cancelled", message: "Native agent process was cancelled" });
+      emitEvent({
+        type: "process_failed",
+        category: "cancelled",
+        message: "Native agent process was cancelled",
+      });
     } else if (exitCode !== 0) {
-      emitEvent({ type: "process_failed", category: "exit", message: `Native agent exited with code ${exitCode}` });
+      emitEvent({
+        type: "process_failed",
+        category: "exit",
+        message: `Native agent exited with code ${exitCode}`,
+      });
     } else {
       emitEvent({ type: "process_completed", exitCode });
     }

@@ -972,6 +972,10 @@ fn drain_sidecar_events(
     });
 }
 
+fn should_force_bundled_layout(force_bundled: bool, e2e_override: bool) -> bool {
+    force_bundled || e2e_override
+}
+
 fn start_sidecar(
     app: &AppHandle,
     state: &SidecarState,
@@ -986,8 +990,10 @@ fn start_sidecar(
             capability.as_bytes(),
         )?;
     }
-    let (server_root, server_entry, watchdog, used_overlay, collector) =
-        resolve_server_layout(app, force_bundled)?;
+    let (server_root, server_entry, watchdog, used_overlay, collector) = resolve_server_layout(
+        app,
+        should_force_bundled_layout(force_bundled, state_directory.e2e_override),
+    )?;
     let installed_collector = install_statusline_collector(app, &collector)?;
     let statusline_snapshot = statusline_snapshot_path(app)?;
     let inherited_environment = filtered_sidecar_environment(std::env::vars_os());
@@ -1221,6 +1227,13 @@ mod tests {
             default_orchestrator_state_path(Path::new("/data")),
             Path::new("/data").join("Balance").join("orchestrator")
         );
+    }
+
+    #[test]
+    fn debug_e2e_state_forces_the_current_bundled_web_app() {
+        assert!(should_force_bundled_layout(false, true));
+        assert!(should_force_bundled_layout(true, false));
+        assert!(!should_force_bundled_layout(false, false));
     }
 
     #[test]

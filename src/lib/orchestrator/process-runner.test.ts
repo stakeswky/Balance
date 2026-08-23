@@ -2,14 +2,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import type {
-  ChildProcessWithoutNullStreams,
-  SpawnOptionsWithoutStdio,
-} from "node:child_process";
-import {
-  startAgentProcess,
-  type ProcessRuntime,
-} from "./process-runner.server.ts";
+import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
+import { startAgentProcess, type ProcessRuntime } from "./process-runner.server.ts";
 import type { AgentCommand } from "./adapters.ts";
 import type { OrchestratorEvent } from "./types.ts";
 
@@ -52,7 +46,11 @@ class FakeRuntime implements ProcessRuntime {
   failGroup = false;
   closeOnSignal: NodeJS.Signals | null = null;
 
-  spawn(command: string, args: readonly string[], options: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams {
+  spawn(
+    command: string,
+    args: readonly string[],
+    options: SpawnOptionsWithoutStdio,
+  ): ChildProcessWithoutNullStreams {
     this.spawnCalls.push({ command, args, options });
     return this.child as unknown as ChildProcessWithoutNullStreams;
   }
@@ -83,7 +81,9 @@ class FakeRuntime implements ProcessRuntime {
   }
 
   fireTimer(milliseconds: number): void {
-    const timer = this.timers.find((candidate) => !candidate.cleared && candidate.milliseconds === milliseconds);
+    const timer = this.timers.find(
+      (candidate) => !candidate.cleared && candidate.milliseconds === milliseconds,
+    );
     assert.ok(timer, `missing active ${milliseconds}ms timer`);
     timer.cleared = true;
     timer.callback();
@@ -97,12 +97,15 @@ const command: AgentCommand = {
   env: { HOME: "/private/run/home", NO_COLOR: "1" },
 };
 
-function start(runtime: FakeRuntime, options: {
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  events?: OrchestratorEvent[];
-  secrets?: readonly string[];
-} = {}) {
+function start(
+  runtime: FakeRuntime,
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    events?: OrchestratorEvent[];
+    secrets?: readonly string[];
+  } = {},
+) {
   const controller = new AbortController();
   const events = options.events ?? [];
   const running = startAgentProcess({
@@ -136,10 +139,17 @@ test("spawns directly in a detached process group and drains both streams", asyn
     detached: true,
     shell: false,
   });
+  assert.equal(
+    runtime.child.stdin.writableEnded,
+    true,
+    "non-interactive Agent stdin must receive EOF",
+  );
 
   runtime.child.stdout.write('{"type":"thread.started","thread_id":"t-1"}\n');
   runtime.child.stderr.write("visible warning\n");
-  runtime.child.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n');
+  runtime.child.stdout.write(
+    '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+  );
   runtime.child.close(0);
   const result = await running.completion;
   assert.equal(result.exitCode, 0);
@@ -162,7 +172,9 @@ test("redacts lines before raw retention, normalization and failure events", asy
   const runtime = new FakeRuntime();
   const events: OrchestratorEvent[] = [];
   const { running } = start(runtime, { events, secrets: ["private-value", "/private/run/home"] });
-  runtime.child.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"private-value token: api-secret /private/run/home"}}\n');
+  runtime.child.stdout.write(
+    '{"type":"item.completed","item":{"type":"agent_message","text":"private-value token: api-secret /private/run/home"}}\n',
+  );
   runtime.child.stderr.write("Authorization: Bearer bearer-secret\n");
   runtime.child.close(7);
   const result = await running.completion;
@@ -184,10 +196,14 @@ test("fails and terminates the process when one logical line exceeds 1 MiB", asy
   await flushAsync();
   runtime.fireTimer(5_000);
   await assert.rejects(running.completion, /1 MiB|line limit/i);
-  assert.equal(events.some((event) => event.type === "process_failed"), true);
-  assert.deepEqual(runtime.signals.filter((entry) => entry.target === "group").map((entry) => entry.signal), [
-    "SIGINT", "SIGTERM", "SIGKILL",
-  ]);
+  assert.equal(
+    events.some((event) => event.type === "process_failed"),
+    true,
+  );
+  assert.deepEqual(
+    runtime.signals.filter((entry) => entry.target === "group").map((entry) => entry.signal),
+    ["SIGINT", "SIGTERM", "SIGKILL"],
+  );
 });
 
 test("retains at most 20 MiB of raw logs while draining and diagnoses truncation once", async () => {
@@ -197,7 +213,10 @@ test("retains at most 20 MiB of raw logs while draining and diagnoses truncation
   for (let index = 0; index < 22; index += 1) runtime.child.stdout.write(line);
   runtime.child.close(0);
   const result = await running.completion;
-  const retainedBytes = result.stdoutLines.reduce((total, value) => total + Buffer.byteLength(value) + 1, 0);
+  const retainedBytes = result.stdoutLines.reduce(
+    (total, value) => total + Buffer.byteLength(value) + 1,
+    0,
+  );
   assert.ok(retainedBytes <= 20 * 1024 * 1024);
   const truncationEvents = events.filter(
     (event) => event.type === "diagnostic" && /20 MiB|truncat/i.test(event.message),
@@ -221,15 +240,15 @@ test("reports spawn errors once and removes stream and process listeners", async
 test("uses a 45 minute default timeout and rejects values beyond 120 minutes", () => {
   const runtime = new FakeRuntime();
   const { running } = start(runtime);
-  assert.equal(runtime.timers.some((timer) => timer.milliseconds === 45 * 60 * 1_000), true);
+  assert.equal(
+    runtime.timers.some((timer) => timer.milliseconds === 45 * 60 * 1_000),
+    true,
+  );
   runtime.child.close(0);
   void running.completion;
 
   const tooLongRuntime = new FakeRuntime();
-  assert.throws(
-    () => start(tooLongRuntime, { timeoutMs: 120 * 60 * 1_000 + 1 }),
-    /120|timeout/i,
-  );
+  assert.throws(() => start(tooLongRuntime, { timeoutMs: 120 * 60 * 1_000 + 1 }), /120|timeout/i);
   assert.equal(tooLongRuntime.spawnCalls.length, 0);
 });
 
@@ -240,14 +259,23 @@ test("external abort escalates SIGINT, SIGTERM and SIGKILL at five-second interv
   const { running } = start(runtime, { signal: controller.signal });
   controller.abort();
   await flushAsync();
-  assert.deepEqual(runtime.signals.map((entry) => entry.signal), ["SIGINT"]);
+  assert.deepEqual(
+    runtime.signals.map((entry) => entry.signal),
+    ["SIGINT"],
+  );
   runtime.fireTimer(5_000);
   await flushAsync();
-  assert.deepEqual(runtime.signals.map((entry) => entry.signal), ["SIGINT", "SIGTERM"]);
+  assert.deepEqual(
+    runtime.signals.map((entry) => entry.signal),
+    ["SIGINT", "SIGTERM"],
+  );
   runtime.fireTimer(5_000);
   await running.cancel();
   await running.completion;
-  assert.deepEqual(runtime.signals.map((entry) => entry.signal), ["SIGINT", "SIGTERM", "SIGKILL"]);
+  assert.deepEqual(
+    runtime.signals.map((entry) => entry.signal),
+    ["SIGINT", "SIGTERM", "SIGKILL"],
+  );
   assert.equal(runtime.timers.filter((timer) => !timer.cleared).length, 0);
 });
 
@@ -290,6 +318,12 @@ test("timeout follows the same cancellation path", async () => {
   await flushAsync();
   runtime.fireTimer(5_000);
   await running.completion;
-  assert.deepEqual(runtime.signals.map((entry) => entry.signal), ["SIGINT", "SIGTERM", "SIGKILL"]);
-  assert.equal(events.some((event) => event.type === "process_failed" && event.category === "timeout"), true);
+  assert.deepEqual(
+    runtime.signals.map((entry) => entry.signal),
+    ["SIGINT", "SIGTERM", "SIGKILL"],
+  );
+  assert.equal(
+    events.some((event) => event.type === "process_failed" && event.category === "timeout"),
+    true,
+  );
 });

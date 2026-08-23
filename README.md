@@ -52,13 +52,21 @@ npm install
 npm run dev
 ```
 
-打开 <http://localhost:8080>。余量必须运行在保存 Claude / Grok / Codex 本地日志的机器上，才能自动读取真实用量；没有本地数据时仍可使用匿名演示数据，或在「插件」页手动导入 JSON/JSONL。
+打开 <http://localhost:8080>。余量必须运行在保存 Claude / Grok / Codex 本地日志的机器上，才能自动读取真实用量；没有本地数据时仍可使用匿名演示数据，或在「设置 → 高级导入与协议」手动导入 JSON/JSONL。
 
 ```bash
 npm test
 npm run typecheck
 npm run build
 ```
+
+## 原生 Agent 总调度
+
+macOS 桌面版可以直接调度设备上已经安装并登录的 Claude Code、Codex CLI 和 Grok CLI。进入「设置 → Agent 与 CLI」确认可执行文件路径和检测结果，再到「调度」选择本机 Git 仓库、输入目标，并选择自动或手动负责人。
+
+自动模式会结合任务大小、保守可用额度和近期成功率进行分配。Balance 会先展示负责人生成的结构化计划、文件范围和验收命令；只有用户确认仓库可信后才开始执行。每个任务都在独立 Git worktree 中运行，验证通过后汇总到新的 `balance/run-*-result` 分支。Balance 不会自动合并到当前分支，也不会 push、创建 PR 或部署。
+
+关闭主窗口不会打断运行；从菜单真正退出 Balance 时，运行中的原生 Agent 会被终止并标记为“意外中断”，下次启动只恢复只读历史，不会自动续跑。详细设置、状态目录和排障见 [macOS 桌面应用](./docs/macos-desktop.md)。
 
 ## 数据与隐私
 

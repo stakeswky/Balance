@@ -12,7 +12,11 @@ import type {
   removeRegisteredWorktree,
 } from "./git.server.ts";
 import { fingerprintPlan, topologicalTaskIds } from "./plan.ts";
-import type { RunningProcess, ProcessRunResult, startAgentProcess } from "./process-runner.server.ts";
+import type {
+  RunningProcess,
+  ProcessRunResult,
+  startAgentProcess,
+} from "./process-runner.server.ts";
 import type { RunStore } from "./run-store.server.ts";
 import type {
   AgentRuntimeProbe,
@@ -36,6 +40,7 @@ export interface StartRunRequest {
 export interface ScheduleHandle {
   completion: Promise<OrchestratorRun>;
   cancel(): Promise<void>;
+  interrupt(): Promise<void>;
 }
 
 export interface SchedulerDependencies {
@@ -78,7 +83,8 @@ function errorMessage(error: unknown): string {
 }
 
 function assertStartRequest(request: StartRunRequest, run: OrchestratorRun): void {
-  if (request.trustedRepository !== true) throw new Error("repository trust confirmation is required");
+  if (request.trustedRepository !== true)
+    throw new Error("repository trust confirmation is required");
   if (request.runId !== run.id) throw new Error("run id does not match persisted run");
   const { fingerprint: _fingerprint, createdAt: _createdAt, ...fingerprintInput } = run.draft;
   const computed = fingerprintPlan(fingerprintInput);
@@ -115,42 +121,57 @@ function assertCurrentRepository(run: OrchestratorRun, current: RepositorySnapsh
 const execFileAsync = promisify(execFile);
 
 async function defaultConflictedFiles(integrationPath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("/usr/bin/git", [
-    "-c", "core.hooksPath=/dev/null",
-    "-c", "core.fsmonitor=false",
-    "-c", "diff.external=",
-    "-c", "core.attributesFile=/dev/null",
-    "diff", "--name-only", "--diff-filter=U", "-z",
-  ], {
-    cwd: integrationPath,
-    env: {
-      PATH: "/usr/bin:/bin",
-      HOME: "/var/empty",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_EXTERNAL_DIFF: "",
-      GIT_ATTR_NOSYSTEM: "1",
+  const { stdout } = await execFileAsync(
+    "/usr/bin/git",
+    [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "diff.external=",
+      "-c",
+      "core.attributesFile=/dev/null",
+      "diff",
+      "--name-only",
+      "--diff-filter=U",
+      "-z",
+    ],
+    {
+      cwd: integrationPath,
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: "/var/empty",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_EXTERNAL_DIFF: "",
+        GIT_ATTR_NOSYSTEM: "1",
+      },
+      maxBuffer: 1024 * 1024,
+      timeout: 10_000,
     },
-    maxBuffer: 1024 * 1024,
-    timeout: 10_000,
-  });
+  );
   return stdout.split("\0").filter(Boolean);
 }
 
-export async function resolveIntegrationConflict(input: {
-  run: OrchestratorRun;
-  taskId: string;
-  commitSha: string;
-  integrationPath: string;
-  conflictFiles: readonly string[];
-  signal: AbortSignal;
-}, dependencies: SchedulerDependencies): Promise<string> {
+export async function resolveIntegrationConflict(
+  input: {
+    run: OrchestratorRun;
+    taskId: string;
+    commitSha: string;
+    integrationPath: string;
+    conflictFiles: readonly string[];
+    signal: AbortSignal;
+  },
+  dependencies: SchedulerDependencies,
+): Promise<string> {
   const task = input.run.tasks.find((candidate) => candidate.id === input.taskId);
   if (!task) throw new Error(`conflict task not found: ${input.taskId}`);
   if (input.signal.aborted) throw new CancelledError();
   const runtime = await dependencies.runtimeFor(input.run.coordinator);
-  if (!runtime.ok || !runtime.path) throw new Error("coordinator native CLI is unavailable for conflict repair");
+  if (!runtime.ok || !runtime.path)
+    throw new Error("coordinator native CLI is unavailable for conflict repair");
   const conflictTask = {
     ...task,
     assignedAgent: input.run.coordinator,
@@ -172,11 +193,11 @@ export async function resolveIntegrationConflict(input: {
   });
   const prepared = dependencies.prepareAgentCommand
     ? await dependencies.prepareAgentCommand({
-      command: baseCommand,
-      agent: input.run.coordinator,
-      runId: input.run.id,
-      taskId: `conflict:${input.taskId}`,
-    })
+        command: baseCommand,
+        agent: input.run.coordinator,
+        runId: input.run.id,
+        taskId: `conflict:${input.taskId}`,
+      })
     : { command: baseCommand, secrets: [], cleanup: async () => undefined };
   let process: RunningProcess;
   try {
@@ -201,7 +222,8 @@ export async function resolveIntegrationConflict(input: {
   }
   const result = await process.completion.finally(() => prepared.cleanup());
   if (input.signal.aborted) throw new CancelledError();
-  if (result.exitCode !== 0) throw new Error(`coordinator conflict repair exited with code ${result.exitCode}`);
+  if (result.exitCode !== 0)
+    throw new Error(`coordinator conflict repair exited with code ${result.exitCode}`);
   for (const verificationCommand of task.verificationCommands) {
     const verification = await dependencies.runVerification({
       command: verificationCommand,
@@ -235,6 +257,7 @@ export async function scheduleRun(
   }));
 
   let cancelRequested = false;
+  let interruptRequested = false;
   let terminal = false;
   const taskControllers = new Map<string, AbortController>();
   const runningProcesses = new Map<string, RunningProcess>();
@@ -245,11 +268,12 @@ export async function scheduleRun(
   const markTask = (
     taskId: string,
     mutate: (task: OrchestratorRun["tasks"][number]) => OrchestratorRun["tasks"][number],
-  ) => update((run) => ({
-    ...run,
-    tasks: run.tasks.map((task) => task.id === taskId ? mutate(task) : task),
-    updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
-  }));
+  ) =>
+    update((run) => ({
+      ...run,
+      tasks: run.tasks.map((task) => (task.id === taskId ? mutate(task) : task)),
+      updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+    }));
 
   const cleanupTask = async (taskId: string): Promise<void> => {
     const current = await dependencies.store.get(request.runId);
@@ -285,7 +309,8 @@ export async function scheduleRun(
     }));
     if (cancelRequested) throw new CancelledError();
     const runtime = await dependencies.runtimeFor(task.assignedAgent);
-    if (!runtime.ok || !runtime.path) throw new Error(`${task.assignedAgent} native CLI is unavailable`);
+    if (!runtime.ok || !runtime.path)
+      throw new Error(`${task.assignedAgent} native CLI is unavailable`);
     const controller = new AbortController();
     taskControllers.set(taskId, controller);
     const baseCommand = buildExecuteCommand({
@@ -296,11 +321,11 @@ export async function scheduleRun(
     });
     const prepared = dependencies.prepareAgentCommand
       ? await dependencies.prepareAgentCommand({
-        command: baseCommand,
-        agent: task.assignedAgent,
-        runId: request.runId,
-        taskId,
-      })
+          command: baseCommand,
+          agent: task.assignedAgent,
+          runId: request.runId,
+          taskId,
+        })
       : { command: baseCommand, secrets: [], cleanup: async () => undefined };
     await markTask(taskId, (state) => ({ ...state, status: "running" }));
     let process: RunningProcess;
@@ -330,7 +355,8 @@ export async function scheduleRun(
     runningProcesses.delete(taskId);
     taskControllers.delete(taskId);
     if (cancelRequested) throw new CancelledError();
-    if (processResult.exitCode !== 0) throw new Error(`native Agent exited with code ${processResult.exitCode}`);
+    if (processResult.exitCode !== 0)
+      throw new Error(`native Agent exited with code ${processResult.exitCode}`);
     await markTask(taskId, (state) => ({ ...state, status: "verifying" }));
     for (const verificationCommand of task.verificationCommands) {
       if (cancelRequested) throw new CancelledError();
@@ -340,7 +366,9 @@ export async function scheduleRun(
         signal: controller.signal,
       });
       if (result.exitCode !== 0) {
-        throw new Error(`verification failed: ${verificationCommand.executable} ${verificationCommand.args.join(" ")}`);
+        throw new Error(
+          `verification failed: ${verificationCommand.executable} ${verificationCommand.args.join(" ")}`,
+        );
       }
     }
     const commitSha = await dependencies.commitTaskWorktree(
@@ -356,7 +384,12 @@ export async function scheduleRun(
     if (!task || ["completed", "failed", "cancelled", "interrupted"].includes(task.status)) return;
     await markTask(taskId, (state) => ({
       ...state,
-      status: error instanceof CancelledError ? "cancelled" : "failed",
+      status:
+        error instanceof CancelledError
+          ? interruptRequested
+            ? "interrupted"
+            : "cancelled"
+          : "failed",
       error: errorMessage(error),
       finishedAt: dependencies.now(),
     }));
@@ -365,8 +398,9 @@ export async function scheduleRun(
   const finishCancelled = async (): Promise<OrchestratorRun> => {
     const current = await dependencies.store.get(request.runId);
     if (!current) throw new Error("run disappeared during cancellation");
+    const terminalStatus = interruptRequested ? "interrupted" : "cancelled";
     let cancelling = current;
-    if (["running", "integrating", "verifying"].includes(current.status)) {
+    if (!interruptRequested && ["running", "integrating", "verifying"].includes(current.status)) {
       cancelling = await update((run) => ({
         ...run,
         status: "cancelling",
@@ -374,14 +408,20 @@ export async function scheduleRun(
       }));
     }
     if (cancelling.status === "ready") {
-      return update((run) => ({ ...run, status: "cancelled", updatedAt: Math.max(dependencies.now(), run.updatedAt + 1) }));
+      return update((run) => ({
+        ...run,
+        status: terminalStatus,
+        updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+      }));
     }
     return update((run) => ({
       ...run,
-      status: "cancelled",
-      tasks: run.tasks.map((task) => ["completed", "failed", "cancelled", "interrupted"].includes(task.status)
-        ? task
-        : { ...task, status: "cancelled", finishedAt: dependencies.now() }),
+      status: terminalStatus,
+      tasks: run.tasks.map((task) =>
+        ["completed", "failed", "cancelled", "interrupted"].includes(task.status)
+          ? task
+          : { ...task, status: terminalStatus, finishedAt: dependencies.now() },
+      ),
       updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
     }));
   };
@@ -389,7 +429,11 @@ export async function scheduleRun(
   const execute = async (): Promise<OrchestratorRun> => {
     try {
       if (cancelRequested) return finishCancelled();
-      await update((run) => ({ ...run, status: "running", updatedAt: Math.max(dependencies.now(), run.updatedAt + 1) }));
+      await update((run) => ({
+        ...run,
+        status: "running",
+        updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+      }));
       const integration = await dependencies.createIntegrationWorktree({
         repository,
         runId: request.runId,
@@ -407,12 +451,15 @@ export async function scheduleRun(
       while (pending.size > 0) {
         if (cancelRequested) throw new CancelledError();
         const usedAgents = new Set<NativeAgentId>();
-        const wave = initial.tasks.filter((task) =>
-          pending.has(task.id) &&
-          task.dependsOn.every((dependency) => committed.has(dependency)) &&
-          !usedAgents.has(task.assignedAgent) &&
-          (usedAgents.add(task.assignedAgent), true),
-        ).slice(0, maxConcurrency);
+        const wave = initial.tasks
+          .filter(
+            (task) =>
+              pending.has(task.id) &&
+              task.dependsOn.every((dependency) => committed.has(dependency)) &&
+              !usedAgents.has(task.assignedAgent) &&
+              (usedAgents.add(task.assignedAgent), true),
+          )
+          .slice(0, maxConcurrency);
         if (wave.length === 0) throw new Error("no runnable task remains in the dependency graph");
         const results = await Promise.allSettled(wave.map((task) => executeTask(task.id)));
         let failure: unknown = null;
@@ -437,7 +484,12 @@ export async function scheduleRun(
                 return { ...task, status: "blocked" };
               }
               if (task.status === "integrating") {
-                return { ...task, status: "failed", error: "run failed before integration", finishedAt: dependencies.now() };
+                return {
+                  ...task,
+                  status: "failed",
+                  error: "run failed before integration",
+                  finishedAt: dependencies.now(),
+                };
               }
               return task;
             }),
@@ -448,39 +500,58 @@ export async function scheduleRun(
         }
       }
       await dependencies.assertOriginalHeadUnchanged(repository);
-      await update((run) => ({ ...run, status: "integrating", updatedAt: Math.max(dependencies.now(), run.updatedAt + 1) }));
+      await update((run) => ({
+        ...run,
+        status: "integrating",
+        updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+      }));
       const ordered = topologicalTaskIds(initial.draft.plan);
       for (const taskId of ordered) {
         if (cancelRequested) throw new CancelledError();
         const current = await dependencies.store.get(request.runId);
         const state = current?.tasks.find((task) => task.id === taskId);
-        if (!state?.commitSha || !current?.integrationWorktree) throw new Error(`task ${taskId} has no commit to integrate`);
+        if (!state?.commitSha || !current?.integrationWorktree)
+          throw new Error(`task ${taskId} has no commit to integrate`);
         try {
           await dependencies.cherryPickTask(current.integrationWorktree.path, state.commitSha);
         } catch (error) {
-          const conflicts = await (dependencies.conflictedFiles ?? defaultConflictedFiles)(current.integrationWorktree.path);
+          const conflicts = await (dependencies.conflictedFiles ?? defaultConflictedFiles)(
+            current.integrationWorktree.path,
+          );
           await dependencies.abortCherryPick(current.integrationWorktree.path);
           if (conflicts.length === 0) throw error;
           if (cancelRequested) throw new CancelledError();
           const conflictController = new AbortController();
           taskControllers.set(`conflict:${taskId}`, conflictController);
-          await resolveIntegrationConflict({
-            run: current,
-            taskId,
-            commitSha: state.commitSha,
-            integrationPath: current.integrationWorktree.path,
-            conflictFiles: conflicts,
-            signal: conflictController.signal,
-          }, dependencies);
+          await resolveIntegrationConflict(
+            {
+              run: current,
+              taskId,
+              commitSha: state.commitSha,
+              integrationPath: current.integrationWorktree.path,
+              conflictFiles: conflicts,
+              signal: conflictController.signal,
+            },
+            dependencies,
+          );
           taskControllers.delete(`conflict:${taskId}`);
         }
-        await markTask(taskId, (task) => ({ ...task, status: "completed", finishedAt: dependencies.now() }));
+        await markTask(taskId, (task) => ({
+          ...task,
+          status: "completed",
+          finishedAt: dependencies.now(),
+        }));
         await cleanupTask(taskId);
       }
       await dependencies.assertOriginalHeadUnchanged(repository);
-      await update((run) => ({ ...run, status: "verifying", updatedAt: Math.max(dependencies.now(), run.updatedAt + 1) }));
+      await update((run) => ({
+        ...run,
+        status: "verifying",
+        updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+      }));
       const verifying = await dependencies.store.get(request.runId);
-      if (!verifying?.integrationWorktree) throw new Error("integration worktree disappeared before final verification");
+      if (!verifying?.integrationWorktree)
+        throw new Error("integration worktree disappeared before final verification");
       for (const task of verifying.tasks) {
         for (const verificationCommand of task.verificationCommands) {
           const result = await dependencies.runVerification({
@@ -521,21 +592,28 @@ export async function scheduleRun(
   };
 
   const completion = execute();
+  const stop = async (interrupted: boolean): Promise<void> => {
+    if (terminal || cancelRequested) return;
+    cancelRequested = true;
+    interruptRequested = interrupted;
+    for (const controller of taskControllers.values()) controller.abort();
+    await Promise.allSettled([...runningProcesses.values()].map((process) => process.cancel()));
+    const current = await dependencies.store.get(request.runId);
+    if (
+      !interrupted &&
+      current &&
+      ["running", "integrating", "verifying"].includes(current.status)
+    ) {
+      await update((run) => ({
+        ...run,
+        status: "cancelling",
+        updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+      })).catch(() => undefined);
+    }
+  };
   return {
     completion,
-    async cancel(): Promise<void> {
-      if (terminal || cancelRequested) return;
-      cancelRequested = true;
-      for (const controller of taskControllers.values()) controller.abort();
-      await Promise.allSettled([...runningProcesses.values()].map((process) => process.cancel()));
-      const current = await dependencies.store.get(request.runId);
-      if (current && ["running", "integrating", "verifying"].includes(current.status)) {
-        await update((run) => ({
-          ...run,
-          status: "cancelling",
-          updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
-        })).catch(() => undefined);
-      }
-    },
+    cancel: () => stop(false),
+    interrupt: () => stop(true),
   };
 }

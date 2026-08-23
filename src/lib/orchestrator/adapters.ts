@@ -3,11 +3,7 @@ import { lstat, mkdir, realpath, rm, stat, symlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { ensurePrivateDirectory } from "./paths.server.ts";
 import { validateBinaryPath } from "./runtime.server.ts";
-import type {
-  AssignedTask,
-  NativeAgentId,
-  OrchestratorEvent,
-} from "./types.ts";
+import type { AssignedTask, NativeAgentId, OrchestratorEvent } from "./types.ts";
 
 const INSPECT_TIMEOUT_MS = 3_000;
 const INSPECT_OUTPUT_LIMIT = 1024 * 1024;
@@ -50,7 +46,8 @@ async function linkAuthentication(source: string, destination: string): Promise<
     throw error;
   }
   const metadata = await stat(canonical);
-  if (!metadata.isFile()) throw new Error(`native authentication path is not a regular file: ${source}`);
+  if (!metadata.isFile())
+    throw new Error(`native authentication path is not a regular file: ${source}`);
   const effectiveUid = process.geteuid?.();
   if (effectiveUid !== undefined && metadata.uid !== effectiveUid) {
     throw new Error(`native authentication file is not owned by the current user: ${source}`);
@@ -119,10 +116,7 @@ export async function prepareAgentSessionEnvironment(input: {
   if (input.agent === "codex") env.CODEX_HOME = configHome;
   if (input.agent === "grok") env.GROK_HOME = configHome;
 
-  const secretValues = new Set<string>();
-  for (const value of Object.values(env)) {
-    if (value) secretValues.add(value);
-  }
+  const secretValues = new Set<string>([sessionHome, temporaryDirectory, configHome]);
   secretValues.add(sourceHome);
   for (const path of Object.values(sourceConfigHomes)) secretValues.add(path);
   if (linkedAuthentication) secretValues.add(linkedAuthentication);
@@ -264,8 +258,15 @@ export async function verifyGrokIsolation(
     throw new Error("Grok inspect returned an incomplete isolation report");
   }
   const layers = configSourceRecord.layers;
-  if (hasEntries(report.hooks) || hasEntries(report.plugins) || hasEntries(report.mcpServers) || hasEntries(layers)) {
-    throw new Error("Grok isolation check found hooks, plugins, MCP servers or configuration layers");
+  if (
+    hasEntries(report.hooks) ||
+    hasEntries(report.plugins) ||
+    hasEntries(report.mcpServers) ||
+    hasEntries(layers)
+  ) {
+    throw new Error(
+      "Grok isolation check found hooks, plugins, MCP servers or configuration layers",
+    );
   }
 }
 
@@ -286,40 +287,72 @@ export function buildPlanCommand(input: {
   let args: string[];
   if (input.agent === "claude") {
     args = [
-      "-p", input.prompt,
-      "--output-format", "stream-json",
+      "-p",
+      input.prompt,
+      "--output-format",
+      "stream-json",
       "--verbose",
       "--strict-mcp-config",
-      "--mcp-config", "{}",
-      "--setting-sources", "",
-      "--settings", "{}",
-      "--permission-mode", "plan",
-      "--json-schema", input.inlineSchema,
-      "--allowedTools", "Read,Glob,Grep",
+      "--mcp-config",
+      "{}",
+      "--setting-sources",
+      "",
+      "--settings",
+      "{}",
+      "--permission-mode",
+      "plan",
+      "--json-schema",
+      input.inlineSchema,
+      "--allowedTools",
+      "Read,Glob,Grep",
     ];
   } else if (input.agent === "codex") {
     if (!input.schemaPath) throw new Error("Codex planning requires an absolute schemaPath");
     requiredAbsolutePath(input.schemaPath, "schemaPath");
     args = [
-      "exec", "--json",
-      "--ignore-user-config", "--ignore-rules", "--strict-config",
-      "--disable", "hooks", "--disable", "plugins", "--disable", "apps",
-      "--disable", "browser_use", "--disable", "multi_agent",
-      "-c", 'approval_policy="never"',
-      "--cd", input.repositoryPath,
-      "--sandbox", "read-only",
-      "--output-schema", input.schemaPath,
+      "exec",
+      "--json",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--strict-config",
+      "--disable",
+      "hooks",
+      "--disable",
+      "plugins",
+      "--disable",
+      "apps",
+      "--disable",
+      "browser_use",
+      "--disable",
+      "multi_agent",
+      "-c",
+      'approval_policy="never"',
+      "--cd",
+      input.repositoryPath,
+      "--sandbox",
+      "read-only",
+      "--output-schema",
+      input.schemaPath,
       input.prompt,
     ];
   } else {
     args = [
-      "-p", input.prompt,
-      "--output-format", "json",
-      "--no-auto-update", "--disable-web-search", "--no-subagents", "--verbatim",
-      "--sandbox", "read-only",
-      "--permission-mode", "plan",
-      "--json-schema", input.inlineSchema,
-      "--tools", "Read,Glob,Grep",
+      "-p",
+      input.prompt,
+      "--output-format",
+      "json",
+      "--no-auto-update",
+      "--disable-web-search",
+      "--no-subagents",
+      "--verbatim",
+      "--sandbox",
+      "read-only",
+      "--permission-mode",
+      "plan",
+      "--json-schema",
+      input.inlineSchema,
+      "--tools",
+      "Read,Glob,Grep",
     ];
   }
   return { command: input.binaryPath, args, cwd: input.repositoryPath, env: {} };
@@ -349,35 +382,64 @@ export function buildExecuteCommand(input: {
   let args: string[];
   if (input.agent === "claude") {
     args = [
-      "-p", prompt,
-      "--output-format", "stream-json",
+      "-p",
+      prompt,
+      "--output-format",
+      "stream-json",
       "--verbose",
       "--strict-mcp-config",
-      "--mcp-config", "{}",
-      "--setting-sources", "",
-      "--settings", "{}",
-      "--permission-mode", "dontAsk",
-      "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash",
+      "--mcp-config",
+      "{}",
+      "--setting-sources",
+      "",
+      "--settings",
+      "{}",
+      "--permission-mode",
+      "dontAsk",
+      "--allowedTools",
+      "Read,Edit,Write,Glob,Grep,Bash",
     ];
   } else if (input.agent === "codex") {
     args = [
-      "exec", "--json",
-      "--ignore-user-config", "--ignore-rules", "--strict-config",
-      "--disable", "hooks", "--disable", "plugins", "--disable", "apps",
-      "--disable", "browser_use", "--disable", "multi_agent",
-      "-c", 'approval_policy="never"',
-      "--cd", input.worktreePath,
-      "--sandbox", "workspace-write",
+      "exec",
+      "--json",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--strict-config",
+      "--disable",
+      "hooks",
+      "--disable",
+      "plugins",
+      "--disable",
+      "apps",
+      "--disable",
+      "browser_use",
+      "--disable",
+      "multi_agent",
+      "-c",
+      'approval_policy="never"',
+      "--cd",
+      input.worktreePath,
+      "--sandbox",
+      "workspace-write",
       prompt,
     ];
   } else {
     args = [
-      "-p", prompt,
-      "--output-format", "streaming-json",
-      "--no-auto-update", "--disable-web-search", "--no-subagents", "--verbatim",
-      "--sandbox", "workspace",
-      "--permission-mode", "dontAsk",
-      "--tools", "Read,Edit,Write,Glob,Grep,Bash",
+      "-p",
+      prompt,
+      "--output-format",
+      "streaming-json",
+      "--no-auto-update",
+      "--disable-web-search",
+      "--no-subagents",
+      "--verbatim",
+      "--sandbox",
+      "workspace",
+      "--permission-mode",
+      "dontAsk",
+      "--tools",
+      "Read,Edit,Write,Glob,Grep,Bash",
     ];
   }
   return { command: input.binaryPath, args, cwd: input.worktreePath, env: {} };
@@ -385,7 +447,7 @@ export function buildExecuteCommand(input: {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -411,8 +473,13 @@ function usageEvent(value: unknown): OrchestratorEvent | null {
   const usage = asRecord(value);
   if (!usage) return null;
   const hasUsage = [
-    "input_tokens", "inputTokens", "output_tokens", "outputTokens",
-    "cached_input_tokens", "cachedInputTokens", "cache_read_input_tokens",
+    "input_tokens",
+    "inputTokens",
+    "output_tokens",
+    "outputTokens",
+    "cached_input_tokens",
+    "cachedInputTokens",
+    "cache_read_input_tokens",
   ].some((key) => key in usage);
   if (!hasUsage) return null;
   return {
@@ -497,8 +564,7 @@ function normalizeCodex(value: Record<string, unknown>): OrchestratorEvent[] {
         type: "tool_completed",
         tool: textValue(item.type) ?? "unknown_tool",
         success:
-          item.status !== "failed" &&
-          (typeof item.exit_code !== "number" || item.exit_code === 0),
+          item.status !== "failed" && (typeof item.exit_code !== "number" || item.exit_code === 0),
       });
     }
   } else if (value.type === "turn.completed") {
@@ -509,7 +575,8 @@ function normalizeCodex(value: Record<string, unknown>): OrchestratorEvent[] {
     events.push({
       type: "process_failed",
       category: textValue(error?.type) ?? String(value.type),
-      message: textValue(error?.message) ?? textValue(value.message) ?? "native agent reported an error",
+      message:
+        textValue(error?.message) ?? textValue(value.message) ?? "native agent reported an error",
     });
   }
   return events;
@@ -566,11 +633,12 @@ export function normalizeAgentLine(
   }
   const value = asRecord(parsed);
   if (!value) return [{ type: "diagnostic", stream, message: line }];
-  const events = agent === "claude"
-    ? normalizeClaude(value)
-    : agent === "codex"
-      ? normalizeCodex(value)
-      : normalizeGrok(value);
+  const events =
+    agent === "claude"
+      ? normalizeClaude(value)
+      : agent === "codex"
+        ? normalizeCodex(value)
+        : normalizeGrok(value);
   return events.length > 0 ? events : [{ type: "diagnostic", stream, message: line }];
 }
 
@@ -585,7 +653,12 @@ function parseJsonObject(text: string): unknown | null {
 
 function looksLikePlan(value: unknown): boolean {
   const record = asRecord(value);
-  return Boolean(record && typeof record.title === "string" && typeof record.summary === "string" && Array.isArray(record.tasks));
+  return Boolean(
+    record &&
+    typeof record.title === "string" &&
+    typeof record.summary === "string" &&
+    Array.isArray(record.tasks),
+  );
 }
 
 export function extractStructuredPlan(agent: NativeAgentId, rawLines: readonly string[]): unknown {
@@ -627,10 +700,7 @@ function escapedSecretVariants(secret: string): string[] {
 
 export function redactAgentOutput(line: string, secrets: readonly string[]): string {
   let safe = line;
-  safe = safe.replace(
-    /(\bauthorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;|"']+/gi,
-    "$1[REDACTED]",
-  );
+  safe = safe.replace(/(\bauthorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;|"']+/gi, "$1[REDACTED]");
   safe = safe.replace(/(\bbearer\s+)[^\s,;|"']+/gi, "$1[REDACTED]");
   safe = safe.replace(
     /((?:["']?(?:api[_-]?key|oauth[_-]?(?:token|key)|access[_-]?token|refresh[_-]?token|token)["']?)\s*[:=]\s*["']?)[^\s,;|"']+/gi,
