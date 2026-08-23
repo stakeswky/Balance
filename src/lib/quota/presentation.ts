@@ -78,6 +78,39 @@ export function formatCredits(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString("en-US");
 }
 
+function nonNeg(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(value) || value < 0) return 0;
+  return value;
+}
+
+/**
+ * Display-only week token pair in raw units (cache counted 1:1).
+ * Quota percent / weighted share math stays in the meter engine.
+ */
+export function displayWeekTokens(input: {
+  weekTokens: number;
+  weekBudget: number;
+  weekWeightedTokens: number;
+  weekValue?: Pick<QuotaValue, "usedPct" | "l1Tokens"> | null;
+}): { used: number; total: number } {
+  const weekTokens = nonNeg(input.weekTokens);
+  const weekBudget = nonNeg(input.weekBudget);
+  const weighted = nonNeg(input.weekWeightedTokens);
+  const l1 = input.weekValue ? nonNeg(input.weekValue.l1Tokens) : 0;
+  const used = l1 > 0 ? l1 : weekTokens;
+  const usedPct = input.weekValue?.usedPct;
+  const hasOfficialPct =
+    usedPct != null && Number.isFinite(usedPct) && usedPct >= 1 && used > 0;
+
+  let total = weekBudget;
+  if (hasOfficialPct) {
+    total = used / (Math.min(usedPct, 100) / 100);
+  } else if (used > 0 && weighted > 0 && weekBudget > 0) {
+    total = weekBudget * (used / weighted);
+  }
+  return { used, total };
+}
+
 export function formatCreditRange(low: number | null, high: number | null): string {
   if (low == null || high == null || !Number.isFinite(low) || !Number.isFinite(high)) return "样本不足";
   return `${formatCredits(low)}–${formatCredits(high)}`;

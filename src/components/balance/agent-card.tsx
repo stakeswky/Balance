@@ -21,6 +21,7 @@ import { grokProductLabel, type OfficialProductShare } from "@/lib/quota/officia
 import { parallelTaskSummary } from "@/lib/quota/parallel-tasks";
 import {
   apiEquivalentSections,
+  displayWeekTokens,
   effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
@@ -120,6 +121,16 @@ export function AgentCard({
     (s, e) => s + weightedTokens(e),
     0,
   );
+  const weekWeighted = inWindow(events, now, WEEK_MS, meter.agent).reduce(
+    (s, e) => s + weightedTokens(e),
+    0,
+  );
+  const weekTokenDisplay = displayWeekTokens({
+    weekTokens: meter.weekTokens,
+    weekBudget: meter.weekBudget,
+    weekWeightedTokens: weekWeighted,
+    weekValue,
+  });
   const primaryKind = weeklyView ? "weekly" : "five_hour";
   const primarySource = primaryKind === "weekly" ? quotaSources.week : quotaSources.window;
   const freshMeter = officialOnlyMeter(meter, quotaSources);
@@ -340,9 +351,19 @@ export function AgentCard({
       <dl className={cn("mt-3 grid grid-cols-2 text-xs", minimalMode ? "gap-2" : "gap-3")}>
         {minimalMode ? (
           <>
-            <Stat compact label="本周已用 token" value={formatTokens(meter.weekTokens)} />
+            <Stat
+              compact
+              label="本周已用 token"
+              value={formatTokens(weekTokenDisplay.used)}
+              testId={`quota-${meter.agent}-week-tokens`}
+            />
             <Stat compact label="本周用量" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
-            <Stat compact label="本周预估总 token" value={formatTokens(meter.weekBudget)} />
+            <Stat
+              compact
+              label="本周预估总 token"
+              value={formatTokens(weekTokenDisplay.total)}
+              testId={`quota-${meter.agent}-week-token-total`}
+            />
             <Stat compact label="本周预估总用量" value={estimatedWeekUsage} hint={VALUE_HINT} />
           </>
         ) : (
@@ -356,7 +377,7 @@ export function AgentCard({
                   : formatTokens(weighted)
               }
             />
-            <Stat label="本周 token" value={formatTokens(meter.weekTokens)} />
+            <Stat label="本周 token" value={formatTokens(weekTokenDisplay.used)} />
             <Stat testId={`quota-${meter.agent}-weekly-l1`} label="本周 API 等价" value={l1.text} dim={l1.dim} hint={VALUE_HINT} />
             {meter.agent === "codex" ? (
               <Stat

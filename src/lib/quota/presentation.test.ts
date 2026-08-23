@@ -4,6 +4,7 @@ import { applyOfficial, routingAdvice } from "./engine.ts";
 import type { OfficialSlice } from "./official.ts";
 import {
   apiEquivalentSections,
+  displayWeekTokens,
   effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
@@ -240,6 +241,72 @@ test("Fable prefix does not reuse the generic weekly copy", () => {
     }),
     "Fable 5 周限额刷新 8月27日 04:59 · 4 天 0 小时",
   );
+});
+
+test("week token display extrapolates raw tokens including cache from official percent", () => {
+  const { used, total } = displayWeekTokens({
+    weekTokens: 1_774_000_000,
+    weekBudget: 13_000_000,
+    weekWeightedTokens: 200_000_000,
+    weekValue: { usedPct: 80, l1Tokens: 1_774_000_000 },
+  });
+  assert.equal(used, 1_774_000_000);
+  assert.equal(total, 1_774_000_000 / 0.8);
+  assert.ok(total > used);
+});
+
+test("week token display prefers official-window raw tokens over rolling weekTokens", () => {
+  const { used, total } = displayWeekTokens({
+    weekTokens: 1_774_000_000,
+    weekBudget: 13_000_000,
+    weekWeightedTokens: 200_000_000,
+    weekValue: { usedPct: 50, l1Tokens: 800_000_000 },
+  });
+  assert.equal(used, 800_000_000);
+  assert.equal(total, 1_600_000_000);
+});
+
+test("week token display inflates the plan cap by observed cache mix without official percent", () => {
+  const { used, total } = displayWeekTokens({
+    weekTokens: 1_000_000,
+    weekBudget: 12_000_000,
+    weekWeightedTokens: 190_000,
+  });
+  assert.equal(used, 1_000_000);
+  assert.equal(total, 12_000_000 * (1_000_000 / 190_000));
+  assert.ok(total > used);
+});
+
+test("week token display does not shrink total below used when percent exceeds 100", () => {
+  const { used, total } = displayWeekTokens({
+    weekTokens: 100,
+    weekBudget: 10,
+    weekWeightedTokens: 50,
+    weekValue: { usedPct: 140, l1Tokens: 100 },
+  });
+  assert.equal(used, 100);
+  assert.equal(total, 100);
+});
+
+test("week token display falls back to the plan budget without usage", () => {
+  const { used, total } = displayWeekTokens({
+    weekTokens: 0,
+    weekBudget: 12_000_000,
+    weekWeightedTokens: 0,
+  });
+  assert.equal(used, 0);
+  assert.equal(total, 12_000_000);
+});
+
+test("week token display ignores sub-percent official readings and inflates by cache mix", () => {
+  const { used, total } = displayWeekTokens({
+    weekTokens: 1_000_000,
+    weekBudget: 12_000_000,
+    weekWeightedTokens: 190_000,
+    weekValue: { usedPct: 0.4, l1Tokens: 1_000_000 },
+  });
+  assert.equal(used, 1_000_000);
+  assert.equal(total, 12_000_000 * (1_000_000 / 190_000));
 });
 
 test("quota pool labels are provider neutral and explicit", () => {
