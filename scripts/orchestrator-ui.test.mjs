@@ -36,6 +36,12 @@ test("orchestrator controller uses capability, strict confirmations, incremental
   assert.match(client, /TERMINAL_STATUSES/);
 });
 
+test("root boot consumes and removes the desktop capability before onboarding", async () => {
+  const root = await source("src/routes/__root.tsx");
+  assert.match(root, /getOrchestratorAuthorization/);
+  assert.match(root, /useEffect\(\(\) => \{\s*getOrchestratorAuthorization\(\)/);
+});
+
 test("workspace renders repository trust, capacity, full plan, execution and recovery details", async () => {
   const panel = await source("src/components/balance/orchestrator-panel.tsx");
   for (const testId of [

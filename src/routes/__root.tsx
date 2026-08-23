@@ -1,6 +1,8 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { AuthProvider } from "@/lib/auth/provider";
 import { ThemeSync } from "@/components/balance/theme-toggle";
+import { getOrchestratorAuthorization } from "@/lib/orchestrator/capability";
 import { THEME_BOOT } from "@/lib/theme";
 import "../styles.css";
 
@@ -12,6 +14,28 @@ const ogImage = host
 const xBanner = host
   ? `https://og.grok.me/v1/banner.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}&color=F2EFE8`
   : undefined;
+
+function RootDocument() {
+  useEffect(() => {
+    getOrchestratorAuthorization();
+  }, []);
+
+  return (
+    <html lang="zh-CN" className="antialiased" data-theme="light" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
+        <HeadContent />
+      </head>
+      <body>
+        <AuthProvider>
+          <ThemeSync />
+          <Outlet />
+        </AuthProvider>
+        <Scripts />
+      </body>
+    </html>
+  );
+}
 
 export const Route = createRootRoute({
   head: () => ({
@@ -44,19 +68,5 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
   }),
-  component: () => (
-    <html lang="zh-CN" className="antialiased" data-theme="light" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
-        <HeadContent />
-      </head>
-      <body>
-        <AuthProvider>
-          <ThemeSync />
-          <Outlet />
-        </AuthProvider>
-        <Scripts />
-      </body>
-    </html>
-  ),
+  component: RootDocument,
 });

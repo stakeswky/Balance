@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import http from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright";
 
 for (const key of [
@@ -20,6 +23,8 @@ process.env.NO_PROXY = "*";
 process.env.no_proxy = "*";
 
 const origin = "http://127.0.0.1:4780";
+const orchestratorToken = randomBytes(32).toString("hex");
+const orchestratorStateDir = mkdtempSync(join(tmpdir(), "balance-security-state-"));
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -84,7 +89,9 @@ function ensureChromiumInstalled() {
     stdio: "inherit",
   });
   if (install.status !== 0) {
-    throw new Error(`playwright install chromium failed with exit code ${install.status ?? "null"}`);
+    throw new Error(
+      `playwright install chromium failed with exit code ${install.status ?? "null"}`,
+    );
   }
   if (!existsSync(executablePath)) {
     throw new Error(`playwright chromium executable is still missing at ${executablePath}`);
@@ -122,6 +129,8 @@ const server = spawn(process.execPath, [".output/server/index.mjs"], {
     PORT: "4780",
     NITRO_PORT: "4780",
     BALANCE_DESKTOP: "1",
+    BALANCE_STATE_DIR: orchestratorStateDir,
+    BALANCE_ORCHESTRATOR_TOKEN: orchestratorToken,
     VITE_AUTH_ENABLED: "false",
     NODE_ENV: "production",
   },
@@ -143,14 +152,25 @@ try {
     baseURL: origin,
   });
   const page = await context.newPage();
+  const requestedUrls = [];
+  page.on("request", (request) => requestedUrls.push(request.url()));
 
   const rpcPromise = page.waitForRequest(
     (request) => request.url().includes("/_serverFn/") && request.method() === "GET",
     { timeout: 15_000 },
   );
 
-  await page.goto(origin, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/#balance-token=${orchestratorToken}`, {
+    waitUntil: "domcontentloaded",
+  });
   const rpcRequest = await rpcPromise;
+  await page.waitForFunction(() => window.location.hash === "");
+  assert.equal(await page.evaluate(() => window.location.hash), "");
+  assert.equal(
+    requestedUrls.some((url) => url.includes(orchestratorToken)),
+    false,
+    "WebView fragment capability must never be sent in an HTTP request",
+  );
   const requestUrl = rpcRequest.url();
   const requestHeaders = await rpcRequest.allHeaders();
 

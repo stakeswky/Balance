@@ -70,12 +70,28 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
     assert.match(rust, new RegExp(`"${key}"`));
   }
   assert.match(rust, /BALANCE_NATIVE_VERSION/);
+  assert.match(rust, /BALANCE_STATE_DIR/);
+  assert.match(rust, /BALANCE_ORCHESTRATOR_TOKEN/);
+  assert.match(rust, /BALANCE_E2E_STATE_DIR/);
+  assert.match(rust, /\.join\("Balance"\)\.join\("orchestrator"\)/);
+  assert.match(rust, /symlink_metadata/);
+  assert.match(rust, /MetadataExt/);
+  assert.match(rust, /from_mode\(0o700\)/);
+  assert.match(rust, /from_mode\(0o600\)/);
+  assert.match(rust, /\/dev\/urandom/);
+  assert.match(rust, /#balance-token=/);
+  assert.match(rust, /BALANCE_SHUTDOWN\\n/);
+  assert.match(rust, /Duration::from_secs\(17\)/);
   assert.match(rust, /hot-update\/current/);
   assert.match(rust, /failed-/);
   assert.match(rust, /kill_sidecar_for_retry|take_child_for_retry/);
   assert.match(rust, /force_bundled/);
   assert.match(watchdog, /process\.stdin/);
   assert.match(watchdog, /process\.ppid/);
+  assert.match(watchdog, /BALANCE_SHUTDOWN/);
+  assert.match(watchdog, /Symbol\.for\("balance\.orchestrator\.shutdown"\)/);
+  assert.match(watchdog, /15_000/);
+  assert.match(watchdog, /SIGTERM/);
   assert.match(verifier, /Mach-O 64-bit executable arm64/);
   assert.match(nativeSmoke, /title == "Balance"/);
   assert.match(nativeSmoke, /waitForInitialAppState/);
@@ -94,12 +110,18 @@ test("statusline collector is bundled, installed 0700, and injected into the sid
     "claude-statusline.mjs",
   );
   assert.match(rust, /fn install_statusline_collector/);
-  assert.match(rust, /\.join\("\.local"\)\s*\.join\("share"\)\s*\.join\("balance"\)\s*\.join\("bin"\)/);
+  assert.match(
+    rust,
+    /\.join\("\.local"\)\s*\.join\("share"\)\s*\.join\("balance"\)\s*\.join\("bin"\)/,
+  );
   assert.match(rust, /set_permissions\(&directory, /);
   assert.match(rust, /set_permissions\(&target, /);
   assert.match(rust, /from_mode\(0o700\)/);
   assert.match(rust, /fn statusline_snapshot_path/);
-  assert.match(rust, /home\.join\("Library"\)\.join\("Application Support"\)\.join\("Balance"\)/);
+  assert.match(
+    rust,
+    /home\s*\.join\("Library"\)\s*\.join\("Application Support"\)\s*\.join\("Balance"\)/,
+  );
   assert.match(rust, /"BALANCE_CLAUDE_STATUSLINE_COLLECTOR"/);
   assert.match(rust, /"BALANCE_CLAUDE_STATUSLINE_PATH"/);
 });

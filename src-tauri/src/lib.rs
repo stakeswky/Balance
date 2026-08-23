@@ -1,5 +1,6 @@
 use std::{
     ffi::{OsStr, OsString},
+    fs::OpenOptions,
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -40,6 +41,172 @@ const TRAY_SHOW_MAIN_PATH: &str = "/__desktop/show-main";
 const TRAY_WIDTH: f64 = 360.0;
 const TRAY_HEIGHT: f64 = 468.0;
 const TRAY_CLICK_DEBOUNCE: Duration = Duration::from_millis(280);
+const SIDECAR_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(17);
+
+#[derive(Debug)]
+struct OrchestratorStateDirectory {
+    path: PathBuf,
+    e2e_override: bool,
+}
+
+#[derive(Debug)]
+struct StartedSidecar {
+    used_overlay: bool,
+    capability: String,
+}
+
+fn default_orchestrator_state_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("Balance").join("orchestrator")
+}
+
+#[cfg(unix)]
+fn ensure_owned_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "private state path is not a real directory: {}",
+            path.display()
+        ));
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(format!(
+            "private state path has the wrong owner: {}",
+            path.display()
+        ));
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to secure {}: {error}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_owned_directory(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "private state path is not a real directory: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_private_directory(path: &Path) -> Result<PathBuf, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(path)
+                .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+        }
+        Err(error) => {
+            return Err(format!("failed to inspect {}: {error}", path.display()));
+        }
+    }
+    ensure_owned_directory(path)?;
+    path.canonicalize()
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
+}
+
+#[cfg(any(debug_assertions, test))]
+fn ensure_debug_e2e_state_dir(path: &Path, temp_root: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        return Err("BALANCE_E2E_STATE_DIR must be absolute".into());
+    }
+    let canonical_temp = temp_root
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize system temp: {error}"))?;
+    let (base, relative) = if let Ok(relative) = path.strip_prefix(temp_root) {
+        (temp_root.to_path_buf(), relative)
+    } else if let Ok(relative) = path.strip_prefix(&canonical_temp) {
+        (canonical_temp.clone(), relative)
+    } else {
+        return Err("BALANCE_E2E_STATE_DIR must be below the system temp directory".into());
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("BALANCE_E2E_STATE_DIR must be a strict temp descendant".into());
+    }
+
+    let mut current = base;
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        ensure_private_directory(&current)?;
+    }
+    let canonical = current
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize E2E state directory: {error}"))?;
+    if canonical == canonical_temp || !canonical.starts_with(&canonical_temp) {
+        return Err("BALANCE_E2E_STATE_DIR escaped the system temp directory".into());
+    }
+    Ok(canonical)
+}
+
+fn orchestrator_state_dir(app: &AppHandle) -> Result<OrchestratorStateDirectory, String> {
+    #[cfg(debug_assertions)]
+    if let Some(override_path) = std::env::var_os("BALANCE_E2E_STATE_DIR") {
+        let path =
+            ensure_debug_e2e_state_dir(&PathBuf::from(override_path), &std::env::temp_dir())?;
+        return Ok(OrchestratorStateDirectory {
+            path,
+            e2e_override: true,
+        });
+    }
+
+    let data_dir = app.path().data_dir().map_err(|error| error.to_string())?;
+    let requested = default_orchestrator_state_path(&data_dir);
+    let balance_dir = ensure_private_directory(
+        requested
+            .parent()
+            .ok_or_else(|| "orchestrator state directory has no parent".to_string())?,
+    )?;
+    let path = ensure_private_directory(&balance_dir.join("orchestrator"))?;
+    Ok(OrchestratorStateDirectory {
+        path,
+        e2e_override: false,
+    })
+}
+
+fn random_capability() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|error| format!("failed to generate orchestrator capability: {error}"))?;
+    let mut capability = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut capability, "{byte:02x}")
+            .map_err(|error| format!("failed to encode orchestrator capability: {error}"))?;
+    }
+    Ok(capability)
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("failed to secure {}: {error}", path.display()))?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
 
 fn filtered_sidecar_environment(
     environment: impl IntoIterator<Item = (OsString, OsString)>,
@@ -126,8 +293,56 @@ fn claim_bootstrap(state: &BootstrapState) -> bool {
     !state.0.swap(true, Ordering::SeqCst)
 }
 
-fn stop_sidecar(state: &SidecarState) {
+fn force_stop_sidecar(state: &SidecarState) {
     if let Some(child) = stop_lifecycle(&state.0) {
+        let _ = child.kill();
+    }
+}
+
+fn graceful_stop_sidecar(state: &SidecarState) {
+    let should_wait = {
+        let mut lifecycle = state.0.lock().expect("lifecycle mutex poisoned");
+        if lifecycle.stopping {
+            false
+        } else {
+            lifecycle.stopping = true;
+            if let Some(child) = lifecycle.child.as_mut() {
+                if let Err(error) = child.write(b"BALANCE_SHUTDOWN\n") {
+                    eprintln!("failed to signal orchestrator shutdown: {error}");
+                }
+            }
+            lifecycle.child.is_some()
+        }
+    };
+    if !should_wait {
+        return;
+    }
+
+    let deadline = Instant::now() + SIDECAR_GRACEFUL_STOP_TIMEOUT;
+    loop {
+        if state
+            .0
+            .lock()
+            .expect("lifecycle mutex poisoned")
+            .child
+            .is_none()
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let child = state
+        .0
+        .lock()
+        .expect("lifecycle mutex poisoned")
+        .child
+        .take();
+    if let Some(child) = child {
+        eprintln!("orchestrator did not stop within 17 seconds; killing sidecar");
         let _ = child.kill();
     }
 }
@@ -143,19 +358,11 @@ fn clear_sidecar(state: &SidecarState) {
 }
 
 fn remember_tray_hide(state: &TrayPopupState) {
-    state
-        .0
-        .lock()
-        .expect("tray popup mutex poisoned")
-        .last_hide = Some(Instant::now());
+    state.0.lock().expect("tray popup mutex poisoned").last_hide = Some(Instant::now());
 }
 
 fn remember_tray_show(state: &TrayPopupState) {
-    state
-        .0
-        .lock()
-        .expect("tray popup mutex poisoned")
-        .last_show = Some(Instant::now());
+    state.0.lock().expect("tray popup mutex poisoned").last_show = Some(Instant::now());
 }
 
 fn should_ignore_tray_show(last_hide: Option<Instant>, now: Instant) -> bool {
@@ -335,10 +542,16 @@ fn toggle_tray_dashboard(app: &AppHandle, icon_x: f64, icon_y: f64, icon_w: f64,
 }
 
 fn quit_app(app: &AppHandle) {
-    if let Some(state) = app.try_state::<SidecarState>() {
-        stop_sidecar(&state);
-    }
-    app.exit(0);
+    let Some(state) = app.try_state::<SidecarState>() else {
+        app.exit(0);
+        return;
+    };
+    let state = state.inner().clone();
+    let handle = app.clone();
+    thread::spawn(move || {
+        graceful_stop_sidecar(&state);
+        handle.exit(0);
+    });
 }
 
 fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
@@ -656,11 +869,17 @@ fn resolve_server_layout(
     let bundled = resource_dir.join("balance-server");
     let watchdog = resource_dir.join("sidecar-watchdog.cjs");
     if !watchdog.is_file() {
-        return Err(format!("desktop sidecar watchdog is missing: {}", watchdog.display()));
+        return Err(format!(
+            "desktop sidecar watchdog is missing: {}",
+            watchdog.display()
+        ));
     }
     let collector = resource_dir.join("claude-statusline.mjs");
     if !collector.is_file() {
-        return Err(format!("Claude statusline collector is missing: {}", collector.display()));
+        return Err(format!(
+            "Claude statusline collector is missing: {}",
+            collector.display()
+        ));
     }
     let (root, used_overlay) = if force_bundled {
         (bundled, false)
@@ -707,7 +926,10 @@ fn install_statusline_collector(app: &AppHandle, source: &Path) -> Result<PathBu
 fn statusline_snapshot_path(app: &AppHandle) -> Result<PathBuf, String> {
     let home = app.path().home_dir().map_err(|error| error.to_string())?;
     let root = match std::env::consts::OS {
-        "macos" => home.join("Library").join("Application Support").join("Balance"),
+        "macos" => home
+            .join("Library")
+            .join("Application Support")
+            .join("Balance"),
         "windows" => std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("AppData").join("Local"))
@@ -754,8 +976,16 @@ fn start_sidecar(
     app: &AppHandle,
     state: &SidecarState,
     force_bundled: bool,
-) -> Result<Option<bool>, String> {
+) -> Result<Option<StartedSidecar>, String> {
     ensure_port_available()?;
+    let state_directory = orchestrator_state_dir(app)?;
+    let capability = random_capability()?;
+    if state_directory.e2e_override {
+        write_private_file(
+            &state_directory.path.join("e2e-token"),
+            capability.as_bytes(),
+        )?;
+    }
     let (server_root, server_entry, watchdog, used_overlay, collector) =
         resolve_server_layout(app, force_bundled)?;
     let installed_collector = install_statusline_collector(app, &collector)?;
@@ -778,6 +1008,11 @@ fn start_sidecar(
         .env("BALANCE_DESKTOP", "1")
         .env("BALANCE_PARENT_PID", std::process::id().to_string())
         .env("BALANCE_NATIVE_VERSION", NATIVE_VERSION)
+        .env(
+            "BALANCE_STATE_DIR",
+            state_directory.path.to_string_lossy().to_string(),
+        )
+        .env("BALANCE_ORCHESTRATOR_TOKEN", capability.clone())
         .env("VITE_AUTH_ENABLED", "false")
         .env("NODE_ENV", "production")
         .env(
@@ -797,7 +1032,10 @@ fn start_sidecar(
         return Ok(None);
     }
     drain_sidecar_events(receiver, state.clone());
-    Ok(Some(used_overlay))
+    Ok(Some(StartedSidecar {
+        used_overlay,
+        capability,
+    }))
 }
 
 fn open_window(app: &AppHandle, label: &'static str, url: WebviewUrl) {
@@ -820,15 +1058,15 @@ fn open_window(app: &AppHandle, label: &'static str, url: WebviewUrl) {
     }
 }
 
-fn open_main_window(app: &AppHandle) {
-    let url = sidecar_url()
+fn open_main_window(app: &AppHandle, capability: &str) {
+    let url = format!("{}#balance-token={capability}", sidecar_url())
         .parse()
         .expect("the fixed Balance loopback URL must parse");
     open_window(app, "main", WebviewUrl::External(url));
 }
 
 fn open_startup_error(app: &AppHandle, state: &SidecarState) {
-    stop_sidecar(state);
+    force_stop_sidecar(state);
     open_window(
         app,
         "startup-error",
@@ -837,8 +1075,8 @@ fn open_startup_error(app: &AppHandle, state: &SidecarState) {
 }
 
 fn bootstrap(app: AppHandle, state: SidecarState) {
-    let used_overlay = match start_sidecar(&app, &state, false) {
-        Ok(Some(used_overlay)) => used_overlay,
+    let started = match start_sidecar(&app, &state, false) {
+        Ok(Some(started)) => started,
         Ok(None) => return,
         Err(error) => {
             if lifecycle_is_stopping(&state.0) {
@@ -854,13 +1092,13 @@ fn bootstrap(app: AppHandle, state: SidecarState) {
             if lifecycle_is_stopping(&state.0) {
                 return;
             }
-            open_main_window(&app);
+            open_main_window(&app, &started.capability);
         }
         Err(error) => {
             if lifecycle_is_stopping(&state.0) {
                 return;
             }
-            if used_overlay {
+            if started.used_overlay {
                 kill_sidecar_for_retry(&state);
                 let _ = wait_for_port_free(Duration::from_secs(2));
                 if let Some(overlay) = overlay_from_home() {
@@ -874,12 +1112,12 @@ fn bootstrap(app: AppHandle, state: SidecarState) {
                 }
                 match start_sidecar(&app, &state, true) {
                     Ok(None) => return,
-                    Ok(Some(_)) => match wait_for_health(Duration::from_secs(15)) {
+                    Ok(Some(retry)) => match wait_for_health(Duration::from_secs(15)) {
                         Ok(()) => {
                             if lifecycle_is_stopping(&state.0) {
                                 return;
                             }
-                            open_main_window(&app);
+                            open_main_window(&app, &retry.capability);
                             return;
                         }
                         Err(retry_error) => {
@@ -922,7 +1160,7 @@ pub fn run() {
             move |window, event| match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     if window.label() == "startup-error" {
-                        stop_sidecar(&state);
+                        force_stop_sidecar(&state);
                         window.app_handle().exit(0);
                         return;
                     }
@@ -962,7 +1200,7 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 RunEvent::Reopen { .. } => show_main_window(app),
-                RunEvent::ExitRequested { .. } | RunEvent::Exit => stop_sidecar(&state),
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => graceful_stop_sidecar(&state),
                 _ => {}
             }
         });
@@ -975,6 +1213,92 @@ mod tests {
     #[test]
     fn desktop_origin_is_stable() {
         assert_eq!(sidecar_url(), "http://127.0.0.1:4780");
+    }
+
+    #[test]
+    fn orchestrator_state_path_is_scoped_below_balance_data() {
+        assert_eq!(
+            default_orchestrator_state_path(Path::new("/data")),
+            Path::new("/data").join("Balance").join("orchestrator")
+        );
+    }
+
+    #[test]
+    fn random_capability_is_256_bit_lowercase_hex() {
+        let capability = random_capability().expect("random capability");
+        assert_eq!(capability.len(), 64);
+        assert!(capability
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_directory_is_0700_and_rejects_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let parent = unique_temp_dir("private-state");
+        let balance = parent.join("Balance");
+        ensure_private_directory(&balance).expect("private Balance directory");
+        let private = balance.join("orchestrator");
+        ensure_private_directory(&private).expect("private state directory");
+        assert_eq!(
+            std::fs::metadata(&private)
+                .expect("private state metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        let target = parent.join("target");
+        std::fs::create_dir(&target).expect("symlink target");
+        let link = parent.join("linked-state");
+        symlink(&target, &link).expect("state symlink");
+        assert!(ensure_private_directory(&link).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn e2e_state_directory_must_be_a_temp_descendant_without_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let test_temp = unique_temp_dir("e2e-root");
+        let valid = test_temp.join("valid");
+        let canonical = ensure_debug_e2e_state_dir(&valid, &test_temp).expect("valid e2e dir");
+        assert_eq!(
+            canonical,
+            valid.canonicalize().expect("canonical valid dir")
+        );
+        assert!(ensure_debug_e2e_state_dir(Path::new("/"), &test_temp).is_err());
+
+        let target = test_temp.join("target");
+        std::fs::create_dir(&target).expect("symlink target");
+        let link = test_temp.join("link");
+        symlink(&target, &link).expect("e2e symlink");
+        assert!(ensure_debug_e2e_state_dir(&link, &test_temp).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn e2e_capability_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = unique_temp_dir("e2e-token");
+        let token_path = directory.join("e2e-token");
+        write_private_file(&token_path, b"secret").expect("private token file");
+        assert_eq!(
+            std::fs::read_to_string(&token_path).expect("token"),
+            "secret"
+        );
+        assert_eq!(
+            std::fs::metadata(&token_path)
+                .expect("token metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 
     #[test]
