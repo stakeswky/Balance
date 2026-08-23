@@ -5,6 +5,7 @@ import { AdvicePlan } from "@/components/balance/advice-card";
 import { AgentCard } from "@/components/balance/agent-card";
 import { EventFeed } from "@/components/balance/event-feed";
 import { Header, type ViewId } from "@/components/balance/header";
+import { OrchestratorPanel } from "@/components/balance/orchestrator-panel";
 import { formatDuration, formatUsd } from "@/components/balance/format";
 import { ReportPanel } from "@/components/balance/report-panel";
 import { SessionDialog } from "@/components/balance/session-dialog";
@@ -40,6 +41,7 @@ import { useQuota } from "@/lib/quota/store";
 import { useTheme } from "@/lib/theme";
 import { AGENT_LABEL } from "@/lib/quota/agent";
 import { getOrchestratorAuthorization } from "@/lib/orchestrator/capability";
+import { buildQuotaCapacityEvidence } from "@/lib/orchestrator/client";
 import {
   pullClaudeUsage,
   pullCodexUsage,
@@ -454,6 +456,24 @@ export function Dashboard() {
       ),
     [analyticsEvents, official.codex, now, quotaSamples, calibrationTruncatedBeforeMs],
   );
+  const orchestratorQuotaEvidence = useMemo(
+    () => ({
+      claude: buildQuotaCapacityEvidence(claudeWeekVal, claudeWinVal, official.claude),
+      codex: buildQuotaCapacityEvidence(codexWeekVal, codexWinVal, official.codex),
+      grok: buildQuotaCapacityEvidence(grokWeekVal, grokWinVal, official.grok),
+    }),
+    [
+      claudeWeekVal,
+      claudeWinVal,
+      codexWeekVal,
+      codexWinVal,
+      grokWeekVal,
+      grokWinVal,
+      official.claude,
+      official.codex,
+      official.grok,
+    ],
+  );
   const claudePoolViews = useMemo<QuotaPoolView[]>(() => {
     const slice = official.claude;
     if (!slice) return [];
@@ -829,6 +849,10 @@ export function Dashboard() {
               ) : null}
             </section>
           </div>
+        ) : null}
+
+        {view === "orchestrator" ? (
+          <OrchestratorPanel quotaEvidence={orchestratorQuotaEvidence} />
         ) : null}
 
         {view === "settings" ? <SettingsPanel agents={visibleAgents} /> : null}

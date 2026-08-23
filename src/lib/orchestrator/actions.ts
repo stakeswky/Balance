@@ -1,4 +1,3 @@
-import { isAbsolute } from "node:path";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { assertOrchestratorRequestAllowed } from "./request-guard.server.ts";
@@ -13,7 +12,7 @@ const repositoryPathSchema = z
   .min(1)
   .max(4_096)
   .refine((value) => !value.includes("\0"), "repository path must not contain NUL")
-  .refine(isAbsolute, "repository path must be absolute");
+  .refine((value) => value.startsWith("/"), "repository path must be absolute");
 const baseShaSchema = z.string().regex(/^[a-f0-9]{40,64}$/);
 
 const authorizedInputSchema = z

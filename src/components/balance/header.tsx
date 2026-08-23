@@ -3,11 +3,12 @@ import { ThemeToggle } from "@/components/balance/theme-toggle";
 import type { AgentId } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
-export type ViewId = "monitor" | "report" | "settings";
+export type ViewId = "monitor" | "report" | "orchestrator" | "settings";
 
 const NAV: { id: ViewId; label: string }[] = [
   { id: "monitor", label: "监控" },
   { id: "report", label: "报告" },
+  { id: "orchestrator", label: "调度" },
   { id: "settings", label: "设置" },
 ];
 

@@ -226,10 +226,7 @@ async function newSeededPage(browser, { state, availability, viewport, persistVe
   await page.goto(BASE, { waitUntil: "commit" });
   await page.evaluate(
     ({ persistedState, persistVersion: version }) =>
-      localStorage.setItem(
-        "balance-quota-v8",
-        JSON.stringify({ state: persistedState, version }),
-      ),
+      localStorage.setItem("balance-quota-v8", JSON.stringify({ state: persistedState, version })),
     { persistedState: state, persistVersion },
   );
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -350,8 +347,8 @@ async function assertNonTargetViews(page) {
   await page.getByRole("heading", { name: "Claude Code 套餐", exact: true }).waitFor();
   await openView(page, "报告");
   await page.getByRole("heading", { name: "十四日热力", exact: true }).waitFor();
-  await openView(page, "插件");
-  await page.getByRole("heading", { name: "适配器", exact: true }).waitFor();
+  await openView(page, "调度");
+  await page.locator('[data-testid="orchestrator-panel"]').waitFor();
   await openView(page, "监控");
 }
 async function assertNoOverflow(page) {
@@ -450,7 +447,10 @@ try {
   await tray.getByText("现在该用", { exact: true }).waitFor();
   await tray.getByText("推荐", { exact: true }).waitFor();
   for (const name of ["Claude Code", "Grok", "Codex"]) {
-    assert.ok((await tray.getByText(name, { exact: true }).count()) >= 1, `${name} should appear in the tray`);
+    assert.ok(
+      (await tray.getByText(name, { exact: true }).count()) >= 1,
+      `${name} should appear in the tray`,
+    );
   }
   await tray.close();
   await page.reload({ waitUntil: "domcontentloaded" });
