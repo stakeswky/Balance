@@ -2,6 +2,7 @@ import { Pause, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardHint, CardTitle } from "@/components/ui/card";
+import { InlineHelp } from "@/components/ui/inline-help";
 import {
   formatDuration,
   formatTokens,
@@ -203,12 +204,18 @@ export function AgentCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-faint")} />
             <CardTitle>{name}</CardTitle>
-            <Badge tone={hasFreshOfficial ? effectiveStatus : "mute"}>{statusLabel}</Badge>
+            {minimalMode ? (
+              <InlineHelp label={`套餐：${plan.name} · 配置路径：${adapter}`} />
+            ) : (
+              <Badge tone={hasFreshOfficial ? effectiveStatus : "mute"}>{statusLabel}</Badge>
+            )}
           </div>
-          <CardHint className="mt-1 break-words">
-            {plan.name} · {adapter}
-            {!minimalMode && quotaNote ? ` · ${quotaNote}` : ""}
-          </CardHint>
+          {!minimalMode ? (
+            <CardHint className="mt-1 break-words">
+              {plan.name} · {adapter}
+              {quotaNote ? ` · ${quotaNote}` : ""}
+            </CardHint>
+          ) : null}
         </div>
         <Button variant="secondary" size="sm" onClick={onToggle} aria-pressed={live}>
           {live ? <Pause /> : <Play />}

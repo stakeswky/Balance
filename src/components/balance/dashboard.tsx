@@ -14,6 +14,7 @@ import { DualTimeline } from "@/components/balance/timeline";
 import { UsageChart } from "@/components/balance/usage-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
+import { InlineHelp } from "@/components/ui/inline-help";
 import { eventsForAgents, visibleAgentIds } from "@/lib/quota/agent-availability";
 import {
   applyOfficial,
@@ -616,11 +617,11 @@ export function Dashboard() {
 
               <Card className="flex h-full flex-col">
                 <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
                     <CardTitle>协同时间线</CardTitle>
-                    <CardHint>
-                      {visibleAgents.length} 路 Agent 共享同一口 5 小时时钟
-                    </CardHint>
+                    <InlineHelp
+                      label={`协同时间线：${visibleAgents.length} 路 Agent 共享同一口 5 小时时钟`}
+                    />
                   </div>
                   <Button
                     size="sm"
@@ -746,10 +747,12 @@ export function Dashboard() {
               )}
             >
               <Card className={fitMonitor ? "flex min-h-0 flex-1 flex-col" : undefined}>
-                <CardTitle>近 24 小时 token</CardTitle>
-                <CardHint className="mt-0.5">
-                  按小时叠加，便于看 {visibleAgents.length} 路 Agent 燃烧节奏
-                </CardHint>
+                <div className="flex items-center gap-1.5">
+                  <CardTitle>近 24 小时 token</CardTitle>
+                  <InlineHelp
+                    label={`近 24 小时 token：按小时叠加，便于看 ${visibleAgents.length} 路 Agent 燃烧节奏`}
+                  />
+                </div>
                 <div className={fitMonitor ? "mt-2 min-h-0 flex-1" : "mt-3"}>
                   <UsageChart
                     agents={visibleAgents}

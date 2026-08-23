@@ -29,6 +29,20 @@ test("collaboration plan keeps title and tips on one row", () => {
   assert.doesNotMatch(advice, /CardHint/);
 });
 
+test("secondary monitor descriptions move into accessible hover help", () => {
+  const help = read("src/components/ui/inline-help.tsx");
+  const dashboard = read("src/components/balance/dashboard.tsx");
+  const agentCard = read("src/components/balance/agent-card.tsx");
+  assert.match(help, /role="img"/);
+  assert.match(help, /aria-label=\{label\}/);
+  assert.match(help, /title=\{label\}/);
+  assert.match(help, /tabIndex=\{0\}/);
+  assert.match(dashboard, /<InlineHelp/);
+  assert.match(dashboard, /协同时间线：/);
+  assert.match(dashboard, /近 24 小时 token：/);
+  assert.match(agentCard, /套餐：\$\{plan\.name\} · 配置路径：\$\{adapter\}/);
+});
+
 test("tray popup highlights which subscription to use now", () => {
   const tray = read("src/components/balance/tray-dashboard.tsx");
   assert.match(tray, /现在该用/);
