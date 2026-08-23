@@ -56,7 +56,7 @@ export function Onboarding({
                 >
                   <span
                     className={cn(
-                      "grid size-9 shrink-0 place-items-center rounded-lg bg-raised",
+                      "grid size-9 shrink-0 place-items-center rounded-xl bg-raised",
                       agentTextClass(agent),
                     )}
                   >

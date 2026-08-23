@@ -24,7 +24,7 @@ export function AdvicePlan({
         </h3>
         <ul className="flex min-w-0 gap-2">
           {tips.map((tip) => (
-            <li key={tip.title} className="min-w-0 flex-1 rounded-md bg-raised px-2.5 py-1.5">
+            <li key={tip.title} className="min-w-0 flex-1 rounded-xl bg-raised px-2.5 py-1.5">
               <p className="truncate text-sm" title={`${tip.title}：${tip.body}`}>
                 <span className="font-medium">{tip.title}</span>
                 <span className="text-mute"> · {tip.body}</span>

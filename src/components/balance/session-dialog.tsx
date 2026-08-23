@@ -33,19 +33,19 @@ export function SessionDialog({
         {first ? (
           <div className="mt-4 space-y-4">
             <dl className="grid grid-cols-2 gap-3 text-xs">
-              <div className="rounded-md bg-raised px-3 py-2.5">
+              <div className="rounded-xl bg-raised px-3 py-2.5">
                 <dt className="text-faint">回合</dt>
                 <dd className="mt-1 font-mono text-sm tabular">{rows.length}</dd>
               </div>
-              <div className="rounded-md bg-raised px-3 py-2.5">
+              <div className="rounded-xl bg-raised px-3 py-2.5">
                 <dt className="text-faint">Token</dt>
                 <dd className="mt-1 font-mono text-sm tabular">{formatTokens(tokens)}</dd>
               </div>
-              <div className="rounded-md bg-raised px-3 py-2.5">
+              <div className="rounded-xl bg-raised px-3 py-2.5">
                 <dt className="text-faint">API 等价</dt>
                 <dd className="mt-1 font-mono text-sm tabular">{formatUsd(usd)}</dd>
               </div>
-              <div className="rounded-md bg-raised px-3 py-2.5">
+              <div className="rounded-xl bg-raised px-3 py-2.5">
                 <dt className="text-faint">{reason > 0 ? "推理" : "时长"}</dt>
                 <dd className="mt-1 font-mono text-sm tabular">
                   {reason > 0 ? `${reason.toFixed(1)} 分` : formatDuration(rows[rows.length - 1].ts - first.ts)}

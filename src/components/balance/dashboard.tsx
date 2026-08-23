@@ -516,7 +516,7 @@ export function Dashboard() {
         theme={theme}
         position="bottom-center"
         toastOptions={{
-          className: "!bg-surface !text-ink !border-line",
+          className: "!rounded-2xl !border-line !bg-surface !text-ink",
         }}
       />
       <Header
@@ -540,7 +540,7 @@ export function Dashboard() {
         )}
       >
         {adapterHint && !minimalMode && view === "monitor" && visibleAgents.length ? (
-          <div className="mb-3 flex flex-col gap-3 rounded-xl bg-surface px-4 py-3 shadow-[var(--shadow-border)] sm:flex-row sm:items-center">
+          <div className="mb-3 flex flex-col gap-3 rounded-2xl bg-surface px-4 py-3 shadow-[var(--shadow-border)] sm:flex-row sm:items-center">
             <p className="flex-1 text-sm text-mute">
               {demoMode
                 ? "当前是演示数据。可在设置中关闭演示，恢复只读监听本机日志。"
@@ -567,18 +567,20 @@ export function Dashboard() {
 
         {view === "monitor" && visibleAgents.length ? (
           <div
-            className={cn("flex flex-col gap-2", fitMonitor && "min-h-0 flex-1 overflow-hidden")}
+            className={cn("flex flex-col gap-4", fitMonitor && "min-h-0 flex-1 overflow-hidden")}
           >
-            <section className="grid shrink-0 gap-2 lg:grid-cols-[minmax(0,15rem)_1fr]">
+            <section className="grid shrink-0 items-stretch gap-4 lg:grid-cols-[minmax(0,15rem)_1fr]">
               {tighter ? (
-                <Card className="flex h-full flex-col">
-                  <p className="text-xs text-mute">更紧的窗口</p>
-                  <p className="mt-1 font-mono text-4xl leading-none font-medium tracking-tight tabular">
-                    {Math.max(0, 100 - tighterPct).toFixed(0)}
-                    <span className="ml-1 text-lg text-mute">%</span>
-                  </p>
-                  <p className="mt-1.5 text-sm text-mute">{tighter.label} 先碰到上限</p>
-                  <dl className="mt-2 space-y-1.5 text-xs">
+                <Card className="flex h-full flex-col justify-between gap-5">
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs text-mute">更紧的窗口</p>
+                    <p className="font-mono text-4xl leading-none font-medium tracking-tight tabular">
+                      {Math.max(0, 100 - tighterPct).toFixed(0)}
+                      <span className="ml-1 text-lg text-mute">%</span>
+                    </p>
+                    <p className="text-sm text-mute">{tighter.label} 先碰到上限</p>
+                  </div>
+                  <dl className="flex flex-col gap-2.5 text-xs">
                     <div className="flex justify-between">
                       <dt className="text-faint">本周 API 等价</dt>
                       <dd className="font-mono tabular">{formatUsd(combinedUsd)}</dd>
@@ -598,7 +600,7 @@ export function Dashboard() {
                     <Button
                       variant="secondary"
                       size="sm"
-                      className="mt-2 w-full"
+                      className="w-full"
                       onClick={() => {
                         useQuota.getState().resetDemo();
                         setNow(Date.now());
@@ -612,7 +614,7 @@ export function Dashboard() {
                 </Card>
               ) : null}
 
-              <Card>
+              <Card className="flex h-full flex-col">
                 <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                     <CardTitle>协同时间线</CardTitle>
@@ -633,7 +635,7 @@ export function Dashboard() {
               </Card>
             </section>
 
-            <section className="grid min-w-0 shrink-0 gap-2 md:grid-cols-2 xl:grid-cols-3">
+            <section className="grid min-w-0 shrink-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {visibleAgents.includes("claude") ? (
                 <AgentCard
                   name="Claude Code"
@@ -739,7 +741,7 @@ export function Dashboard() {
 
             <section
               className={cn(
-                "grid min-h-0 gap-2",
+                "grid min-h-0 gap-4",
                 fitMonitor ? "flex-1" : "lg:grid-cols-[1.2fr_0.8fr]",
               )}
             >

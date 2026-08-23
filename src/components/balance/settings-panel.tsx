@@ -30,7 +30,7 @@ function CaptureToggle({
   onToggle: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg bg-raised px-3 py-3">
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-3">
       <div className="min-w-0">
         <p className="text-sm text-ink">{name}</p>
         <p className="mt-0.5 font-mono text-xs text-mute">{adapter}</p>
@@ -112,7 +112,7 @@ export function SettingsPanel() {
             />
           ))}
           {detectedAgents.length === 0 ? (
-            <p className="rounded-lg bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
+            <p className="rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
               暂未检测到本机 Agent。运行一次 Agent 后，使用上方“重新检测”更新采集入口。
             </p>
           ) : null}

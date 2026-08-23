@@ -8,7 +8,7 @@ function Lane({ agent, events, now }: { agent: AgentId; events: UsageEvent[]; no
   const blocks = timelineSessions(events, agent, now);
   const from = now - WINDOW_MS;
   return (
-    <div className="relative h-7 overflow-hidden rounded-md bg-raised">
+    <div className="relative h-7 overflow-hidden rounded-xl bg-raised">
       {blocks.map((block) => {
         const left = ((block.start - from) / WINDOW_MS) * 100;
         const width = Math.max(1.6, ((block.end - block.start) / WINDOW_MS) * 100);
@@ -17,7 +17,7 @@ function Lane({ agent, events, now }: { agent: AgentId; events: UsageEvent[]; no
             key={block.id}
             title={block.task}
             className={cn(
-              "absolute top-1 bottom-1 rounded-sm",
+              "absolute top-1 bottom-1 rounded-lg",
               agent === "claude" ? "bg-claude/80" : agent === "grok" ? "bg-grok/80" : "bg-codex/80",
             )}
             style={{ left: `${left}%`, width: `${width}%` }}

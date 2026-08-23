@@ -66,7 +66,7 @@ function Heatmap({ events, now }: { events: UsageEvent[]; now: number }) {
           <div key={d.t} className="space-y-1" title={`${d.label} · ${formatTokens(d.total)}`}>
             <div
               className={cn(
-                "h-10 rounded-sm sm:h-12",
+                "h-10 rounded-xl sm:h-12",
                 t < 0.08
                   ? "bg-raised"
                   : t < 0.35
@@ -110,7 +110,7 @@ function PlanCompare({
   return (
     <div>
       <h3 className="mb-3 text-sm font-medium">{title}</h3>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-xl">
         <table className="w-full text-left text-sm">
           <thead className="text-xs text-faint">
             <tr>
@@ -278,9 +278,9 @@ export function ReportPanel({
               清空
             </Button>
           </div>
-          <ul className="divide-y divide-line">
+          <ul className="space-y-1">
             {visibleAlerts.slice(0, 8).map((a) => (
-              <li key={a.id} className="flex items-start justify-between gap-3 py-2.5 text-sm">
+              <li key={a.id} className="flex items-start justify-between gap-3 rounded-xl px-2 py-2.5 text-sm hover:bg-raised">
                 <span>{a.message}</span>
                 <span className="shrink-0 font-mono text-xs text-faint tabular">
                   {formatDuration(now - a.ts)}前
@@ -321,13 +321,13 @@ export function ReportPanel({
           </div>
         </div>
         {sessions.length ? (
-          <ul className="divide-y divide-line">
+          <ul className="space-y-1">
             {sessions.map((s) => (
               <li key={s.id}>
                 <button
                   type="button"
                   onClick={() => onOpenSession(s.id)}
-                  className="flex w-full items-start gap-3 py-3 text-left"
+                  className="flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-raised"
                 >
                   <span
                     className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", agentDotClass(s.agent))}

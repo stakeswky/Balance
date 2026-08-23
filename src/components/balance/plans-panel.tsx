@@ -29,7 +29,7 @@ function PlanList({
               aria-label={active ? `${p.name}，当前套餐` : p.name}
               onClick={() => onSelect(p.id)}
               className={cn(
-                "rounded-xl p-4 text-left shadow-[var(--shadow-border)] transition-[box-shadow,background-color] duration-150",
+                "rounded-2xl p-4 text-left shadow-[var(--shadow-border)] transition-[box-shadow,background-color] duration-150",
                 active
                   ? "bg-raised shadow-[var(--shadow-border-hover)]"
                   : "bg-surface hover:bg-raised",

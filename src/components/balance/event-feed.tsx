@@ -26,13 +26,13 @@ export function EventFeed({
     return <p className="text-sm text-mute">还没有用量事件。打开协同采集，或导入会话日志。</p>;
   }
   return (
-    <ul className="divide-y divide-line">
+    <ul className="space-y-1">
       {latest.map((e) => (
         <li key={e.id}>
           <button
             type="button"
             onClick={() => onOpen?.(activityIdOf(e))}
-            className="flex w-full items-start gap-3 py-3 text-left first:pt-0 last:pb-0"
+            className="flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-raised"
           >
             <span
               className={cn(

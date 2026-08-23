@@ -71,7 +71,7 @@ export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
         </CardHint>
         <ul className="mt-4 space-y-3 text-sm">
           {agents.map((id) => (
-            <li key={id} className="rounded-lg bg-raised px-3 py-3">
+            <li key={id} className="rounded-xl bg-raised px-3 py-3">
               <p className={`font-medium ${ADAPTER[id].textClass}`}>{ADAPTER[id].name}</p>
               <p className="mt-1 font-mono text-xs text-mute">{ADAPTER[id].path}</p>
               <p className="mt-1 text-xs text-mute">{ADAPTER[id].detail}</p>
@@ -83,7 +83,7 @@ export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
             采集打开时只读轮询本机 jsonl 并按事件标识去重。无需粘贴；右侧仍可手动并入。
           </p>
         ) : (
-          <p className="mt-4 rounded-lg bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
+          <p className="mt-4 rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
             暂无可用适配器。请到设置重新检测本机 Agent，或开启演示数据。
           </p>
         )}
@@ -104,7 +104,7 @@ export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
           ))}
         </div>
         {agents.length === 0 ? (
-          <p className="mt-4 rounded-lg bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
+          <p className="mt-4 rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
             当前没有导入目标。重新检测或开启演示后即可并入用量。
           </p>
         ) : null}
@@ -145,7 +145,7 @@ export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
       <Card className="lg:col-span-2">
         <CardTitle>事件协议</CardTitle>
         <CardHint className="mt-1">本地 sidecar 或 CI 钩子按此形状推送即可。</CardHint>
-        <pre className="mt-4 overflow-x-auto rounded-lg bg-raised p-4 font-mono text-xs leading-relaxed text-mute">
+        <pre className="mt-4 overflow-x-auto rounded-xl bg-raised p-4 font-mono text-xs leading-relaxed text-mute">
 {`type UsageEvent = {
   agent: "claude" | "grok" | "codex"
   model: string

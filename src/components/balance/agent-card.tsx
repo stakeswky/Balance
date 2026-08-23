@@ -197,8 +197,8 @@ export function AgentCard({
       : "样本不足";
 
   return (
-    <Card>
-      <CardHeader className={cn("min-w-0", minimalMode && "mb-2")}>
+    <Card className="flex h-full flex-col p-4 sm:p-5">
+      <CardHeader className="min-w-0">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-faint")} />
@@ -264,12 +264,12 @@ export function AgentCard({
       </div>
 
       {!minimalMode && sourceMessage ? (
-        <p className="mt-4 rounded-lg bg-raised px-3 py-2 text-xs leading-relaxed text-mute">
+        <p className="mt-4 rounded-xl bg-raised px-3 py-2 text-xs leading-relaxed text-mute">
           {sourceMessage}
         </p>
       ) : null}
 
-      <div className={cn("mt-3", minimalMode ? "space-y-2" : "space-y-3")}>
+      <div className="mt-4 space-y-3">
         {weeklyView ? (
           <MeterBar
             value={meter.weekPct}
@@ -348,7 +348,7 @@ export function AgentCard({
         </div>
       ) : null}
 
-      <dl className={cn("mt-3 grid grid-cols-2 text-xs", minimalMode ? "gap-2" : "gap-3")}>
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
         {minimalMode ? (
           <>
             <Stat
@@ -484,7 +484,7 @@ export function AgentCard({
           </p>
 
           {parallel ? (
-            <div className="mt-3 rounded-md bg-raised px-3 py-3">
+            <div className="mt-3 rounded-xl bg-raised px-3 py-3">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs tracking-wide text-faint uppercase">并行任务</p>
                 <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-xs text-mute">
@@ -514,7 +514,7 @@ export function AgentCard({
               ) : null}
             </div>
           ) : session && live ? (
-            <div className="mt-3 rounded-md bg-raised px-3 py-3">
+            <div className="mt-3 rounded-xl bg-raised px-3 py-3">
               <p className="text-xs tracking-wide text-faint uppercase">实时会话</p>
               <p className="mt-1 text-sm text-ink">{session.task}</p>
               <p className="mt-1 font-mono text-xs text-mute">
@@ -524,11 +524,11 @@ export function AgentCard({
               {liveNote ? <p className="mt-1 text-xs text-mute">{liveNote}</p> : null}
             </div>
           ) : live ? (
-            <div className="mt-3 rounded-md bg-raised px-3 py-3 text-sm text-mute">
+            <div className="mt-3 rounded-xl bg-raised px-3 py-3 text-sm text-mute">
               {liveNote ?? "正在监听日志"}
             </div>
           ) : (
-            <div className="mt-3 rounded-md bg-raised px-3 py-3 text-sm text-mute">采集已暂停</div>
+            <div className="mt-3 rounded-xl bg-raised px-3 py-3 text-sm text-mute">采集已暂停</div>
           )}
 
           <div className="mt-4 space-y-2">
@@ -587,7 +587,7 @@ function QuotaPoolRows({ rows, tone }: { rows: QuotaPoolView[]; tone: AgentId })
         const suffix = pool.stale ? "（官方快照）" : "（官方）";
         if (valuation.kind === "stale") {
           return (
-            <div key={pool.id} className="rounded-lg bg-raised px-3 py-2 text-xs">
+            <div key={pool.id} className="rounded-xl bg-raised px-3 py-2 text-xs">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-mute">{label}{suffix}</span>
                 <span className="font-mono tabular text-ink">
@@ -602,7 +602,7 @@ function QuotaPoolRows({ rows, tone }: { rows: QuotaPoolView[]; tone: AgentId })
         }
         if (valuation.kind === "exact") {
           return (
-            <div key={pool.id} className="rounded-lg bg-raised px-3 py-2 text-xs">
+            <div key={pool.id} className="rounded-xl bg-raised px-3 py-2 text-xs">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-mute">{label}{suffix}</span>
                 <span className="font-mono tabular text-ink">
@@ -639,7 +639,6 @@ function Stat({
   dim,
   hint,
   testId,
-  compact,
 }: {
   label: string;
   value: string;
@@ -649,19 +648,9 @@ function Stat({
   compact?: boolean;
 }) {
   return (
-    <div
-      className={cn("rounded-md bg-raised", compact ? "px-2 py-1.5" : "px-3 py-2.5")}
-      title={hint}
-      data-testid={testId}
-    >
+    <div className="rounded-xl bg-raised px-3 py-2.5" title={hint} data-testid={testId}>
       <dt className="text-faint">{label}</dt>
-      <dd
-        className={cn(
-          "font-mono text-sm tabular",
-          compact ? "mt-0.5" : "mt-1",
-          dim ? "text-faint" : "text-ink",
-        )}
-      >
+      <dd className={cn("mt-1 font-mono text-sm tabular", dim ? "text-faint" : "text-ink")}>
         {value}
       </dd>
     </div>

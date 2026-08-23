@@ -48,7 +48,7 @@ function WeekRow({
   return (
     <article
       className={cn(
-        "rounded-xl bg-surface px-3 py-2 shadow-[var(--shadow-border)]",
+        "rounded-2xl bg-surface px-3 py-2 shadow-[var(--shadow-border)]",
         preferred && "shadow-[var(--shadow-border-hover)]",
       )}
       aria-current={preferred ? "true" : undefined}
@@ -200,22 +200,22 @@ export function TrayDashboard() {
       </header>
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-2">
         {!ready ? (
-          <div className="rounded-xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
+          <div className="rounded-2xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
             正在读取本机配额…
           </div>
         ) : !onboardingComplete ? (
-          <div className="rounded-xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
+          <div className="rounded-2xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
             请先打开主窗口完成初始设置。
           </div>
         ) : rows.length === 0 ? (
-          <div className="rounded-xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
+          <div className="rounded-2xl bg-surface px-3.5 py-8 text-center text-sm text-mute shadow-[var(--shadow-border)]">
             本机还没有检测到 Claude、Grok 或 Codex。
           </div>
         ) : (
           <>
             {hint && preferred ? (
               <section
-                className="rounded-xl bg-surface px-3.5 py-2.5 shadow-[var(--shadow-border)]"
+                className="rounded-2xl bg-surface px-3.5 py-2.5 shadow-[var(--shadow-border)]"
                 aria-labelledby="tray-pick-title"
               >
                 <p className="text-xs text-mute">现在该用</p>

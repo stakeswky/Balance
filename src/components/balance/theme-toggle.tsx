@@ -18,7 +18,7 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={toggle}
-      className="grid size-11 place-items-center rounded-md text-mute hover:bg-raised hover:text-ink"
+      className="grid size-11 place-items-center rounded-xl text-mute hover:bg-raised hover:text-ink"
       aria-label={dark ? "切换亮色" : "切换暗色"}
       title={dark ? "亮色" : "暗色"}
     >

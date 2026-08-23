@@ -29,7 +29,7 @@ export function Header({
     <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 sm:px-6">
         <Link to="/" className="flex items-center gap-2.5 text-ink no-underline">
-          <span className="grid size-8 place-items-center rounded-md bg-raised shadow-[var(--shadow-border)]">
+          <span className="grid size-8 place-items-center rounded-xl bg-raised shadow-[var(--shadow-border)]">
             <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
               <path
                 d="M2 16a10 10 0 0 1 20 0"
@@ -65,14 +65,14 @@ export function Header({
           </span>
         </Link>
 
-        <nav className="ml-1 flex items-center rounded-lg bg-surface p-1 shadow-[var(--shadow-border)] sm:ml-2">
+        <nav className="ml-1 flex items-center rounded-xl bg-surface p-1 shadow-[var(--shadow-border)] sm:ml-2">
           {NAV.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => onView(item.id)}
               className={cn(
-                "h-9 rounded-md px-2 text-sm transition-colors duration-150 sm:px-3",
+                "h-9 rounded-lg px-2 text-sm transition-colors duration-150 sm:px-3",
                 view === item.id ? "bg-raised text-ink" : "text-mute hover:text-ink",
               )}
             >

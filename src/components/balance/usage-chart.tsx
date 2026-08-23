@@ -17,7 +17,7 @@ export function UsageChart({
 }) {
   const data = hourlySeries(events, now, 24);
   return (
-    <div className={cn("relative h-48 w-full", className)}>
+    <div className={cn("relative h-48 w-full overflow-hidden rounded-xl", className)}>
       <div className="absolute inset-0">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
@@ -53,7 +53,7 @@ export function UsageChart({
             contentStyle={{
               background: "var(--color-surface)",
               border: "1px solid var(--color-line)",
-              borderRadius: 12,
+              borderRadius: 24,
               fontSize: 12,
             }}
             labelStyle={{ color: "var(--color-mute)" }}
