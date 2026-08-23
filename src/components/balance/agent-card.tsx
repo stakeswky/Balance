@@ -26,6 +26,7 @@ import {
   effectiveQuotaStatus,
   formatCreditRange,
   formatCredits,
+  formatWeekResetHint,
   formatWeekResetLabel,
   quotaPoolLabel,
   type QuotaPoolView,
@@ -154,6 +155,23 @@ export function AgentCard({
     freshMeter?.status ?? "ok",
     hasFreshPool ? freshPoolPct : null,
   );
+  const weeklyStatus = effectiveQuotaStatus(
+    meter.weekPct >= 88 ? "critical" : meter.weekPct >= 72 ? "watch" : "ok",
+    hasFreshPool ? freshPoolPct : null,
+  );
+  const weeklyTone = minimalMode
+    ? weeklyStatus === "critical"
+      ? "crit"
+      : weeklyStatus === "watch"
+        ? "warn"
+        : "ok"
+    : quotaSources.week === "official"
+      ? meter.weekPct >= 88
+        ? "crit"
+        : meter.weekPct >= 72
+          ? "warn"
+          : tone
+      : tone;
   const statusLabel = hasFreshOfficial
     ? statusCopy[effectiveStatus]
     : hasStaleSnapshot
@@ -192,6 +210,7 @@ export function AgentCard({
   const creditL1 = formatCreditL1(weekValue);
   const parallel = parallelTaskSummary(activeTasks ?? [], live);
   const weekReset = formatWeekResetLabel(weekResetsAt, now);
+  const weekResetHint = formatWeekResetHint(weekResetsAt, now);
   const estimatedWeekUsage =
     weekValue && weekValue.confidence !== "none"
       ? formatUsdRange(weekValue.totalLowUsd, weekValue.totalHighUsd)
@@ -225,49 +244,58 @@ export function AgentCard({
 
       <div className="flex items-end justify-between gap-4">
         <div>
-          <p className="text-xs text-mute">{primaryRemainingLabel}</p>
+          <p className="text-xs text-mute">{minimalMode ? "本周剩余" : primaryRemainingLabel}</p>
           <p
+            data-testid={minimalMode ? `quota-${meter.agent}-week-remaining` : undefined}
+            aria-label={
+              minimalMode
+                ? `本周剩余 ${remain.toFixed(0)}%，${statusCopy[weeklyStatus]}`
+                : undefined
+            }
             className={cn(
               "mt-1 font-mono leading-none font-medium tracking-tight tabular",
               minimalMode ? "text-3xl" : "text-4xl",
+              minimalMode && weeklyStatus === "ok" && "text-ok",
+              minimalMode && weeklyStatus === "watch" && "text-warn",
+              minimalMode && weeklyStatus === "critical" && "text-crit",
             )}
           >
             {remain.toFixed(0)}
             <span className="ml-1 text-lg text-mute">%</span>
           </p>
         </div>
-        <div className="text-right text-xs text-mute">
-          {weeklyView ? (
-            <>
-              <p>
-                {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
-                <span className="text-faint"> %</span>
-              </p>
-              {!minimalMode ? (
+        {!minimalMode ? (
+          <div className="text-right text-xs text-mute">
+            {weeklyView ? (
+              <>
+                <p>
+                  {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
+                  <span className="text-faint"> %</span>
+                </p>
                 <p className="mt-1">
                   {meter.agent !== "codex" ? "API 等价按公开价折算" : "credit 按公开价等价折算"}
                 </p>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <p>
-                {primarySource === "official"
-                  ? "燃烧"
-                  : primarySource === "official-stale"
-                    ? "快照燃烧"
-                    : "估算燃烧"}{" "}
-                {meter.burnPctPerHour.toFixed(1)}
-                <span className="text-faint"> %/时</span>
-              </p>
-              <p className="mt-1">
-                {meter.etaMs != null && meter.etaMs < 6 * 60 * 60 * 1000
-                  ? `预计 ${formatDuration(meter.etaMs)} 耗尽`
-                  : "当前速率可撑过本窗"}
-              </p>
-            </>
-          )}
-        </div>
+              </>
+            ) : (
+              <>
+                <p>
+                  {primarySource === "official"
+                    ? "燃烧"
+                    : primarySource === "official-stale"
+                      ? "快照燃烧"
+                      : "估算燃烧"}{" "}
+                  {meter.burnPctPerHour.toFixed(1)}
+                  <span className="text-faint"> %/时</span>
+                </p>
+                <p className="mt-1">
+                  {meter.etaMs != null && meter.etaMs < 6 * 60 * 60 * 1000
+                    ? `预计 ${formatDuration(meter.etaMs)} 耗尽`
+                    : "当前速率可撑过本窗"}
+                </p>
+              </>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {!minimalMode && sourceMessage ? (
@@ -278,22 +306,26 @@ export function AgentCard({
 
       <div className="mt-4 space-y-3">
         {weeklyView ? (
-          <MeterBar
-            value={meter.weekPct}
-            tone={
-              quotaSources.week === "official"
-                ? meter.weekPct >= 88
-                  ? "crit"
-                  : meter.weekPct >= 72
-                    ? "warn"
-                    : tone
-                : tone
-            }
-            label={
-              minimalMode && weekReset ? `${weekMeterLabel} · ${weekReset}` : weekMeterLabel
-            }
-            detail={minimalMode ? null : weekReset}
-          />
+          <div>
+            <MeterBar
+              value={meter.weekPct}
+              tone={weeklyTone}
+              label={minimalMode ? "已用" : weekMeterLabel}
+              detail={minimalMode ? null : weekReset}
+            />
+            {minimalMode && weekResetHint ? (
+              <p className="mt-1.5 text-xs text-faint">
+                <time
+                  data-testid={`quota-${meter.agent}-week-reset`}
+                  dateTime={weekResetHint.dateTime}
+                  title={weekResetHint.title}
+                  aria-label={`${weekResetHint.label}，${weekResetHint.title}`}
+                >
+                  {weekResetHint.label}
+                </time>
+              </p>
+            ) : null}
+          </div>
         ) : (
           <>
             <MeterBar

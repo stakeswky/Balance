@@ -43,6 +43,16 @@ test("secondary monitor descriptions move into accessible hover help", () => {
   assert.match(agentCard, /套餐：\$\{plan\.name\} · 配置路径：\$\{adapter\}/);
 });
 
+test("minimal weekly reset keeps absolute time in hover help", () => {
+  const agentCard = read("src/components/balance/agent-card.tsx");
+  assert.match(agentCard, /<time/);
+  assert.match(agentCard, /title=\{weekResetHint\.title\}/);
+  assert.match(
+    agentCard,
+    /aria-label=\{`\$\{weekResetHint\.label\}，\$\{weekResetHint\.title\}`\}/,
+  );
+});
+
 test("tray popup highlights which subscription to use now", () => {
   const tray = read("src/components/balance/tray-dashboard.tsx");
   assert.match(tray, /现在该用/);

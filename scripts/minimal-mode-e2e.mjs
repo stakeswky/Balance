@@ -101,6 +101,7 @@ function cardAround(page, heading) {
     .locator("xpath=ancestor::div[contains(@class,'rounded-2xl')][1]");
 }
 const AGENT_CARD_HEADINGS = ["Claude Code", "Grok", "Codex"];
+const AGENT_ID_BY_HEADING = { "Claude Code": "claude", Grok: "grok", Codex: "codex" };
 
 async function assertFullAgentCardDetails(page) {
   for (const heading of AGENT_CARD_HEADINGS) {
@@ -169,7 +170,17 @@ async function assertMinimalAgentCardDetails(page) {
     );
     assert.equal(await card.getByText("本周 token", { exact: true }).count(), 0);
     assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 0);
-    assert.equal(await card.getByText("本周额度", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("本周额度", { exact: true }).count(), 0);
+    assert.equal(await card.getByText("本周剩余", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("已用", { exact: true }).count(), 1);
+    for (const status of ["充足", "留意", "将尽"])
+      assert.equal(await card.getByText(status, { exact: true }).count(), 0);
+    assert.equal(await card.getByLabel(/^套餐：.+ · 配置路径：~\//).count(), 1);
+    const agent = AGENT_ID_BY_HEADING[heading];
+    const remaining = card.locator(`[data-testid="quota-${agent}-week-remaining"]`);
+    await remaining.waitFor();
+    assert.match((await remaining.getAttribute("class")) ?? "", /text-(ok|warn|crit)/);
+    assert.equal(await card.getByText(/后刷新|等待刷新/).count(), 0);
     assert.equal(await card.getByText("5 小时窗", { exact: false }).count(), 0);
     assert.equal(await card.getByText(/燃烧|%\/时|预计.*耗尽/).count(), 0);
     assert.equal(await card.getByText("本地日志覆盖", { exact: false }).count(), 0);
@@ -270,6 +281,18 @@ async function assertMinimalMode(page) {
   for (const heading of ["协同时间线", "Claude Code", "Grok", "Codex", "近 24 小时 token"])
     await page.getByRole("heading", { name: heading, exact: true }).waitFor();
   await assertMinimalAgentCardDetails(page);
+  await page
+    .getByRole("img", {
+      name: `协同时间线：${AGENT_CARD_HEADINGS.length} 路 Agent 共享同一口 5 小时时钟`,
+      exact: true,
+    })
+    .waitFor();
+  await page
+    .getByRole("img", {
+      name: `近 24 小时 token：按小时叠加，便于看 ${AGENT_CARD_HEADINGS.length} 路 Agent 燃烧节奏`,
+      exact: true,
+    })
+    .waitFor();
   const timeline = cardAround(page, "协同时间线");
   await timeline.getByRole("heading", { name: "协同计划", exact: true }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "协同建议", exact: true }).count(), 0);
