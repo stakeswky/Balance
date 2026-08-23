@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { compareSemver, parseSemver } from "./bump-desktop-pack-version.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(join(root, relative), "utf8");
@@ -45,7 +46,7 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
   );
 });
 
-test("native version stamps stay at 0.3.0 for the 0.3.1 hot pack", () => {
+test("native version stamps stay at 0.3.0 while the hot pack can move independently", () => {
   const cargo = read("src-tauri/Cargo.toml");
   const config = JSON.parse(read("src-tauri/tauri.conf.json"));
   const pack = JSON.parse(read("desktop-pack.json"));
@@ -53,7 +54,8 @@ test("native version stamps stay at 0.3.0 for the 0.3.1 hot pack", () => {
 
   assert.match(cargo, /^version = "0\.3\.0"$/m);
   assert.equal(config.version, "0.3.0");
-  assert.equal(pack.packVersion, "0.3.1");
+  assert.ok(parseSemver(pack.packVersion));
+  assert.ok(compareSemver(pack.packVersion, pack.minNativeVersion) >= 0);
   assert.equal(pack.minNativeVersion, "0.3.0");
   assert.match(packageJson.scripts["desktop:verify:dmg"], /Balance_0\.3\.0_aarch64\.dmg/);
 });

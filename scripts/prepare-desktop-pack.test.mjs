@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { compareSemver, parseSemver } from "./bump-desktop-pack-version.mjs";
 import {
   NATIVE_SURFACE_FILES,
   cargoPackageVersion,
@@ -14,7 +15,7 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(join(root, relative), "utf8");
 
-test("desktop pack 0.3.1 keeps native compatibility stamps at 0.3.0", () => {
+test("desktop pack stays on semver and keeps native compatibility stamps", () => {
   const pack = JSON.parse(read("desktop-pack.json"));
   const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
   const lock = JSON.parse(read("desktop-native.lock"));
@@ -22,13 +23,14 @@ test("desktop pack 0.3.1 keeps native compatibility stamps at 0.3.0", () => {
 
   assert.equal(pack.schemaVersion, 1);
   assert.equal(pack.app, "balance");
-  assert.equal(pack.packVersion, "0.3.1");
+  assert.ok(parseSemver(pack.packVersion));
   assert.equal(pack.minNativeVersion, "0.3.0");
   assert.equal(tauri.version, "0.3.0");
   assert.equal(cargoVersion, "0.3.0");
   assert.equal(lock.nativeVersion, "0.3.0");
   assert.equal(pack.minNativeVersion, tauri.version);
   assert.equal(pack.minNativeVersion, cargoVersion);
+  assert.ok(compareSemver(pack.packVersion, pack.minNativeVersion) >= 0);
 });
 
 test("native fingerprint matches the committed lock after the 0.3.0 bump", () => {
@@ -47,7 +49,8 @@ test("desktop prepare stamps pack.json into the Nitro output", () => {
       gitSha: "abc1234deadbeef",
     });
     const written = JSON.parse(readFileSync(join(outputDir, "pack.json"), "utf8"));
-    assert.equal(stamped.packVersion, "0.3.1");
+    const pack = JSON.parse(read("desktop-pack.json"));
+    assert.equal(stamped.packVersion, pack.packVersion);
     assert.equal(stamped.minNativeVersion, "0.3.0");
     assert.equal(stamped.nativeVersion, "0.3.0");
     assert.equal(stamped.gitSha, "abc1234deadbeef");

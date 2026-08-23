@@ -28,9 +28,17 @@ test("macOS workflow builds, verifies, and uploads both bundles", async () => {
   assert.match(yaml, /Balance_\*\.dmg/);
   assert.match(yaml, /GITHUB_TOKEN/);
   assert.match(yaml, /release create latest/);
+  assert.match(yaml, /concurrency:/);
+  assert.match(yaml, /fetch-depth: 0/);
+  assert.match(yaml, /github.ref == 'refs\/heads\/main'/);
+  assert.match(yaml, /node scripts\/bump-desktop-pack-version\.mjs/);
   assert.match(yaml, /node scripts\/publish-desktop-update-artifacts\.mjs/);
   assert.match(yaml, /artifacts\/balance-server\.zip/);
   assert.match(yaml, /artifacts\/update-manifest\.json/);
+  assert.ok(
+    yaml.indexOf("bump-desktop-pack-version.mjs") < yaml.indexOf("npm run desktop:prepare"),
+    "packVersion must bump before the desktop pack is stamped",
+  );
   assert.ok(
     yaml.indexOf("npm run desktop:prepare") < yaml.indexOf("npm run desktop:test"),
     "clean CI must generate externalBin and resources before cargo test",

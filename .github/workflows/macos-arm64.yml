@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-macos-arm64:
     runs-on: macos-26
@@ -18,6 +22,38 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Bump hot-update pack version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -eu
+          case "${COMMIT_MSG:-}" in
+            "chore(release): bump desktop pack"*)
+              echo "skip pack bump on release commit"
+              exit 0
+              ;;
+          esac
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for _attempt in 1 2 3; do
+            git fetch origin main
+            remote_pack="$(git show origin/main:desktop-pack.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["packVersion"])')"
+            BALANCE_REMOTE_PACK_VERSION="$remote_pack" node scripts/bump-desktop-pack-version.mjs
+            git add desktop-pack.json
+            next="$(python3 -c 'import json; print(json.load(open("desktop-pack.json"))["packVersion"])')"
+            git commit -m "chore(release): bump desktop pack to ${next}" -m "[skip ci]"
+            if git rebase origin/main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort || true
+            git reset --hard HEAD~1
+          done
+          echo "failed to push pack version bump" >&2
+          exit 1
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
