@@ -16,10 +16,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createServer as createTcpServer } from "node:net";
 import { chromium } from "playwright";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const ORIGIN = "http://127.0.0.1:4780";
+let origin;
 const FIXTURE = resolve(ROOT, "scripts/fixtures/fake-agent-cli.mjs");
 const WATCHDOG = resolve(ROOT, "src-tauri/resources/sidecar-watchdog.cjs");
 const SERVER_ENTRY = resolve(ROOT, ".output/server/index.mjs");
@@ -51,6 +52,20 @@ process.env.no_proxy = "*";
 
 function sleep(milliseconds) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}
+
+async function allocateLoopbackOrigin() {
+  for (const port of [4780, 8080]) {
+    const available = await new Promise((resolveAvailable) => {
+      const probe = createTcpServer();
+      probe.once("error", () => resolveAvailable(false));
+      probe.listen(port, "127.0.0.1", () => {
+        probe.close((error) => resolveAvailable(!error));
+      });
+    });
+    if (available) return `http://127.0.0.1:${port}`;
+  }
+  throw new Error("orchestrator E2E requires free loopback port 4780 or 8080");
 }
 
 async function waitForFile(path, timeoutMs = 30_000) {
@@ -196,7 +211,7 @@ async function waitForHealth(server) {
       );
     }
     try {
-      const response = await fetch(`${ORIGIN}/api/desktop-health`);
+      const response = await fetch(`${origin}/api/desktop-health`);
       if (response.ok) return;
     } catch {
       // Continue until the loopback server is ready.
@@ -207,12 +222,13 @@ async function waitForHealth(server) {
 }
 
 async function startServer(stateDirectory, token, logs) {
+  const port = new URL(origin).port;
   const environment = {
     ...process.env,
     HOST: "127.0.0.1",
     NITRO_HOST: "127.0.0.1",
-    PORT: "4780",
-    NITRO_PORT: "4780",
+    PORT: port,
+    NITRO_PORT: port,
     BALANCE_DESKTOP: "1",
     BALANCE_STATE_DIR: stateDirectory,
     BALANCE_ORCHESTRATOR_TOKEN: token,
@@ -270,9 +286,20 @@ async function newBrowserContext(browser) {
 async function openDashboard(context, token) {
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
-  await page.goto(`${ORIGIN}/#balance-token=${token}`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => window.location.hash === "");
-  await page.getByRole("button", { name: "调度", exact: true }).waitFor();
+  const browserDiagnostics = [];
+  page.on("console", (message) => browserDiagnostics.push(`console:${message.type()}: ${message.text()}`));
+  page.on("pageerror", (error) => browserDiagnostics.push(`pageerror: ${error.message}`));
+  try {
+    await page.goto(`${origin}/#balance-token=${token}`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => window.location.hash === "");
+    await page.getByRole("button", { name: "调度", exact: true }).waitFor();
+  } catch (error) {
+    const body = await page.locator("body").innerText().catch(() => "<body unavailable>");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+      `URL: ${page.url()}\nBody: ${body.slice(0, 4_000)}\n${browserDiagnostics.join("\n")}`,
+    );
+  }
   return page;
 }
 
@@ -707,6 +734,7 @@ let context;
 let succeeded = false;
 
 try {
+  origin = await allocateLoopbackOrigin();
   const navigationRepository = createRepository(
     temporaryRoot,
     "navigation-repository",
