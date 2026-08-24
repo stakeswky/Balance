@@ -72,6 +72,10 @@ const startRunInputSchema = z
   })
   .strict();
 
+const continueRunInputSchema = startRunInputSchema.extend({
+  quotaEvidence: quotaEvidenceByAgentSchema,
+}).strict();
+
 const getRunInputSchema = z
   .object({
     authorization: authorizationSchema,
@@ -94,6 +98,7 @@ export const orchestratorActionInputSchemas = {
   validateRepository: validateRepositoryInputSchema,
   analyzePlan: analyzePlanInputSchema,
   startRun: startRunInputSchema,
+  continueRun: continueRunInputSchema,
   getRun: getRunInputSchema,
   cancelRun: runInputSchema,
   listRuns: authorizedInputSchema,
@@ -154,6 +159,20 @@ export const startOrchestratorRun = createServerFn({ method: "POST" })
       fingerprint: data.fingerprint,
       trustedRepository: data.trustedRepository,
       confirmedRepository: data.confirmedRepository,
+    });
+  });
+
+export const refreshAndContinueOrchestratorRun = createServerFn({ method: "POST" })
+  .validator((value: unknown) => orchestratorActionInputSchemas.continueRun.parse(value))
+  .handler(async ({ data }) => {
+    assertOrchestratorRequestAllowed(data.authorization);
+    const supervisor = await getOrchestratorSupervisor();
+    return supervisor.continue({
+      runId: data.runId,
+      fingerprint: data.fingerprint,
+      trustedRepository: data.trustedRepository,
+      confirmedRepository: data.confirmedRepository,
+      quotaEvidence: data.quotaEvidence,
     });
   });
 

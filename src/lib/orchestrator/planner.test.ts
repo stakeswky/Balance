@@ -303,6 +303,43 @@ test("keeps the full plan visible while waiting for quota", async () => {
   assert.equal(stored?.tasks.every((task) => task.status === "blocked"), true);
 });
 
+test("preserves a 39-unit roadmap and exposes the current 6-unit batch", async () => {
+  const seed = validPlan().tasks[0]!;
+  const plan: OrchestratorPlan = {
+    title: "Large roadmap",
+    summary: "Keep every requested milestone.",
+    tasks: [
+      ...Array.from({ length: 6 }, (_, index) => ({
+        ...seed,
+        id: `large-${index + 1}`,
+        title: `Large ${index + 1}`,
+        size: "large" as const,
+        priority: index === 1 ? "critical" as const : "normal" as const,
+        splittable: false,
+        expectedFiles: [`src/large-${index + 1}.ts`],
+      })),
+      {
+        ...seed,
+        id: "medium-1",
+        title: "Medium 1",
+        size: "medium",
+        priority: "normal",
+        splittable: false,
+        expectedFiles: ["src/medium-1.ts"],
+      },
+    ],
+  };
+  const h = await harness([JSON.stringify({ structured_output: plan })], {
+    official: { claude: 60, codex: 0, grok: 0 },
+  });
+
+  const draft = await analyzePlan(h.request, h.dependencies);
+  assert.equal(draft.plan.tasks.length, 7);
+  assert.deepEqual(draft.runnableTasks?.map((task) => task.id), ["large-2"]);
+  assert.equal(draft.deferredTasks?.length, 6);
+  assert.equal((await h.store.get(draft.runId))?.status, "partial_ready");
+});
+
 test("rejects forged or non-finite quota evidence before running a native planner", async () => {
   const h = await harness([JSON.stringify({ structured_output: validPlan() })]);
   h.request.quotaEvidence.claude.officialRemainingPct = Number.NaN;
@@ -367,4 +404,68 @@ test("refreshes quota after planning before assigning execution work", async () 
   assert.deepEqual(draft.assignedTasks, []);
   assert.equal(draft.quotaSnapshot?.evidence.codex.officialRemainingPct, 0);
   assert.equal((await h.store.get(draft.runId))?.status, "waiting_quota");
+});
+
+test("performs at most one bounded split of an oversized splittable task", async () => {
+  const original = validPlan();
+  original.tasks[0] = {
+    ...original.tasks[0]!,
+    size: "large",
+    splittable: true,
+    priority: "critical",
+  };
+  const split: OrchestratorPlan = {
+    ...original,
+    tasks: [
+      {
+        ...original.tasks[0]!,
+        id: "api-contract",
+        title: "API contract",
+        size: "medium",
+        expectedFiles: ["src/api/contract.ts"],
+      },
+      {
+        ...original.tasks[0]!,
+        id: "api-handler",
+        title: "API handler",
+        size: "medium",
+        dependsOn: ["api-contract"],
+        expectedFiles: ["src/api/index.ts"],
+      },
+      original.tasks[1]!,
+    ],
+  };
+  const h = await harness([
+    JSON.stringify({ structured_output: original }),
+    JSON.stringify({ structured_output: split }),
+  ], { official: { claude: 50, codex: 0, grok: 0 } });
+
+  const draft = await analyzePlan(h.request, h.dependencies);
+  assert.equal(h.calls.length, 2);
+  assert.match(h.calls[1]!.prompt, /split|拆分/i);
+  assert.equal(draft.plan.tasks.some((task) => task.id === "api"), false);
+  assert.equal(draft.plan.tasks.some((task) => task.id === "api-contract"), true);
+  assert.deepEqual(
+    (await h.store.activities({ role: "planning", limit: 20 })).map((item) => item.success),
+    [true, true],
+  );
+});
+
+test("does not loop when the one bounded split attempt remains oversized", async () => {
+  const original = validPlan();
+  original.tasks[0] = {
+    ...original.tasks[0]!, size: "large", splittable: true, priority: "critical",
+  };
+  const encoded = JSON.stringify({ structured_output: original });
+  const h = await harness([encoded, encoded], {
+    official: { claude: 50, codex: 0, grok: 0 },
+  });
+
+  const draft = await analyzePlan(h.request, h.dependencies);
+  assert.equal(h.calls.length, 2);
+  assert.equal(draft.plan.tasks.some((task) => task.id === "api" && task.size === "large"), true);
+  assert.deepEqual(
+    (await h.store.activities({ role: "planning", limit: 20 })).map((item) => item.success),
+    [true, false],
+  );
 });

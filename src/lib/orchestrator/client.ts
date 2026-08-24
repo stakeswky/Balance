@@ -4,6 +4,7 @@ import {
   cancelOrchestratorRun,
   getOrchestratorRun,
   listOrchestratorRuns,
+  refreshAndContinueOrchestratorRun,
   startOrchestratorRun,
   validateRepository,
 } from "./actions.ts";
@@ -20,6 +21,7 @@ import type {
 } from "./types.ts";
 import type { OfficialSlice } from "../quota/official.ts";
 import type { QuotaValue } from "../quota/quota-value.ts";
+import { QUOTA_SNAPSHOT_MAX_AGE_MS } from "./quota-policy.ts";
 
 const TERMINAL_STATUSES = new Set<RunStatus>([
   "completed",
@@ -27,6 +29,7 @@ const TERMINAL_STATUSES = new Set<RunStatus>([
   "cancelled",
   "interrupted",
   "capacity_blocked",
+  "unschedulable",
 ]);
 
 const POLLED_STATUSES = new Set<RunStatus>([
@@ -37,7 +40,7 @@ const POLLED_STATUSES = new Set<RunStatus>([
   "verifying",
 ]);
 
-type LoadingOperation = "history" | "validate" | "analyze" | "start" | "cancel" | "select";
+type LoadingOperation = "history" | "validate" | "analyze" | "start" | "continue" | "cancel" | "select";
 
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -87,7 +90,8 @@ export function buildQuotaCapacityEvidence(
     officialRemainingPct: selectedOfficial ? Math.max(0, Math.min(100, 100 - selectedOfficial.used)) : null,
     officialObservedAt: selectedOfficial?.observedAt ?? null,
     officialResetsAt: selectedOfficial?.resetsAt ?? null,
-    officialFresh: selectedOfficial !== null && now - selectedOfficial.observedAt <= 5 * 60 * 1_000,
+    officialFresh: selectedOfficial !== null
+      && now - selectedOfficial.observedAt <= QUOTA_SNAPSHOT_MAX_AGE_MS,
     officialSource: selectedOfficial ? official?.source ?? "official" : null,
     l3RemainingPct,
     l3Confidence: value?.confidence ?? "none",
@@ -300,6 +304,38 @@ export function useOrchestratorController(
     }
   };
 
+  const refreshAndContinue = async (): Promise<void> => {
+    if (loading || !draft || !run) return;
+    setLoading("continue");
+    setError(null);
+    try {
+      await refreshAndContinueOrchestratorRun({
+        data: {
+          authorization,
+          runId: run.id,
+          fingerprint: draft.fingerprint,
+          trustedRepository: true,
+          confirmedRepository: {
+            path: draft.repositoryPath,
+            device: draft.repositoryDevice,
+            inode: draft.repositoryInode,
+            baseSha: draft.baseSha,
+          },
+          quotaEvidence,
+        },
+      });
+      const snapshot = await getOrchestratorRun({
+        data: { authorization, runId: run.id, afterSeq: 0 },
+      });
+      applySnapshot(snapshot, true);
+      await refreshHistory();
+    } catch (caught) {
+      setError(messageFor(caught));
+    } finally {
+      setLoading(null);
+    }
+  };
+
   const selectRun = async (runId: string): Promise<void> => {
     if (loading) return;
     setLoading("select");
@@ -339,6 +375,7 @@ export function useOrchestratorController(
     validate,
     analyze,
     start,
+    refreshAndContinue,
     cancel,
     selectRun,
   };

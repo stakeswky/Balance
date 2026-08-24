@@ -13,9 +13,55 @@ import {
   type SchedulerDependencies,
   type StartRunRequest,
 } from "./scheduler.server.ts";
-import type { OrchestratorRun, PlanDraft, TaskRunState, WorktreeRegistration } from "./types.ts";
+import type {
+  NativeAgentId,
+  OrchestratorRun,
+  PlanDraft,
+  QuotaCapacityEvidence,
+  TaskRunState,
+  WorktreeRegistration,
+} from "./types.ts";
 
 const RUN_ID = "run_20260824140000_a1b2c3d4e5f6";
+
+function quotaEvidence(agent: NativeAgentId): QuotaCapacityEvidence {
+  return {
+    officialRemainingPct: 100,
+    officialObservedAt: 1_777_000_000_000,
+    officialResetsAt: 1_777_000_060_000,
+    officialFresh: true,
+    officialSource: `${agent}-test`,
+    l3RemainingPct: null,
+    l3Confidence: "none",
+    l3ObservedAt: null,
+    l3Trusted: false,
+    computedExecutionUnits: 10,
+    admissionSource: "official",
+    diagnostics: [],
+  };
+}
+
+function agentProfiles() {
+  return (["claude", "codex", "grok"] as const).map((agent) => ({
+    agent,
+    enabled: true,
+    installed: true,
+    version: "1",
+    canPlan: true,
+    canExecute: true,
+    canRepair: true,
+    executionUnits: 10,
+    admissionSource: "official" as const,
+    planningSuccessRate: null,
+    executionSuccessRate: null,
+    repairSuccessRate: null,
+    planningRisk: null,
+    repairRisk: null,
+    exclusionReasons: [],
+    diagnostics: [],
+    reservedUnitsByOtherRuns: 0,
+  }));
+}
 
 function draft(): PlanDraft {
   const tasks = [
@@ -219,6 +265,27 @@ async function harness(initial = run()) {
     reserveWaveCapacity: reservationManager.reserveWave,
     async availableExecutionUnits() {
       return { claude: 10, codex: 10, grok: 10 };
+    },
+    async refreshSchedule(current) {
+      return {
+        selection: {
+          runnableTasks: current.draft.runnableTasks ?? current.draft.assignedTasks,
+          deferredTasks: current.draft.deferredTasks ?? [],
+          diagnostics: current.draft.scheduleDiagnostics ?? [],
+        },
+        quotaSnapshot: current.draft.quotaSnapshot ?? {
+          capturedAt: 1_777_000_000_000,
+          evidence: {
+            claude: quotaEvidence("claude"),
+            codex: quotaEvidence("codex"),
+            grok: quotaEvidence("grok"),
+          },
+        },
+        agentProfiles: agentProfiles(),
+      };
+    },
+    async repairAgentFor(current) {
+      return current.coordinator;
     },
     async prepareAgentCommand(input) {
       return { command: input.command, secrets: [], cleanup: async () => undefined };
@@ -494,9 +561,115 @@ test("integrates a partial batch without discarding deferred plan tasks", async 
   assert.equal(completed.tasks.find((task) => task.id === "ui")?.status, "blocked");
   assert.equal(completed.draft.plan.tasks.length, 3);
   assert.deepEqual(h.calls.filter((call) => call.startsWith("pick-task:")), ["pick-task:core"]);
+
+  h.dependencies.refreshSchedule = async (current) => {
+    const ui = current.draft.plan.tasks.find((task) => task.id === "ui")!;
+    return {
+      selection: {
+        runnableTasks: [{ ...ui, assignedAgent: "codex" }],
+        deferredTasks: [{
+          taskId: "finish", reason: "quota", blockedBy: [], requiredUnits: 1,
+          eligibleAgents: ["claude"], eligibleAfter: current.updatedAt + 60_000,
+        }],
+        diagnostics: ["继续执行 UI，延后 finish。"],
+      },
+      quotaSnapshot: current.draft.quotaSnapshot!,
+      agentProfiles: agentProfiles(),
+    };
+  };
+  const continued = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(continued.status, "partial_completed", JSON.stringify({
+    error: continued.error,
+    tasks: continued.tasks.map((task) => ({ id: task.id, status: task.status, error: task.error })),
+    calls: h.calls,
+  }));
+  assert.equal(continued.tasks.find((task) => task.id === "core")?.status, "completed");
+  assert.equal(continued.tasks.find((task) => task.id === "ui")?.status, "completed");
+  assert.equal(h.calls.filter((call) => call === "create:integration").length, 1);
+  assert.equal(h.calls.filter((call) => call === "create:core").length, 1);
+  assert.equal(h.calls.filter((call) => call === "create:ui").length, 1);
 });
 
-test("a nonzero native process fails its task and blocks dependents without commit", async () => {
+test("revalidates a dropped quota at start and waits without launching an Agent", async () => {
+  const h = await harness();
+  h.dependencies.refreshSchedule = async (current) => ({
+    selection: {
+      runnableTasks: [],
+      deferredTasks: current.draft.plan.tasks.map((task) => ({
+        taskId: task.id,
+        reason: "quota" as const,
+        blockedBy: [],
+        requiredUnits: 1,
+        eligibleAgents: ["codex" as const],
+        eligibleAfter: current.createdAt + 60_000,
+      })),
+      diagnostics: ["开始前官方额度下降，等待刷新。"],
+    },
+    quotaSnapshot: {
+      capturedAt: current.createdAt + 1,
+      evidence: {
+        claude: { ...quotaEvidence("claude"), officialRemainingPct: 0, computedExecutionUnits: 0 },
+        codex: { ...quotaEvidence("codex"), officialRemainingPct: 0, computedExecutionUnits: 0 },
+        grok: { ...quotaEvidence("grok"), officialRemainingPct: 0, computedExecutionUnits: 0 },
+      },
+    },
+    agentProfiles: agentProfiles().map((profile) => ({
+      ...profile, canExecute: false, canRepair: false, executionUnits: 0,
+    })),
+  });
+
+  const waiting = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(waiting.status, "waiting_quota");
+  assert.equal(waiting.draft.plan.tasks.length, 3);
+  assert.equal(waiting.draft.runnableTasks?.length, 0);
+  assert.equal(waiting.tasks.every((task) => task.status === "blocked"), true);
+  assert.equal(h.calls.some((call) => call === "create:integration"), false);
+  assert.equal(h.calls.some((call) => call.startsWith("start:")), false);
+  assert.equal(h.reservationManager.snapshot().active, 0);
+});
+
+test("turns a cross-run reservation conflict into a resumable wait", async () => {
+  const h = await harness();
+  const held = await h.reservationManager.reserveWave({
+    runId: "another-run",
+    waveId: "wave-1",
+    requests: { codex: 10 },
+    availableUnits: { claude: 10, codex: 10, grok: 10 },
+    signal: new AbortController().signal,
+  });
+
+  const waiting = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(waiting.status, "waiting_quota");
+  assert.equal(waiting.draft.plan.tasks.length, 3);
+  assert.equal(waiting.draft.deferredTasks?.every(
+    (task) => task.reason === "reservation_conflict",
+  ), true);
+  assert.equal(h.calls.some((call) => call.startsWith("start:")), false);
+  assert.equal(h.reservationManager.snapshot().active, 1);
+  await held.release();
+  assert.equal(h.reservationManager.snapshot().active, 0);
+});
+
+test("rechecks quota before every dependency wave and preserves prior integrations", async () => {
+  const h = await harness();
+  let checks = 0;
+  h.dependencies.availableExecutionUnits = async () => {
+    checks += 1;
+    return checks === 1
+      ? { claude: 10, codex: 10, grok: 10 }
+      : { claude: 0, codex: 10, grok: 10 };
+  };
+
+  const waiting = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(waiting.status, "waiting_quota");
+  assert.equal(waiting.tasks.find((task) => task.id === "core")?.status, "completed");
+  assert.equal(waiting.tasks.find((task) => task.id === "ui")?.status, "completed");
+  assert.equal(waiting.tasks.find((task) => task.id === "finish")?.status, "blocked");
+  assert.equal(waiting.draft.deferredTasks?.find((task) => task.taskId === "finish")?.reason, "quota");
+  assert.equal(h.calls.some((call) => call === "start:finish:claude"), false);
+});
+
+test("a nonzero native process preserves independently integrated work as partial success", async () => {
   const h = await harness();
   h.dependencies.startProcess = (input) => {
     const taskId = input.command.cwd.split("/").at(-1)!;
@@ -508,8 +681,9 @@ test("a nonzero native process fails its task and blocks dependents without comm
     };
   };
   const result = await (await scheduleRun(h.request, h.dependencies)).completion;
-  assert.equal(result.status, "failed");
+  assert.equal(result.status, "partial_completed");
   assert.equal(result.tasks.find((task) => task.id === "core")?.status, "failed");
+  assert.equal(result.tasks.find((task) => task.id === "ui")?.status, "completed");
   assert.equal(result.tasks.find((task) => task.id === "finish")?.status, "blocked");
   assert.equal(
     h.calls.some((call) => call === "commit:balance(core): Core"),
@@ -596,7 +770,7 @@ test("interrupt stops in-flight processes but persists an interrupted read-only 
   assert.equal([...h.controllers.keys()].includes("finish"), false);
 });
 
-test("aborts a cherry-pick conflict and gives the coordinator one verified repair attempt", async () => {
+test("aborts a cherry-pick conflict and gives an eligible repair Agent one verified attempt", async () => {
   const h = await harness();
   let pickCount = 0;
   let conflictStarts = 0;
@@ -608,6 +782,7 @@ test("aborts a cherry-pick conflict and gives the coordinator one verified repai
     if (pickCount === 2) throw new Error("CONFLICT");
   };
   h.dependencies.conflictedFiles = async () => ["ui.ts", "shared.ts"];
+  h.dependencies.repairAgentFor = async () => "codex";
   h.dependencies.startProcess = (input) => {
     if (input.command.cwd.endsWith("/integration")) {
       conflictStarts += 1;
@@ -630,7 +805,7 @@ test("aborts a cherry-pick conflict and gives the coordinator one verified repai
   assert.equal(result.status, "completed");
   assert.equal(conflictStarts, 1);
   assert.equal(
-    h.calls.filter((call) => call === "lease:got:repair:claude:conflict:ui").length,
+    h.calls.filter((call) => call === "lease:got:repair:codex:conflict:ui").length,
     1,
   );
   assert.match(conflictPrompt, /ui\.ts/);

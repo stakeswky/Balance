@@ -126,6 +126,12 @@ test("valid analyze, start and incremental event requests retain their safe fiel
   });
   assert.equal(start.trustedRepository, true);
 
+  const continuation = orchestratorActionInputSchemas.continueRun.parse({
+    ...start,
+    quotaEvidence: { claude: quotaEvidence, codex: quotaEvidence, grok: quotaEvidence },
+  });
+  assert.equal(continuation.quotaEvidence.codex.officialRemainingPct, 50);
+
   const get = orchestratorActionInputSchemas.getRun.parse({ authorization, runId, afterSeq: 12 });
   assert.equal(get.afterSeq, 12);
   assert.throws(() =>
@@ -133,13 +139,13 @@ test("valid analyze, start and incremental event requests retain their safe fiel
   );
 });
 
-test("all nine orchestration actions are POST-only and invoke the combined guard", async () => {
+test("all ten orchestration actions are POST-only and invoke the combined guard", async () => {
   const source = await readFile(new URL("./actions.ts", import.meta.url), "utf8");
   const guardSource = await readFile(new URL("./request-guard.server.ts", import.meta.url), "utf8");
   const postActions = source.match(/createServerFn\(\{ method: "POST" \}\)/g) ?? [];
   const guards = source.match(/assertOrchestratorRequestAllowed\(data\.authorization\)/g) ?? [];
-  assert.equal(postActions.length, 9);
-  assert.equal(guards.length, 9);
+  assert.equal(postActions.length, 10);
+  assert.equal(guards.length, 10);
   for (const name of [
     "getNativeAgentSettings",
     "saveNativeAgentSettings",
@@ -147,6 +153,7 @@ test("all nine orchestration actions are POST-only and invoke the combined guard
     "validateRepository",
     "analyzeOrchestratorPlan",
     "startOrchestratorRun",
+    "refreshAndContinueOrchestratorRun",
     "getOrchestratorRun",
     "cancelOrchestratorRun",
     "listOrchestratorRuns",

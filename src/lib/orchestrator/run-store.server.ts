@@ -12,6 +12,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { redactAgentOutput } from "./adapters.ts";
 import { parseOrchestratorPlan } from "./plan.ts";
@@ -118,6 +119,26 @@ const deferredTaskSchema = z.object({
   eligibleAgents: z.array(agentSchema).max(3),
   eligibleAfter: timestampSchema.nullable(),
 }).strict();
+const nullableRateSchema = z.number().finite().min(0).max(1).nullable();
+const agentRoleSnapshotSchema = z.object({
+  agent: agentSchema,
+  enabled: z.boolean(),
+  installed: z.boolean(),
+  version: z.string().min(1).max(1_000).nullable(),
+  canPlan: z.boolean(),
+  canExecute: z.boolean(),
+  canRepair: z.boolean(),
+  executionUnits: z.number().int().nonnegative().max(10).safe(),
+  admissionSource: z.enum(["official", "l3-fallback", "unknown-allowed", "excluded"]),
+  planningSuccessRate: nullableRateSchema,
+  executionSuccessRate: nullableRateSchema,
+  repairSuccessRate: nullableRateSchema,
+  planningRisk: z.string().min(1).max(4_000).nullable(),
+  repairRisk: z.string().min(1).max(4_000).nullable(),
+  exclusionReasons: z.array(z.string().min(1).max(4_000)).max(100),
+  diagnostics: z.array(z.string().min(1).max(4_000)).max(100),
+  reservedUnitsByOtherRuns: z.number().int().nonnegative().safe(),
+}).strict();
 const planDraftSchema = z.object({
   runId: z.string().regex(RUN_ID),
   repositoryPath: z.string().min(1).max(4_096).refine(isAbsolute),
@@ -135,6 +156,7 @@ const planDraftSchema = z.object({
   scheduleDiagnostics: z.array(z.string().min(1).max(4_000)).max(100).optional(),
   legacyCompatibility: z.string().min(1).max(4_000).optional(),
   quotaSnapshot: quotaSnapshotSchema.optional(),
+  agentProfiles: z.array(agentRoleSnapshotSchema).max(3).optional(),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   createdAt: timestampSchema,
 }).strict();
@@ -197,7 +219,7 @@ const runSchema: z.ZodType<OrchestratorRun> = z.object({
   const planById = new Map(run.draft.plan.tasks.map((task) => [task.id, task]));
   run.draft.assignedTasks.forEach((assigned, index) => {
     const { assignedAgent: _assignedAgent, ...base } = assigned;
-    if (JSON.stringify(base) !== JSON.stringify(planById.get(assigned.id))) {
+    if (!isDeepStrictEqual(base, planById.get(assigned.id))) {
       context.addIssue({
         code: "custom",
         path: ["draft", "assignedTasks", index],
@@ -217,12 +239,19 @@ const runSchema: z.ZodType<OrchestratorRun> = z.object({
       assignedAgent,
       ...base
     } = state;
-    const expectedAssignment = assignmentById.get(state.id) ?? null;
-    if (JSON.stringify(base) !== JSON.stringify(planById.get(state.id)) || assignedAgent !== expectedAssignment) {
+    const currentAssignment = assignmentById.get(state.id);
+    const validHistoricalAssignment = currentAssignment === undefined
+      && ["completed", "failed", "cancelled", "interrupted"].includes(state.status)
+      && assignedAgent !== null;
+    const assignmentMatches = validHistoricalAssignment
+      || assignedAgent === (currentAssignment ?? null);
+    if (!isDeepStrictEqual(base, planById.get(state.id)) || !assignmentMatches) {
       context.addIssue({
         code: "custom",
         path: ["tasks", index],
-        message: "task state content must match its assignment",
+        message: !assignmentMatches
+          ? `task assignment mismatch for ${state.id}: current=${String(currentAssignment)}, state=${String(assignedAgent)}, status=${state.status}, historical=${validHistoricalAssignment}`
+          : `task plan content mismatch for ${state.id}`,
       });
     }
   });

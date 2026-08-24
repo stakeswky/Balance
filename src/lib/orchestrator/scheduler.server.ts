@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildExecuteCommand, type AgentCommand } from "./adapters.ts";
 import type { AgentLease, AgentLeaseManager } from "./agent-lease.server.ts";
-import type {
-  CapacityReservation,
-  CapacityReservationManager,
+import {
+  CapacityReservationConflictError,
+  type CapacityReservation,
+  type CapacityReservationManager,
 } from "./capacity-reservation.server.ts";
 import { TASK_UNITS } from "./capacity.ts";
 import type {
@@ -27,9 +28,12 @@ import type {
 import type { RunStore } from "./run-store.server.ts";
 import type {
   AgentRuntimeProbe,
+  AgentRoleSnapshot,
   NativeAgentId,
   OrchestratorEvent,
   OrchestratorRun,
+  QuotaSnapshot,
+  ScheduleSelection,
   TaskRunState,
   VerificationCommand,
   WorktreeRegistration,
@@ -67,6 +71,12 @@ export interface SchedulerDependencies {
   acquireAgentLease: AgentLeaseManager["acquire"];
   reserveWaveCapacity: CapacityReservationManager["reserveWave"];
   availableExecutionUnits(run: OrchestratorRun): Promise<Record<NativeAgentId, number>>;
+  refreshSchedule(run: OrchestratorRun): Promise<{
+    selection: ScheduleSelection;
+    quotaSnapshot: QuotaSnapshot;
+    agentProfiles: AgentRoleSnapshot[];
+  }>;
+  repairAgentFor(run: OrchestratorRun): Promise<NativeAgentId>;
   runtimeFor(agent: NativeAgentId): Promise<AgentRuntimeProbe>;
   startProcess(input: Parameters<typeof startAgentProcess>[0]): RunningProcess;
   runVerification(input: {
@@ -152,6 +162,60 @@ function assertCurrentRepository(run: OrchestratorRun, current: RepositorySnapsh
   }
 }
 
+function statusForSelection(run: OrchestratorRun, selection: ScheduleSelection): OrchestratorRun["status"] {
+  const completedCount = run.tasks.filter((task) => task.status === "completed").length;
+  const remainingCount = run.draft.plan.tasks.length - completedCount;
+  if (remainingCount === 0) return "completed";
+  if (selection.runnableTasks.length === 0) {
+    return selection.deferredTasks.some((task) => task.reason === "task_too_large")
+      ? "unschedulable"
+      : "waiting_quota";
+  }
+  return selection.runnableTasks.length === remainingCount && completedCount === 0
+    ? "draft"
+    : "partial_ready";
+}
+
+function applyScheduleRefresh(
+  run: OrchestratorRun,
+  selection: ScheduleSelection,
+  quotaSnapshot: QuotaSnapshot,
+  agentProfiles: AgentRoleSnapshot[],
+  now: number,
+): OrchestratorRun {
+  const assignments = new Map(selection.runnableTasks.map((task) => [task.id, task.assignedAgent]));
+  const completed = new Set(run.tasks.filter((task) => task.status === "completed").map((task) => task.id));
+  return {
+    ...run,
+    status: statusForSelection(run, selection),
+    error: selection.deferredTasks.length > 0 ? selection.diagnostics.join("\n").slice(0, 20_000) : null,
+    draft: {
+      ...run.draft,
+      assignedTasks: selection.runnableTasks,
+      runnableTasks: selection.runnableTasks,
+      deferredTasks: selection.deferredTasks,
+      scheduleDiagnostics: selection.diagnostics,
+      quotaSnapshot,
+      agentProfiles,
+    },
+    tasks: run.tasks.map((task) => {
+      if (completed.has(task.id)) return task;
+      const assignedAgent = assignments.get(task.id) ?? null;
+      return {
+        ...task,
+        assignedAgent,
+        status: assignedAgent ? "queued" : "blocked",
+        worktree: null,
+        commitSha: null,
+        error: null,
+        startedAt: null,
+        finishedAt: null,
+      };
+    }),
+    updatedAt: Math.max(now, run.updatedAt + 1),
+  };
+}
+
 const execFileAsync = promisify(execFile);
 
 async function defaultConflictedFiles(integrationPath: string): Promise<string[]> {
@@ -196,6 +260,7 @@ export async function resolveIntegrationConflict(
     commitSha: string;
     integrationPath: string;
     conflictFiles: readonly string[];
+    repairAgent: NativeAgentId;
     signal: AbortSignal;
   },
   dependencies: SchedulerDependencies,
@@ -203,12 +268,12 @@ export async function resolveIntegrationConflict(
   const task = input.run.tasks.find((candidate) => candidate.id === input.taskId);
   if (!task) throw new Error(`conflict task not found: ${input.taskId}`);
   if (input.signal.aborted) throw new CancelledError();
-  const runtime = await dependencies.runtimeFor(input.run.coordinator);
+  const runtime = await dependencies.runtimeFor(input.repairAgent);
   if (!runtime.ok || !runtime.path)
-    throw new Error("coordinator native CLI is unavailable for conflict repair");
+    throw new Error("selected native CLI is unavailable for conflict repair");
   const conflictTask = {
     ...task,
-    assignedAgent: input.run.coordinator,
+    assignedAgent: input.repairAgent,
     description: [
       "Resolve exactly one integration conflict after the failed cherry-pick was aborted.",
       `Original task: ${task.title} — ${task.description}`,
@@ -220,14 +285,14 @@ export async function resolveIntegrationConflict(
     expectedFiles: input.conflictFiles.length > 0 ? [...input.conflictFiles] : task.expectedFiles,
   };
   const baseCommand = buildExecuteCommand({
-    agent: input.run.coordinator,
+    agent: input.repairAgent,
     binaryPath: runtime.path,
     worktreePath: input.integrationPath,
     task: conflictTask,
   });
   const prepared = await dependencies.prepareAgentCommand({
     command: baseCommand,
-    agent: input.run.coordinator,
+    agent: input.repairAgent,
     runId: input.run.id,
     taskId: `conflict:${input.taskId}`,
   });
@@ -240,12 +305,12 @@ export async function resolveIntegrationConflict(
     capacityReservation = await dependencies.reserveWaveCapacity({
       runId: input.run.id,
       waveId: `repair-${input.taskId}`,
-      requests: { [input.run.coordinator]: 1 },
+      requests: { [input.repairAgent]: 1 },
       availableUnits: await dependencies.availableExecutionUnits(input.run),
       signal: input.signal,
     });
     lease = await dependencies.acquireAgentLease({
-      agent: input.run.coordinator,
+      agent: input.repairAgent,
       runId: input.run.id,
       taskId: `conflict:${input.taskId}`,
       role: "repair",
@@ -253,7 +318,7 @@ export async function resolveIntegrationConflict(
     });
     const process = dependencies.startProcess({
       command: prepared.command,
-      agent: input.run.coordinator,
+      agent: input.repairAgent,
       signal: input.signal,
       secrets: prepared.secrets,
       async onEvent(event) {
@@ -261,7 +326,7 @@ export async function resolveIntegrationConflict(
         await dependencies.store.appendEvent({
           runId: input.run.id,
           taskId: input.taskId,
-          agent: input.run.coordinator,
+          agent: input.repairAgent,
           at: dependencies.now(),
           event,
         });
@@ -299,7 +364,7 @@ export async function resolveIntegrationConflict(
           await dependencies.store.appendActivity({
             runId: input.run.id,
             taskId: input.taskId,
-            agent: input.run.coordinator,
+            agent: input.repairAgent,
             role: "repair",
             startedAt,
             finishedAt: Math.max(dependencies.now(), startedAt),
@@ -318,21 +383,37 @@ export async function scheduleRun(
   request: StartRunRequest,
   dependencies: SchedulerDependencies,
 ): Promise<ScheduleHandle> {
-  const initial = await dependencies.store.get(request.runId);
+  let initial = await dependencies.store.get(request.runId);
   if (!initial) throw new Error(`orchestrator run not found: ${request.runId}`);
   if (initial.status === "capacity_blocked") throw new Error("capacity_blocked plans cannot start");
-  if (initial.status !== "draft" && initial.status !== "partial_ready") {
+  if (!["draft", "partial_ready", "waiting_quota", "partial_completed"].includes(initial.status)) {
     throw new Error(`run cannot start from ${initial.status}`);
   }
   assertStartRequest(request, initial);
   const repository = await dependencies.inspectRepository(initial.repositoryPath, "execute");
   assertCurrentRepository(initial, repository);
-  await dependencies.store.update(initial.id, (run) => ({
+  const refreshed = await dependencies.refreshSchedule(initial);
+  let scheduled = await dependencies.store.update(initial.id, (run) => applyScheduleRefresh(
+    run,
+    refreshed.selection,
+    refreshed.quotaSnapshot,
+    refreshed.agentProfiles,
+    dependencies.now(),
+  ));
+  if (scheduled.status === "waiting_quota" || scheduled.status === "unschedulable") {
+    return {
+      completion: Promise.resolve(scheduled),
+      cancel: async () => undefined,
+      interrupt: async () => undefined,
+    };
+  }
+  scheduled = await dependencies.store.update(initial.id, (run) => ({
     ...run,
     status: "ready",
     repositoryTrustedAt: dependencies.now(),
     updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
   }));
+  initial = scheduled;
 
   let cancelRequested = false;
   let interruptRequested = false;
@@ -555,19 +636,26 @@ export async function scheduleRun(
         status: "running",
         updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
       }));
-      const integration = await dependencies.createIntegrationWorktree({
+      const integration = initial.integrationWorktree ?? await dependencies.createIntegrationWorktree({
         repository,
         runId: request.runId,
         stateRoot: dependencies.stateRoot,
       });
-      await update((run) => ({
-        ...run,
-        integrationWorktree: integration,
-        resultBranch: integration.branch,
-        updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
-      }));
-      const integrated = new Set<string>();
-      const pending = new Set(initial.tasks.filter(hasAssignedAgent).map((task) => task.id));
+      if (!initial.integrationWorktree) {
+        await update((run) => ({
+          ...run,
+          integrationWorktree: integration,
+          resultBranch: integration.branch,
+          updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+        }));
+      }
+      const integrated = new Set(initial.tasks
+        .filter((task) => task.status === "completed")
+        .map((task) => task.id));
+      const pending = new Set(initial.tasks
+        .filter(hasAssignedAgent)
+        .filter((task) => task.status === "queued")
+        .map((task) => task.id));
       const maxConcurrency = dependencies.maxConcurrency ?? 3;
       let waveNumber = 0;
       while (pending.size > 0) {
@@ -592,13 +680,63 @@ export async function scheduleRun(
           totals[task.assignedAgent] = (totals[task.assignedAgent] ?? 0) + TASK_UNITS[task.size];
           return totals;
         }, {});
-        const reservation = await dependencies.reserveWaveCapacity({
-          runId: request.runId,
-          waveId: `wave-${waveNumber}`,
-          requests,
-          availableUnits: await dependencies.availableExecutionUnits(currentBeforeWave),
-          signal: runController.signal,
-        });
+        let reservation: CapacityReservation;
+        try {
+          reservation = await dependencies.reserveWaveCapacity({
+            runId: request.runId,
+            waveId: `wave-${waveNumber}`,
+            requests,
+            availableUnits: await dependencies.availableExecutionUnits(currentBeforeWave),
+            signal: runController.signal,
+          });
+        } catch (error) {
+          if (!(error instanceof CapacityReservationConflictError)) throw error;
+          const conflictAgents = error.conflicts.map((conflict) => conflict.agent);
+          const hasOtherRunReservation = error.conflicts.some(
+            (conflict) => conflict.reservedByOtherRuns > 0,
+          );
+          const waiting = await update((run) => {
+            const completedIds = new Set(run.tasks
+              .filter((task) => task.status === "completed")
+              .map((task) => task.id));
+            const deferredTasks = run.draft.plan.tasks
+              .filter((task) => !completedIds.has(task.id))
+              .map((task) => ({
+                taskId: task.id,
+                reason: hasOtherRunReservation ? "reservation_conflict" as const : "quota" as const,
+                blockedBy: task.dependsOn.filter((dependency) => !completedIds.has(dependency)),
+                requiredUnits: TASK_UNITS[task.size],
+                eligibleAgents: conflictAgents,
+                eligibleAfter: null,
+              }));
+            const diagnostics = [
+              hasOtherRunReservation
+                ? "其他运行正在使用本批所需的 Agent 软容量；没有启动新的原生 Agent。"
+                : "本波启动前官方额度已下降；没有按旧快照启动原生 Agent。",
+              ...error.conflicts.map((conflict) => (
+                `${conflict.agent}: 需要 ${conflict.requestedUnits}，扣除其他运行预订后可用 ${conflict.availableUnits}。`
+              )),
+            ];
+            return {
+              ...run,
+              status: "waiting_quota",
+              error: diagnostics.join("\n"),
+              draft: {
+                ...run.draft,
+                assignedTasks: [],
+                runnableTasks: [],
+                deferredTasks,
+                scheduleDiagnostics: diagnostics,
+              },
+              tasks: run.tasks.map((task) => completedIds.has(task.id)
+                ? task
+                : { ...task, assignedAgent: null, status: "blocked" }),
+              updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+            };
+          });
+          terminal = true;
+          return waiting;
+        }
         let results: PromiseSettledResult<void>[];
         try {
           results = await Promise.allSettled(
@@ -640,6 +778,7 @@ export async function scheduleRun(
               const conflictController = new AbortController();
               taskControllers.set(`conflict:${task.id}`, conflictController);
               try {
+                const repairAgent = await dependencies.repairAgentFor(current);
                 await resolveIntegrationConflict(
                   {
                     run: current,
@@ -647,6 +786,7 @@ export async function scheduleRun(
                     commitSha: state.commitSha,
                     integrationPath: current.integrationWorktree.path,
                     conflictFiles: conflicts,
+                    repairAgent,
                     signal: conflictController.signal,
                   },
                   dependencies,
@@ -672,7 +812,7 @@ export async function scheduleRun(
           if (failure instanceof CancelledError || cancelRequested) throw new CancelledError();
           await update((run) => ({
             ...run,
-            status: "failed",
+            status: integrated.size > 0 ? "partial_completed" : "failed",
             error: errorMessage(failure),
             tasks: run.tasks.map((task) => {
               if (pending.has(task.id) && ["queued", "blocked"].includes(task.status)) {

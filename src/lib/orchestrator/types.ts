@@ -153,6 +153,26 @@ export interface AgentSchedulingProfile extends AgentCapacity {
   diagnostics: string[];
 }
 
+export interface AgentRoleSnapshot {
+  agent: NativeAgentId;
+  enabled: boolean;
+  installed: boolean;
+  version: string | null;
+  canPlan: boolean;
+  canExecute: boolean;
+  canRepair: boolean;
+  executionUnits: number;
+  admissionSource: AgentAdmissionSource;
+  planningSuccessRate: number | null;
+  executionSuccessRate: number | null;
+  repairSuccessRate: number | null;
+  planningRisk: string | null;
+  repairRisk: string | null;
+  exclusionReasons: string[];
+  diagnostics: string[];
+  reservedUnitsByOtherRuns: number;
+}
+
 export interface OrchestratorTaskPlan {
   id: string;
   title: string;
@@ -217,6 +237,7 @@ export interface PlanDraft {
   scheduleDiagnostics?: string[];
   legacyCompatibility?: string;
   quotaSnapshot?: QuotaSnapshot;
+  agentProfiles?: AgentRoleSnapshot[];
   fingerprint: string;
   createdAt: number;
 }

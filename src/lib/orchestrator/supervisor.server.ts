@@ -9,6 +9,8 @@ import {
 } from "./adapters.ts";
 import { createAgentLeaseManager } from "./agent-lease.server.ts";
 import { createCapacityReservationManager } from "./capacity-reservation.server.ts";
+import { selectScheduleBatch } from "./batch-selector.ts";
+import { chooseRepairAgent } from "./capacity.ts";
 import { readOfficialQuota } from "../quota/official.server.ts";
 import {
   abortCherryPick,
@@ -63,6 +65,10 @@ export interface RunSummary {
   updatedAt: number;
 }
 
+export interface ContinueRunRequest extends StartRunRequest {
+  quotaEvidence: Record<NativeAgentId, ClientQuotaEvidence>;
+}
+
 export interface OrchestratorSupervisor {
   initialize(): Promise<void>;
   getSettings(): Promise<OrchestratorSettings>;
@@ -71,6 +77,7 @@ export interface OrchestratorSupervisor {
   validateRepository(repoPath: string): Promise<RepositoryValidation>;
   analyze(input: AnalyzeRequest): Promise<PlanDraft>;
   start(input: StartRunRequest): Promise<{ runId: string }>;
+  continue(input: ContinueRunRequest): Promise<{ runId: string }>;
   get(runId: string, afterSeq?: number): Promise<RunSnapshot>;
   cancel(runId: string): Promise<OrchestratorRun>;
   list(): Promise<RunSummary[]>;
@@ -240,7 +247,10 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
     return result;
   }
 
-  async #refreshQuotaForRun(run: OrchestratorRun) {
+  async #refreshQuotaForRun(
+    run: OrchestratorRun,
+    clientEvidenceOverride?: Record<NativeAgentId, ClientQuotaEvidence>,
+  ) {
     const now = Date.now();
     const settings = await this.getSettings();
     const runtimes = await discoverNativeAgents(settings);
@@ -255,7 +265,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       l3ObservedAt: null,
     };
     const prior = run.draft.quotaSnapshot?.evidence;
-    const clientEvidence = Object.fromEntries(([
+    const clientEvidence = clientEvidenceOverride ?? Object.fromEntries(([
       "claude", "codex", "grok",
     ] as const).map((agent) => {
       const evidence = prior?.[agent];
@@ -403,10 +413,31 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   }
 
   async start(input: StartRunRequest): Promise<{ runId: string }> {
+    return this.#launch(input, null, false);
+  }
+
+  async continue(input: ContinueRunRequest): Promise<{ runId: string }> {
+    return this.#launch(input, input.quotaEvidence, true);
+  }
+
+  async #launch(
+    input: StartRunRequest,
+    clientEvidence: Record<NativeAgentId, ClientQuotaEvidence> | null,
+    idempotent: boolean,
+  ): Promise<{ runId: string }> {
     await this.initialize();
     if (this.#shutdown) throw new Error("orchestrator is shutting down");
     if (this.#active.has(input.runId) || this.#starting.has(input.runId)) {
+      if (idempotent) return { runId: input.runId };
       throw new Error("orchestrator run is already active");
+    }
+    if (idempotent) {
+      const existing = await this.#store.get(input.runId);
+      if (!existing) throw new Error(`orchestrator run not found: ${input.runId}`);
+      if (existing.status === "completed") return { runId: input.runId };
+      if (existing.status === "interrupted") {
+        throw new Error("interrupted runs are read-only and cannot continue automatically");
+      }
     }
     const settings = await this.getSettings();
     if (this.#shutdown) throw new Error("orchestrator is shutting down");
@@ -424,11 +455,51 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       acquireAgentLease: this.#agentLeases.acquire,
       reserveWaveCapacity: this.#capacityReservations.reserveWave,
       availableExecutionUnits: async (run) => {
-        const refreshed = await this.#refreshQuotaForRun(run);
+        const refreshed = await this.#refreshQuotaForRun(run, clientEvidence ?? undefined);
         return Object.fromEntries(refreshed.profiles.map((profile) => [
           profile.agent,
           profile.executionUnits,
         ])) as Record<NativeAgentId, number>;
+      },
+      refreshSchedule: async (run) => {
+        const refreshed = await this.#refreshQuotaForRun(run, clientEvidence ?? undefined);
+        const reservations = this.#capacityReservations.snapshot().reservations;
+        return {
+          selection: selectScheduleBatch({
+            tasks: run.draft.plan.tasks,
+            profiles: refreshed.profiles,
+            completedTaskIds: new Set(run.tasks
+              .filter((task) => task.status === "completed")
+              .map((task) => task.id)),
+            globalMaxConcurrency: settings.globalMaxConcurrency,
+          }),
+          quotaSnapshot: refreshed.snapshot,
+          agentProfiles: refreshed.profiles.map((profile) => ({
+            agent: profile.agent,
+            enabled: profile.enabled,
+            installed: profile.installed,
+            version: profile.version,
+            canPlan: profile.canPlan,
+            canExecute: profile.canExecute,
+            canRepair: profile.canRepair,
+            executionUnits: profile.executionUnits,
+            admissionSource: profile.admissionSource,
+            planningSuccessRate: profile.planningSuccessRate,
+            executionSuccessRate: profile.executionSuccessRate,
+            repairSuccessRate: profile.repairSuccessRate,
+            planningRisk: profile.planningRisk,
+            repairRisk: profile.repairRisk,
+            exclusionReasons: profile.exclusionReasons,
+            diagnostics: profile.diagnostics,
+            reservedUnitsByOtherRuns: reservations
+              .filter((reservation) => reservation.runId !== run.id)
+              .reduce((sum, reservation) => sum + (reservation.requests[profile.agent] ?? 0), 0),
+          })),
+        };
+      },
+      repairAgentFor: async (run) => {
+        const refreshed = await this.#refreshQuotaForRun(run, clientEvidence ?? undefined);
+        return chooseRepairAgent(refreshed.profiles, run.coordinator);
       },
       runtimeFor: (agent) => this.#runtimeFor(agent),
       startProcess: startAgentProcess,

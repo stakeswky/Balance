@@ -1,7 +1,8 @@
 import { isAbsolute } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { buildPlanCommand, extractStructuredPlan, type AgentCommand } from "./adapters.ts";
-import { chooseCoordinator } from "./capacity.ts";
+import { chooseCoordinator, TASK_UNITS } from "./capacity.ts";
 import { selectScheduleBatch } from "./batch-selector.ts";
 import type { RepositorySnapshot } from "./git.server.ts";
 import type { buildTrustedQuotaSnapshot } from "./quota-policy.ts";
@@ -20,6 +21,7 @@ import type {
   CoordinatorChoice,
   NativeAgentId,
   OrchestratorEvent,
+  OrchestratorPlan,
   OrchestratorRun,
   OrchestratorSettings,
   PlanDraft,
@@ -180,6 +182,21 @@ function planningActivity(events: readonly OrchestratorEvent[]) {
   return { sessionId, usage };
 }
 
+function boundedSplitPrompt(
+  plan: OrchestratorPlan,
+  taskIds: readonly string[],
+  maximumTaskUnits: number,
+): string {
+  return [
+    "The validated plan contains splittable tasks that exceed every Agent's current single-task capacity.",
+    `Split only these task IDs once: ${taskIds.join(", ")}.`,
+    `Every replacement task must require at most ${maximumTaskUnits} capacity units using small=1, medium=3, large=6.`,
+    "Preserve the title, summary, every unrelated task byte-for-byte in meaning and fields, and all user goals.",
+    "Return one complete replacement plan matching the strict JSON Schema. Do not modify files or request credentials.",
+    `Current plan:\n${JSON.stringify(plan)}`,
+  ].join("\n\n");
+}
+
 export async function analyzePlan(
   input: AnalyzeRequest,
   dependencies: PlannerDependencies,
@@ -300,14 +317,100 @@ export async function analyzePlan(
     if (succeeded) break;
   }
   if (!parsedPlan) throw new Error("native planning output was invalid twice; no run was created");
-  const plan = serializeOverlappingTasks(parsedPlan);
-  const executionQuota = await dependencies.refreshQuotaSnapshot({
+  let plan = serializeOverlappingTasks(parsedPlan);
+  let executionQuota = await dependencies.refreshQuotaSnapshot({
     clientEvidence: request.quotaEvidence,
     runtimes,
     settings,
     roleSuccessRates: validateSuccessRates(await dependencies.recentSuccessRates()),
     now: dependencies.now(),
   });
+  const maximumTaskUnits = Math.max(
+    0,
+    ...executionQuota.profiles
+      .filter((profile) => profile.canExecute)
+      .map((profile) => profile.executionUnits),
+  );
+  const oversizedSplittable = parsedPlan.tasks.filter((task) => (
+    task.splittable && TASK_UNITS[task.size] > maximumTaskUnits
+  ));
+  const coordinatorCanStillPlan = executionQuota.profiles.some((profile) => (
+    profile.agent === coordinator && profile.canPlan
+  ));
+  if (maximumTaskUnits > 0 && oversizedSplittable.length > 0 && coordinatorCanStillPlan) {
+    const targetIds = new Set(oversizedSplittable.map((task) => task.id));
+    const unrelated = parsedPlan.tasks.filter((task) => !targetIds.has(task.id));
+    const command = buildPlanCommand({
+      agent: coordinator,
+      binaryPath: coordinatorRuntime.path,
+      repositoryPath: repository.root,
+      prompt: boundedSplitPrompt(parsedPlan, [...targetIds], maximumTaskUnits),
+      schemaPath,
+      inlineSchema,
+    });
+    const startedAt = dependencies.now();
+    let splitEvents: OrchestratorEvent[] = [];
+    let splitSucceeded = false;
+    try {
+      const splitResult = await dependencies.runPlanCommand({
+        command,
+        agent: coordinator,
+        signal,
+        runId,
+        attempt: 2,
+      });
+      splitEvents = splitResult.events;
+      planningEvents.push(...splitEvents);
+      if (splitResult.exitCode === 0) {
+        const splitPlan = parseOrchestratorPlan(
+          extractStructuredPlan(coordinator, splitResult.stdoutLines),
+        );
+        const unchanged = unrelated.every((task) => isDeepStrictEqual(
+          splitPlan.tasks.find((candidate) => candidate.id === task.id),
+          task,
+        ));
+        const replacements = splitPlan.tasks.filter((task) => !unrelated.some(
+          (candidate) => candidate.id === task.id,
+        ));
+        const bounded = replacements.length > 0 && replacements.every((task) => (
+          TASK_UNITS[task.size] <= maximumTaskUnits
+        ));
+        if (
+          unchanged
+          && bounded
+          && splitPlan.title === parsedPlan.title
+          && splitPlan.summary === parsedPlan.summary
+        ) {
+          plan = serializeOverlappingTasks(splitPlan);
+          splitSucceeded = true;
+        }
+      }
+    } catch {
+      splitSucceeded = false;
+    }
+    const { sessionId, usage } = planningActivity(splitEvents);
+    await dependencies.store.appendActivity({
+      runId,
+      taskId: null,
+      agent: coordinator,
+      role: "planning",
+      startedAt,
+      finishedAt: Math.max(dependencies.now(), startedAt),
+      success: splitSucceeded,
+      sessionId,
+      usage,
+      events: splitEvents,
+    });
+    if (splitSucceeded) {
+      executionQuota = await dependencies.refreshQuotaSnapshot({
+        clientEvidence: request.quotaEvidence,
+        runtimes,
+        settings,
+        roleSuccessRates: validateSuccessRates(await dependencies.recentSuccessRates()),
+        now: dependencies.now(),
+      });
+    }
+  }
   const schedule = selectScheduleBatch({
     tasks: plan.tasks,
     profiles: executionQuota.profiles,
@@ -330,6 +433,25 @@ export async function analyzePlan(
     deferredTasks: schedule.deferredTasks,
     scheduleDiagnostics: schedule.diagnostics,
     quotaSnapshot: executionQuota.snapshot,
+    agentProfiles: executionQuota.profiles.map((profile) => ({
+      agent: profile.agent,
+      enabled: profile.enabled,
+      installed: profile.installed,
+      version: profile.version,
+      canPlan: profile.canPlan,
+      canExecute: profile.canExecute,
+      canRepair: profile.canRepair,
+      executionUnits: profile.executionUnits,
+      admissionSource: profile.admissionSource,
+      planningSuccessRate: profile.planningSuccessRate,
+      executionSuccessRate: profile.executionSuccessRate,
+      repairSuccessRate: profile.repairSuccessRate,
+      planningRisk: profile.planningRisk,
+      repairRisk: profile.repairRisk,
+      exclusionReasons: profile.exclusionReasons,
+      diagnostics: profile.diagnostics,
+      reservedUnitsByOtherRuns: 0,
+    })),
   };
   const draft: PlanDraft = {
     ...draftWithoutFingerprint,
