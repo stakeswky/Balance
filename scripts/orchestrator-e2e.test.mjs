@@ -11,6 +11,7 @@ test("native orchestration E2E covers success, failure, cancellation and restart
     "orchestrator-validate",
     "orchestrator-analyze",
     "orchestrator-analysis-status",
+    "orchestrator-error",
     "orchestrator-trust",
     "orchestrator-start",
     "orchestrator-cancel",
@@ -25,15 +26,24 @@ test("native orchestration E2E covers success, failure, cancellation and restart
     ".balance-plan-release",
     "正在拆解计划",
     "计划已生成，共 2 项任务",
+    "分析失败，请查看错误提示",
     "fast-analysis-visible-feedback",
     "navigation-state-preserved",
     "hang",
     "interrupted",
     "BALANCE_REAL_CLI_E2E",
+    "--no-proxy-server",
+    "--proxy-bypass-list=*",
   ]) {
     assert.match(source, new RegExp(evidence));
   }
   assert.doesNotMatch(source.toLowerCase(), new RegExp(["ge", "mini"].join("")));
+  assert.match(source, /taskEventPids\(events\)\.length >= 2/);
+  assert.match(source, /taskEventPids\(hanging\.events\)\.filter\(pidAlive\)/);
+  assert.match(source, /e2e-source-home/);
+  assert.match(source, /HOME: e2eHome/);
+  assert.match(source, /CODEX_HOME: e2eCodexHome/);
+  assert.match(source, /GROK_HOME: e2eGrokHome/);
 });
 
 test("package scripts expose orchestrator E2E and a debug native app build", async () => {

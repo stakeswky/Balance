@@ -66,6 +66,7 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
     "orchestrator-continue",
     "orchestrator-adjust-goal",
     "orchestrator-events",
+    "orchestrator-error",
     "orchestrator-history",
   ]) {
     assert.match(panel, new RegExp(`data-testid="${testId}"`));

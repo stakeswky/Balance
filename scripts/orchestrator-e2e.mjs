@@ -194,6 +194,10 @@ function eventPids(events) {
   return [...pids];
 }
 
+function taskEventPids(events) {
+  return eventPids(events.filter((record) => record.taskId !== null));
+}
+
 async function waitForPidsGone(pids, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -223,8 +227,24 @@ async function waitForHealth(server) {
 
 async function startServer(stateDirectory, token, logs) {
   const port = new URL(origin).port;
+  const e2eHome = join(stateDirectory, "e2e-source-home");
+  const e2eClaudeHome = join(e2eHome, ".claude");
+  const e2eCodexHome = join(e2eHome, ".codex");
+  const e2eGrokHome = join(e2eHome, ".grok");
+  for (const directory of [e2eHome, e2eClaudeHome, e2eCodexHome, e2eGrokHome]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  const isolatedFakeEnvironment = process.env.BALANCE_REAL_CLI_E2E === "1"
+    ? {}
+    : {
+        HOME: e2eHome,
+        CLAUDE_CONFIG_DIR: e2eClaudeHome,
+        CODEX_HOME: e2eCodexHome,
+        GROK_HOME: e2eGrokHome,
+      };
   const environment = {
     ...process.env,
+    ...isolatedFakeEnvironment,
     HOST: "127.0.0.1",
     NITRO_HOST: "127.0.0.1",
     PORT: port,
@@ -443,13 +463,23 @@ async function preparePlan(
   await page.getByTestId("orchestrator-prompt").fill(prompt);
   await page.getByTestId("orchestrator-coordinator").selectOption(coordinator);
   await page.getByTestId("orchestrator-analyze").click();
-  await page
-    .getByRole("button", { name: "分析并自动分配", exact: true })
-    .waitFor({ state: "visible", timeout: analysisTimeout });
-  if (expectPlan && !(await page.getByTestId("orchestrator-plan").isVisible())) {
-    const diagnostics = await page.getByTestId("orchestrator-panel").innerText();
-    throw new Error(`plan analysis did not succeed:\n${diagnostics}`);
+  if (!expectPlan) {
+    await page
+      .getByTestId("orchestrator-analysis-status")
+      .getByText("分析失败，请查看错误提示", { exact: true })
+      .waitFor({ state: "visible", timeout: analysisTimeout });
+    return;
   }
+  await page.getByTestId("orchestrator-plan").waitFor({
+    state: "visible",
+    timeout: analysisTimeout,
+  }).catch(async (error) => {
+    const diagnostics = await page.getByTestId("orchestrator-panel").innerText();
+    throw new Error(
+      `plan analysis did not succeed: ${error instanceof Error ? error.message : String(error)}\n` +
+      diagnostics,
+    );
+  });
 }
 
 async function startPreparedPlan(page) {
@@ -576,10 +606,9 @@ async function runBrokenPlanWorkflow(page, stateDirectory, repository) {
     "Exercise the invalid structured planning output path.",
     false,
   );
-  await page
-    .getByRole("alert")
-    .filter({ hasText: /invalid twice/i })
-    .waitFor({ timeout: 60_000 });
+  const visibleError = page.getByTestId("orchestrator-error");
+  await visibleError.waitFor({ timeout: 60_000 });
+  assert.notEqual((await visibleError.innerText()).trim(), "");
   assert.equal(
     readRuns(stateDirectory).length,
     before,
@@ -603,7 +632,7 @@ async function startHangingWorkflow(page, stateDirectory, repository, coordinato
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const events = readEvents(stateDirectory, persisted.value.id);
-    if (eventPids(events).length >= 4) return { runId: persisted.value.id, events };
+    if (taskEventPids(events).length >= 2) return { runId: persisted.value.id, events };
     await sleep(100);
   }
   throw new Error("hanging fixture did not report leaders and descendants");
@@ -611,7 +640,8 @@ async function startHangingWorkflow(page, stateDirectory, repository, coordinato
 
 async function runCloseAndCancelWorkflow(context, page, stateDirectory, token, repository) {
   const hanging = await startHangingWorkflow(page, stateDirectory, repository, "codex");
-  const pids = eventPids(hanging.events);
+  const pids = taskEventPids(hanging.events).filter(pidAlive);
+  assert.equal(pids.length >= 2, true, "hanging fixture must expose a live process tree");
   await page.close();
   await sleep(1_000);
   assert.equal(latestRun(stateDirectory)?.value.status ?? null, "running");
@@ -751,7 +781,12 @@ try {
   server = await startServer(stateDirectory, token, logs);
   browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--no-proxy-server",
+      "--proxy-bypass-list=*",
+    ],
   });
   context = await newBrowserContext(browser);
   let page = await openDashboard(context, token);

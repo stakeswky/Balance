@@ -635,7 +635,11 @@ export function OrchestratorPanel({
           ) : null}
 
           {controller.error ? (
-            <p className="rounded-xl bg-crit/10 px-3 py-3 text-sm text-crit" role="alert">
+            <p
+              className="rounded-xl bg-crit/10 px-3 py-3 text-sm text-crit"
+              data-testid="orchestrator-error"
+              role="alert"
+            >
               {controller.error}
             </p>
           ) : null}
