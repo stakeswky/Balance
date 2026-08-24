@@ -3,6 +3,7 @@ import type { AgentId } from "../quota/types.ts";
 
 export type NativeAgentId = AgentId;
 export type TaskSize = "small" | "medium" | "large";
+export type TaskPriority = "critical" | "high" | "normal";
 export type CoordinatorChoice = "auto" | NativeAgentId;
 
 export type RunStatus =
@@ -153,6 +154,8 @@ export interface OrchestratorTaskPlan {
   title: string;
   description: string;
   size: TaskSize;
+  priority: TaskPriority;
+  splittable: boolean;
   preferredAgent: NativeAgentId | null;
   dependsOn: string[];
   expectedFiles: string[];

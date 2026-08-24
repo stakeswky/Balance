@@ -99,6 +99,8 @@ const taskSchema = z
     title: z.string().trim().min(1).max(120),
     description: z.string().trim().min(1).max(4_000),
     size: z.enum(["small", "medium", "large"]),
+    priority: z.enum(["critical", "high", "normal"]),
+    splittable: z.boolean(),
     preferredAgent: z.enum(["claude", "codex", "grok"]).nullable(),
     dependsOn: z.array(z.string().regex(TASK_ID)).max(12),
     expectedFiles: z

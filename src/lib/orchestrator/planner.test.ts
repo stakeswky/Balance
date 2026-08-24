@@ -50,6 +50,8 @@ function validPlan(): OrchestratorPlan {
         title: "API",
         description: "Implement the API handler.",
         size: "small",
+        priority: "critical",
+        splittable: false,
         preferredAgent: null,
         dependsOn: [],
         expectedFiles: ["src/api/index.ts"],
@@ -61,6 +63,8 @@ function validPlan(): OrchestratorPlan {
         title: "API test",
         description: "Add API coverage.",
         size: "small",
+        priority: "high",
+        splittable: true,
         preferredAgent: "codex",
         dependsOn: [],
         expectedFiles: ["src/api/index.ts"],
@@ -213,6 +217,10 @@ test("generates a confirmable draft with server-selected coordinator and preserv
   assert.match(h.calls[0]!.prompt, /only analyze|只分析/i);
   assert.match(h.calls[0]!.prompt, /Claude.*Codex.*Grok|claude.*codex.*grok/i);
   assert.match(h.calls[0]!.prompt, /claude, codex, and grok/i);
+  assert.match(h.calls[0]!.prompt, /capacity envelope/i);
+  assert.match(h.calls[0]!.prompt, /executionUnits|execution_units/i);
+  assert.match(h.calls[0]!.prompt, /globalMaxConcurrency|global_max_concurrency/i);
+  assert.doesNotMatch(h.calls[0]!.prompt, /\/native\/(claude|codex|grok)/i);
   const stored = await h.store.get(draft.runId);
   assert.equal(stored?.status, "draft");
   assert.deepEqual(stored?.draft, draft);

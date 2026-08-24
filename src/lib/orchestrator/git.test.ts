@@ -245,6 +245,7 @@ function runWithRegistrations(
 ): OrchestratorRun {
   const baseTask = {
     id: "task-api", title: "Add API", description: "Implement it.", size: "small" as const,
+    priority: "normal" as const, splittable: false,
     preferredAgent: null, assignedAgent: "codex" as const, dependsOn: [], expectedFiles: ["src.txt"],
     acceptanceCriteria: ["works"], verificationCommands: [{ executable: "git" as const, args: ["diff", "--check"] }],
   };

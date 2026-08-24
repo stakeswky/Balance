@@ -14,6 +14,7 @@ import { clientQuotaEvidenceSchema } from "./schemas.ts";
 import type { RunStore } from "./run-store.server.ts";
 import type {
   AgentRuntimeProbe,
+  AgentSchedulingProfile,
   ClientQuotaEvidence,
   CoordinatorChoice,
   NativeAgentId,
@@ -87,12 +88,43 @@ function runIdAt(timestamp: number, randomHex: string): string {
   return `run_${compact}_${randomHex}`;
 }
 
-function plannerPrompt(userPrompt: string, repairIssues: unknown[] | null): string {
+function plannerPrompt(
+  userPrompt: string,
+  repairIssues: unknown[] | null,
+  capacityEnvelope: {
+    profiles: readonly AgentSchedulingProfile[];
+    capturedAt: number;
+    globalMaxConcurrency: number;
+  },
+): string {
+  const availableAgents = capacityEnvelope.profiles.map((profile) => ({
+    agent: profile.agent,
+    canPlan: profile.canPlan,
+    canExecute: profile.canExecute,
+    canRepair: profile.canRepair,
+    executionUnits: profile.executionUnits,
+    officialObservedAt: profile.officialObservedAt,
+    officialResetsAt: profile.officialResetsAt,
+    exclusionReasons: profile.exclusionReasons,
+  }));
+  const executable = availableAgents.filter((profile) => profile.canExecute);
   const boundary = [
     "You are the Balance planning coordinator. Only analyze the repository; do not modify files, run mutating commands, or request credentials.",
     "Return only one object matching the supplied strict JSON Schema. Create 1-12 tasks.",
-    "Every task must declare description, size, dependsOn, expectedFiles, acceptanceCriteria, structured verificationCommands, and preferredAgent.",
+    "Every task must declare description, size, priority, splittable, dependsOn, expectedFiles, acceptanceCriteria, structured verificationCommands, and preferredAgent.",
+    "Use small for a local single goal with few files and low context; medium for one complete module or independently verifiable vertical slice; large only for cross-module or high-context work that cannot be split safely.",
+    "Minimize unnecessary task count. Prefer independently verifiable vertical slices and never inflate a simple request into many medium or large tasks.",
+    "Return the complete roadmap even when current capacity cannot execute all of it. Mark priority as critical, high, or normal and mark whether each task can be safely split.",
+    "File scope, acceptance criteria, and dependencies must be explicit. preferredAgent is advisory; the deterministic local scheduler makes final assignments.",
     "The only supported Agent values are claude, codex, and grok (Claude, Codex, Grok).",
+    `Current trusted capacity envelope:\n${JSON.stringify({
+      availableAgents,
+      maximumSingleTaskUnits: Math.max(0, ...executable.map((profile) => profile.executionUnits)),
+      totalExecutionUnits: executable.reduce((sum, profile) => sum + profile.executionUnits, 0),
+      globalMaxConcurrency: capacityEnvelope.globalMaxConcurrency,
+      perAgentMaxConcurrency: 1,
+      capturedAt: capacityEnvelope.capturedAt,
+    })}`,
     "Verification commands must be necessary, deterministic, and safe to run only after explicit user confirmation.",
     `User request:\n${userPrompt}`,
   ];
@@ -188,7 +220,11 @@ export async function analyzePlan(
   let issues: unknown[] | null = null;
   const planningEvents: OrchestratorEvent[] = [];
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const prompt = plannerPrompt(request.prompt, issues);
+    const prompt = plannerPrompt(request.prompt, issues, {
+      profiles: planningQuota.profiles,
+      capturedAt: planningQuota.snapshot.capturedAt,
+      globalMaxConcurrency: settings.globalMaxConcurrency,
+    });
     const command = buildPlanCommand({
       agent: coordinator,
       binaryPath: coordinatorRuntime.path,

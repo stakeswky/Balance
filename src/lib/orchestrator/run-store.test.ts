@@ -35,6 +35,8 @@ function sampleRun(options: {
     title: "Add API",
     description: "Implement the endpoint.",
     size: "small" as const,
+    priority: "normal" as const,
+    splittable: false,
     preferredAgent: null,
     assignedAgent: "codex" as const,
     dependsOn: [],

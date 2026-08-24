@@ -61,6 +61,8 @@ const taskPlanSchema = z.object({
   title: z.string().min(1).max(120),
   description: z.string().min(1).max(4_000),
   size: z.enum(["small", "medium", "large"]),
+  priority: z.enum(["critical", "high", "normal"]),
+  splittable: z.boolean(),
   preferredAgent: agentSchema.nullable(),
   dependsOn: z.array(z.string().regex(TASK_ID)).max(12),
   expectedFiles: z.array(z.string().min(1).max(1_000)).min(1).max(100),

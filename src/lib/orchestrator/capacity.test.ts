@@ -17,7 +17,8 @@ function capacity(agent: NativeAgentId, overrides: Partial<AgentCapacity> = {}):
 
 function task(id: string, size: TaskSize, preferredAgent: NativeAgentId | null = null): OrchestratorTaskPlan {
   return {
-    id, title: id, description: `完成 ${id}`, size, preferredAgent, dependsOn: [],
+    id, title: id, description: `完成 ${id}`, size, priority: "normal", splittable: false,
+    preferredAgent, dependsOn: [],
     expectedFiles: [`src/${id}.ts`], acceptanceCriteria: [`${id} 通过`],
     verificationCommands: [{ executable: "npm", args: ["run", "test"] }],
   };

@@ -33,6 +33,8 @@ const task: AssignedTask = {
   title: "Add API",
   description: "Implement the isolated API handler.",
   size: "medium",
+  priority: "high",
+  splittable: false,
   preferredAgent: null,
   assignedAgent: "codex",
   dependsOn: [],

@@ -27,6 +27,8 @@ function validPlan(): OrchestratorPlan {
         title: "实现核心",
         description: "实现可验证的调度核心。",
         size: "medium",
+        priority: "critical",
+        splittable: false,
         dependsOn: [],
         expectedFiles: ["src/lib/orchestrator/core.ts"],
         acceptanceCriteria: ["核心单元测试通过"],
@@ -38,6 +40,8 @@ function validPlan(): OrchestratorPlan {
         title: "接入界面",
         description: "把核心状态接入调度页。",
         size: "small",
+        priority: "high",
+        splittable: true,
         dependsOn: ["core"],
         expectedFiles: ["src/components/balance/orchestrator-panel.tsx"],
         acceptanceCriteria: ["页面能显示任务状态"],
@@ -84,6 +88,18 @@ test("enforces task count, identifiers, text and required arrays", () => {
   });
   expectInvalid((value) => {
     (value.tasks as Array<Record<string, unknown>>)[0]!.verificationCommands = [];
+  });
+});
+
+test("requires explicit priority and splittable scheduling intent", () => {
+  expectInvalid((value) => {
+    delete (value.tasks as Array<Record<string, unknown>>)[0]!.priority;
+  });
+  expectInvalid((value) => {
+    (value.tasks as Array<Record<string, unknown>>)[0]!.priority = "urgent";
+  });
+  expectInvalid((value) => {
+    delete (value.tasks as Array<Record<string, unknown>>)[0]!.splittable;
   });
 });
 
