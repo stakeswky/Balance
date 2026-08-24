@@ -129,8 +129,13 @@ test("renewal keeps an active wave reserved beyond its original TTL", async () =
   );
 
   now = 1_091;
-  assert.equal(manager.snapshot().active, 0);
+  const replacement = await manager.reserveWave({
+    runId: "run-two", waveId: "wave-2", requests: { codex: 6 },
+    availableUnits: AVAILABLE, signal: new AbortController().signal,
+  });
+  assert.equal(manager.snapshot().active, 1);
   await assert.rejects(() => first.renew(), /expired|active|released/i);
+  await replacement.release();
 });
 
 test("rejects invalid units and a changed duplicate request", async () => {
