@@ -17,9 +17,44 @@ async function waitForExit(child, timeoutMs = 5_000) {
   }
 }
 
+async function waitForReady(child, marker, timeoutMs = 5_000) {
+  let output = "";
+  return new Promise((resolveReady, rejectReady) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      child.kill("SIGKILL");
+      rejectReady(new Error(`watchdog child did not report readiness: ${output}`));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.stdout?.off("data", onData);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const onData = (chunk) => {
+      output += String(chunk);
+      if (!output.split(/\r?\n/).includes(marker)) return;
+      cleanup();
+      resolveReady();
+    };
+    const onError = (error) => {
+      cleanup();
+      rejectReady(error);
+    };
+    const onExit = (code, signal) => {
+      cleanup();
+      rejectReady(new Error(`watchdog child exited before readiness: ${code ?? signal}`));
+    };
+    child.stdout?.on("data", onData);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
 async function spawnHookedChild({ hook = "resolved" } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "balance-watchdog-"));
   const marker = join(directory, "shutdown.log");
+  const ready = `BALANCE_WATCHDOG_READY_${directory.split("/").at(-1)}`;
   const hookBody =
     hook === "pending"
       ? "() => new Promise(() => {})"
@@ -30,7 +65,7 @@ async function spawnHookedChild({ hook = "resolved" } = {}) {
       "--require",
       watchdog,
       "--eval",
-      `globalThis[Symbol.for("balance.orchestrator.shutdown")] = ${hookBody}; setInterval(() => {}, 1000);`,
+      `globalThis[Symbol.for("balance.orchestrator.shutdown")] = ${hookBody}; process.stdout.write(${JSON.stringify(`${ready}\n`)}); setInterval(() => {}, 1000);`,
     ],
     {
       env: {
@@ -39,10 +74,10 @@ async function spawnHookedChild({ hook = "resolved" } = {}) {
         BALANCE_WATCHDOG_TEST_TIMEOUT_MS: "100",
         NODE_ENV: "test",
       },
-      stdio: ["pipe", "ignore", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     },
   );
-  await new Promise((resolveReady) => setTimeout(resolveReady, 100));
+  await waitForReady(child, ready);
   return { child, marker };
 }
 
