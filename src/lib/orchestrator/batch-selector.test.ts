@@ -108,4 +108,21 @@ test("distinguishes planning-only, unavailable and structurally oversized tasks"
   assert.equal(oversized.runnableTasks.length, 0);
   assert.equal(oversized.deferredTasks[0]?.reason, "task_too_large");
   assert.equal(oversized.deferredTasks[0]?.eligibleAfter, null);
+
+  const unavailableProfile = {
+    ...profile("codex", 100),
+    installed: false,
+    binaryPath: null,
+    canPlan: false,
+    canExecute: false,
+    canRepair: false,
+    executionUnits: 0,
+  };
+  const unavailable = selectScheduleBatch({
+    tasks: [task("local-cli-required", "small")],
+    profiles: [unavailableProfile],
+    completedTaskIds: new Set(),
+    globalMaxConcurrency: 1,
+  });
+  assert.equal(unavailable.deferredTasks[0]?.reason, "agent_unavailable");
 });

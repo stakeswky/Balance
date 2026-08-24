@@ -131,6 +131,7 @@ export function selectScheduleBatch(input: {
     .filter((task) => !selectedIds.has(task.id))
     .map((task) => {
       const requiredUnits = TASK_UNITS[task.size];
+      const configuredAgents = AGENTS.filter((agent) => maximumAgentUnits[agent] > 0);
       const potentialAgents = AGENTS.filter((agent) => maximumAgentUnits[agent] >= requiredUnits);
       const currentAgents = input.profiles
         .filter((profile) => profile.canExecute && profile.executionUnits >= requiredUnits)
@@ -141,10 +142,12 @@ export function selectScheduleBatch(input: {
         && !selectedIds.has(dependency)
       ));
       let reason: DeferredReason;
-      if (!task.splittable && potentialAgents.length === 0) {
-        reason = "task_too_large";
-      } else if (blockedBy.length > 0) {
+      if (blockedBy.length > 0) {
         reason = "dependency";
+      } else if (configuredAgents.length === 0) {
+        reason = "agent_unavailable";
+      } else if (!task.splittable && potentialAgents.length === 0) {
+        reason = "task_too_large";
       } else if (potentialAgents.length === 0) {
         reason = "agent_unavailable";
       } else if (
