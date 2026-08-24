@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { createAgentLeaseManager } from "./agent-lease.server.ts";
+import { createCapacityReservationManager } from "./capacity-reservation.server.ts";
 import { fingerprintPlan } from "./plan.ts";
 import { createRunStore } from "./run-store.server.ts";
 import {
@@ -117,6 +118,7 @@ async function harness(initial = run()) {
   let active = 0;
   let maxActive = 0;
   const leaseManager = createAgentLeaseManager({ globalMaxConcurrency: 3 });
+  const reservationManager = createCapacityReservationManager();
   const registration = (path: string, branch: string): WorktreeRegistration => ({
     path,
     branch,
@@ -207,6 +209,10 @@ async function harness(initial = run()) {
         },
       };
     },
+    reserveWaveCapacity: reservationManager.reserveWave,
+    async availableExecutionUnits() {
+      return { claude: 10, codex: 10, grok: 10 };
+    },
     async prepareAgentCommand(input) {
       return { command: input.command, secrets: [], cleanup: async () => undefined };
     },
@@ -272,6 +278,7 @@ async function harness(initial = run()) {
     dependencies,
     request,
     leaseManager,
+    reservationManager,
     get maxActive() {
       return maxActive;
     },
@@ -436,6 +443,7 @@ test("runs dependency waves with per-agent isolation, verifies, commits, integra
     "remove:core,remove:finish,remove:ui",
   );
   assert.equal(h.calls.includes("remove:integration"), false);
+  assert.equal(h.reservationManager.snapshot().active, 0);
   const executionActivity = await h.store.activities({ role: "execution", limit: 20 });
   assert.equal(executionActivity.length, 3);
   assert.equal(executionActivity.every((record) => record.success), true);

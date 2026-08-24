@@ -3,6 +3,11 @@ import { promisify } from "node:util";
 import { buildExecuteCommand, type AgentCommand } from "./adapters.ts";
 import type { AgentLease, AgentLeaseManager } from "./agent-lease.server.ts";
 import type {
+  CapacityReservation,
+  CapacityReservationManager,
+} from "./capacity-reservation.server.ts";
+import { TASK_UNITS } from "./capacity.ts";
+import type {
   RepositorySnapshot,
   abortCherryPick,
   assertOriginalHeadUnchanged,
@@ -59,6 +64,8 @@ export interface SchedulerDependencies {
   assertOriginalHeadUnchanged: typeof assertOriginalHeadUnchanged;
   removeRegisteredWorktree: typeof removeRegisteredWorktree;
   acquireAgentLease: AgentLeaseManager["acquire"];
+  reserveWaveCapacity: CapacityReservationManager["reserveWave"];
+  availableExecutionUnits(run: OrchestratorRun): Promise<Record<NativeAgentId, number>>;
   runtimeFor(agent: NativeAgentId): Promise<AgentRuntimeProbe>;
   startProcess(input: Parameters<typeof startAgentProcess>[0]): RunningProcess;
   runVerification(input: {
@@ -218,10 +225,18 @@ export async function resolveIntegrationConflict(
     taskId: `conflict:${input.taskId}`,
   });
   let lease: AgentLease | null = null;
+  let capacityReservation: CapacityReservation | null = null;
   const startedAt = dependencies.now();
   const activityEvents: OrchestratorEvent[] = [];
   let succeeded = false;
   try {
+    capacityReservation = await dependencies.reserveWaveCapacity({
+      runId: input.run.id,
+      waveId: `repair-${input.taskId}`,
+      requests: { [input.run.coordinator]: 1 },
+      availableUnits: await dependencies.availableExecutionUnits(input.run),
+      signal: input.signal,
+    });
     lease = await dependencies.acquireAgentLease({
       agent: input.run.coordinator,
       runId: input.run.id,
@@ -270,19 +285,23 @@ export async function resolveIntegrationConflict(
       try {
         await lease?.release();
       } finally {
-        const { sessionId, usage } = summarizeAgentEvents(activityEvents);
-        await dependencies.store.appendActivity({
-          runId: input.run.id,
-          taskId: input.taskId,
-          agent: input.run.coordinator,
-          role: "repair",
-          startedAt,
-          finishedAt: Math.max(dependencies.now(), startedAt),
-          success: succeeded,
-          sessionId,
-          usage,
-          events: activityEvents,
-        });
+        try {
+          await capacityReservation?.release();
+        } finally {
+          const { sessionId, usage } = summarizeAgentEvents(activityEvents);
+          await dependencies.store.appendActivity({
+            runId: input.run.id,
+            taskId: input.taskId,
+            agent: input.run.coordinator,
+            role: "repair",
+            startedAt,
+            finishedAt: Math.max(dependencies.now(), startedAt),
+            success: succeeded,
+            sessionId,
+            usage,
+            events: activityEvents,
+          });
+        }
       }
     }
   }
@@ -311,6 +330,7 @@ export async function scheduleRun(
   let terminal = false;
   const taskControllers = new Map<string, AbortController>();
   const runningProcesses = new Map<string, RunningProcess>();
+  const runController = new AbortController();
 
   const update = (mutate: (run: OrchestratorRun) => OrchestratorRun) =>
     dependencies.store.update(request.runId, mutate);
@@ -536,6 +556,7 @@ export async function scheduleRun(
       const integrated = new Set<string>();
       const pending = new Set(initial.tasks.map((task) => task.id));
       const maxConcurrency = dependencies.maxConcurrency ?? 3;
+      let waveNumber = 0;
       while (pending.size > 0) {
         if (cancelRequested) throw new CancelledError();
         const baseSha = await dependencies.readWorktreeHead(integration.path);
@@ -550,9 +571,28 @@ export async function scheduleRun(
           )
           .slice(0, maxConcurrency);
         if (wave.length === 0) throw new Error("no runnable task remains in the dependency graph");
-        const results = await Promise.allSettled(
-          wave.map((task) => executeTask(task.id, baseSha, integration)),
-        );
+        waveNumber += 1;
+        const currentBeforeWave = await dependencies.store.get(request.runId);
+        if (!currentBeforeWave) throw new Error("run disappeared before wave reservation");
+        const requests = wave.reduce<Partial<Record<NativeAgentId, number>>>((totals, task) => {
+          totals[task.assignedAgent] = (totals[task.assignedAgent] ?? 0) + TASK_UNITS[task.size];
+          return totals;
+        }, {});
+        const reservation = await dependencies.reserveWaveCapacity({
+          runId: request.runId,
+          waveId: `wave-${waveNumber}`,
+          requests,
+          availableUnits: await dependencies.availableExecutionUnits(currentBeforeWave),
+          signal: runController.signal,
+        });
+        let results: PromiseSettledResult<void>[];
+        try {
+          results = await Promise.allSettled(
+            wave.map((task) => executeTask(task.id, baseSha, integration)),
+          );
+        } finally {
+          await reservation.release();
+        }
         let failure: unknown = null;
         for (let index = 0; index < wave.length; index += 1) {
           const task = wave[index]!;
@@ -693,6 +733,7 @@ export async function scheduleRun(
     if (terminal || cancelRequested) return;
     cancelRequested = true;
     interruptRequested = interrupted;
+    runController.abort();
     for (const controller of taskControllers.values()) controller.abort();
     await Promise.allSettled([...runningProcesses.values()].map((process) => process.cancel()));
     const current = await dependencies.store.get(request.runId);

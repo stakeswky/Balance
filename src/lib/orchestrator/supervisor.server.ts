@@ -8,6 +8,7 @@ import {
   type AgentCommand,
 } from "./adapters.ts";
 import { createAgentLeaseManager } from "./agent-lease.server.ts";
+import { createCapacityReservationManager } from "./capacity-reservation.server.ts";
 import { readOfficialQuota } from "../quota/official.server.ts";
 import {
   abortCherryPick,
@@ -34,11 +35,13 @@ import { loadOrchestratorSettings, saveOrchestratorSettings } from "./settings.s
 import { discoverNativeAgents } from "./runtime.server.ts";
 import type {
   AgentRuntimeProbe,
+  ClientQuotaEvidence,
   NativeAgentId,
   OrchestratorRun,
   OrchestratorSettings,
   PlanDraft,
   RepositoryValidation,
+  RoleSuccessRates,
   RunEventRecord,
   RunStatus,
   VerificationCommand,
@@ -173,6 +176,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   readonly #planningControllers = new Set<AbortController>();
   readonly #planningOperations = new Set<Promise<unknown>>();
   readonly #agentLeases = createAgentLeaseManager({ globalMaxConcurrency: 3 });
+  readonly #capacityReservations = createCapacityReservationManager();
   #releaseLock: (() => Promise<void>) | null = null;
   #initializing: Promise<void> | null = null;
   #shutdown = false;
@@ -212,6 +216,68 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   async detectRuntimes(): Promise<Record<NativeAgentId, AgentRuntimeProbe>> {
     const settings = await this.getSettings();
     return discoverNativeAgents(settings);
+  }
+
+  async #recentSuccessRates(): Promise<Record<NativeAgentId, RoleSuccessRates>> {
+    const result = Object.fromEntries(([
+      "claude", "codex", "grok",
+    ] as const).map((agent) => [agent, {
+      planningSuccessRate: null,
+      executionSuccessRate: null as number | null,
+      repairSuccessRate: null,
+    }])) as Record<NativeAgentId, RoleSuccessRates>;
+    for (const agent of ["claude", "codex", "grok"] as const) {
+      for (const role of ["planning", "execution", "repair"] as const) {
+        const recent = await this.#store.activities({ agent, role, limit: 20 });
+        const rate = recent.length
+          ? recent.filter((activity) => activity.success).length / recent.length
+          : null;
+        if (role === "planning") result[agent].planningSuccessRate = rate;
+        if (role === "execution") result[agent].executionSuccessRate = rate;
+        if (role === "repair") result[agent].repairSuccessRate = rate;
+      }
+    }
+    return result;
+  }
+
+  async #refreshQuotaForRun(run: OrchestratorRun) {
+    const now = Date.now();
+    const settings = await this.getSettings();
+    const runtimes = await discoverNativeAgents(settings);
+    const emptyEvidence: ClientQuotaEvidence = {
+      officialRemainingPct: null,
+      officialObservedAt: null,
+      officialResetsAt: null,
+      officialFresh: false,
+      officialSource: null,
+      l3RemainingPct: null,
+      l3Confidence: "none",
+      l3ObservedAt: null,
+    };
+    const prior = run.draft.quotaSnapshot?.evidence;
+    const clientEvidence = Object.fromEntries(([
+      "claude", "codex", "grok",
+    ] as const).map((agent) => {
+      const evidence = prior?.[agent];
+      return [agent, evidence ? {
+        officialRemainingPct: evidence.officialRemainingPct,
+        officialObservedAt: evidence.officialObservedAt,
+        officialResetsAt: evidence.officialResetsAt,
+        officialFresh: evidence.officialFresh,
+        officialSource: evidence.officialSource,
+        l3RemainingPct: evidence.l3RemainingPct,
+        l3Confidence: evidence.l3Confidence,
+        l3ObservedAt: evidence.l3ObservedAt,
+      } : emptyEvidence];
+    })) as Record<NativeAgentId, ClientQuotaEvidence>;
+    return buildTrustedQuotaSnapshot({
+      clientEvidence,
+      officialQuota: await readOfficialQuota({ now }),
+      runtimes,
+      settings,
+      roleSuccessRates: await this.#recentSuccessRates(),
+      now,
+    });
   }
 
   async validateRepository(repoPath: string): Promise<RepositoryValidation> {
@@ -311,27 +377,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
         await atomicWritePrivateJson(path, schema);
         return path;
       },
-      recentSuccessRates: async () => {
-        const result = Object.fromEntries(([
-          "claude", "codex", "grok",
-        ] as const).map((agent) => [agent, {
-          planningSuccessRate: null,
-          executionSuccessRate: null as number | null,
-          repairSuccessRate: null,
-        }])) as Record<NativeAgentId, import("./types.ts").RoleSuccessRates>;
-        for (const agent of ["claude", "codex", "grok"] as const) {
-          for (const role of ["planning", "execution", "repair"] as const) {
-            const recent = await this.#store.activities({ agent, role, limit: 20 });
-            const rate = recent.length
-              ? recent.filter((activity) => activity.success).length / recent.length
-              : null;
-            if (role === "planning") result[agent].planningSuccessRate = rate;
-            if (role === "execution") result[agent].executionSuccessRate = rate;
-            if (role === "repair") result[agent].repairSuccessRate = rate;
-          }
-        }
-        return result;
-      },
+      recentSuccessRates: () => this.#recentSuccessRates(),
       refreshQuotaSnapshot: async ({ clientEvidence, runtimes: currentRuntimes, settings: currentSettings, roleSuccessRates, now }) =>
         buildTrustedQuotaSnapshot({
           clientEvidence,
@@ -376,6 +422,14 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       assertOriginalHeadUnchanged,
       removeRegisteredWorktree,
       acquireAgentLease: this.#agentLeases.acquire,
+      reserveWaveCapacity: this.#capacityReservations.reserveWave,
+      availableExecutionUnits: async (run) => {
+        const refreshed = await this.#refreshQuotaForRun(run);
+        return Object.fromEntries(refreshed.profiles.map((profile) => [
+          profile.agent,
+          profile.executionUnits,
+        ])) as Record<NativeAgentId, number>;
+      },
       runtimeFor: (agent) => this.#runtimeFor(agent),
       startProcess: startAgentProcess,
       runVerification: ({ command, cwd, signal }) => runVerificationCommand(command, cwd, signal),
@@ -450,6 +504,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
     await Promise.allSettled(handles.map((handle) => handle.interrupt()));
     await Promise.allSettled(handles.map((handle) => handle.completion));
     await Promise.allSettled([...this.#planningOperations]);
+    await this.#capacityReservations.shutdown();
     await this.#agentLeases.shutdown();
     await this.#store.recoverInterrupted();
     if (this.#releaseLock) await this.#releaseLock();
