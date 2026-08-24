@@ -7,6 +7,7 @@ import {
   verifyGrokIsolation,
   type AgentCommand,
 } from "./adapters.ts";
+import { createAgentLeaseManager } from "./agent-lease.server.ts";
 import {
   abortCherryPick,
   assertOriginalHeadUnchanged,
@@ -166,6 +167,10 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   readonly #stateRoot: string;
   readonly #store: RunStore;
   readonly #active = new Map<string, ScheduleHandle>();
+  readonly #starting = new Map<string, Promise<ScheduleHandle>>();
+  readonly #planningControllers = new Set<AbortController>();
+  readonly #planningOperations = new Set<Promise<unknown>>();
+  readonly #agentLeases = createAgentLeaseManager({ globalMaxConcurrency: 3 });
   #releaseLock: (() => Promise<void>) | null = null;
   #initializing: Promise<void> | null = null;
   #shutdown = false;
@@ -190,12 +195,16 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
 
   async getSettings(): Promise<OrchestratorSettings> {
     await this.initialize();
-    return (await loadOrchestratorSettings({ root: this.#stateRoot })).settings;
+    const settings = (await loadOrchestratorSettings({ root: this.#stateRoot })).settings;
+    this.#agentLeases.setGlobalMaxConcurrency(settings.globalMaxConcurrency);
+    return settings;
   }
 
   async saveSettings(settings: OrchestratorSettings): Promise<OrchestratorSettings> {
     await this.initialize();
-    return saveOrchestratorSettings(settings, { root: this.#stateRoot });
+    const saved = await saveOrchestratorSettings(settings, { root: this.#stateRoot });
+    this.#agentLeases.setGlobalMaxConcurrency(saved.globalMaxConcurrency);
+    return saved;
   }
 
   async detectRuntimes(): Promise<Record<NativeAgentId, AgentRuntimeProbe>> {
@@ -240,24 +249,40 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       agent,
       runRoot: join(this.#stateRoot, "runs", runId),
     });
-    const prepared = { ...command, env: environment.env };
-    if (agent === "grok") await verifyGrokIsolation(command.command, environment);
-    return { command: prepared, secrets: environment.secrets, cleanup: environment.cleanup };
+    try {
+      const prepared = { ...command, env: environment.env };
+      if (agent === "grok") await verifyGrokIsolation(command.command, environment);
+      return { command: prepared, secrets: environment.secrets, cleanup: environment.cleanup };
+    } catch (error) {
+      await environment.cleanup();
+      throw error;
+    }
   }
 
   async analyze(input: AnalyzeRequest): Promise<PlanDraft> {
     await this.initialize();
+    if (this.#shutdown) throw new Error("orchestrator is shutting down");
     const runtimes = await this.detectRuntimes();
     const settings = await this.getSettings();
-    return analyzePlan(input, {
+    const controller = new AbortController();
+    this.#planningControllers.add(controller);
+    const operation = analyzePlan(input, {
       inspectRepository,
       runtimeFor: (agent) => Promise.resolve(runtimes[agent]),
-      runPlanCommand: async ({ command, agent, signal }) => {
-        const environment = await prepareAgentSessionEnvironment({
+      runPlanCommand: async ({ command, agent, signal, runId, attempt }) => {
+        const lease = await this.#agentLeases.acquire({
           agent,
-          runRoot: join(this.#stateRoot, "planning", randomBytes(12).toString("hex")),
+          runId,
+          taskId: `planning-${attempt + 1}`,
+          role: "planning",
+          signal,
         });
+        let environment: Awaited<ReturnType<typeof prepareAgentSessionEnvironment>> | null = null;
         try {
+          environment = await prepareAgentSessionEnvironment({
+            agent,
+            runRoot: join(this.#stateRoot, "planning", randomBytes(12).toString("hex")),
+          });
           if (agent === "grok") await verifyGrokIsolation(command.command, environment);
           const events: import("./types.ts").OrchestratorEvent[] = [];
           const process = startAgentProcess({
@@ -273,7 +298,11 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
           if (result.exitCode !== 0) throw new Error(`planner exited with code ${result.exitCode}`);
           return { stdoutLines: result.stdoutLines, events };
         } finally {
-          await environment.cleanup();
+          try {
+            await environment?.cleanup();
+          } finally {
+            await lease.release();
+          }
         }
       },
       createSchemaFile: async (runId, schema) => {
@@ -306,15 +335,25 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       store: this.#store,
       now: Date.now,
       randomHex: (bytes) => randomBytes(bytes).toString("hex"),
-    });
+    }, controller.signal);
+    this.#planningOperations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      this.#planningOperations.delete(operation);
+      this.#planningControllers.delete(controller);
+    }
   }
 
   async start(input: StartRunRequest): Promise<{ runId: string }> {
     await this.initialize();
     if (this.#shutdown) throw new Error("orchestrator is shutting down");
-    if (this.#active.has(input.runId)) throw new Error("orchestrator run is already active");
+    if (this.#active.has(input.runId) || this.#starting.has(input.runId)) {
+      throw new Error("orchestrator run is already active");
+    }
     const settings = await this.getSettings();
-    const handle = await scheduleRun(input, {
+    if (this.#shutdown) throw new Error("orchestrator is shutting down");
+    const starting = scheduleRun(input, {
       store: this.#store,
       inspectRepository,
       createIntegrationWorktree,
@@ -325,6 +364,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       abortCherryPick,
       assertOriginalHeadUnchanged,
       removeRegisteredWorktree,
+      acquireAgentLease: this.#agentLeases.acquire,
       runtimeFor: (agent) => this.#runtimeFor(agent),
       startProcess: startAgentProcess,
       runVerification: ({ command, cwd, signal }) => runVerificationCommand(command, cwd, signal),
@@ -334,6 +374,18 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       prepareAgentCommand: ({ command, agent, runId }) =>
         this.#prepareCommand(command, agent, runId),
     });
+    this.#starting.set(input.runId, starting);
+    let handle: ScheduleHandle;
+    try {
+      handle = await starting;
+    } finally {
+      this.#starting.delete(input.runId);
+    }
+    if (this.#shutdown) {
+      await handle.interrupt();
+      await handle.completion;
+      throw new Error("orchestrator is shutting down");
+    }
     this.#active.set(input.runId, handle);
     void handle.completion.then(
       () => this.#active.delete(input.runId),
@@ -378,8 +430,16 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   async shutdown(): Promise<void> {
     if (this.#shutdown) return;
     this.#shutdown = true;
-    await Promise.allSettled([...this.#active.values()].map((handle) => handle.interrupt()));
-    await Promise.allSettled([...this.#active.values()].map((handle) => handle.completion));
+    for (const controller of this.#planningControllers) controller.abort();
+    const starting = await Promise.allSettled([...this.#starting.values()]);
+    const handles = [
+      ...this.#active.values(),
+      ...starting.flatMap((result) => result.status === "fulfilled" ? [result.value] : []),
+    ];
+    await Promise.allSettled(handles.map((handle) => handle.interrupt()));
+    await Promise.allSettled(handles.map((handle) => handle.completion));
+    await Promise.allSettled([...this.#planningOperations]);
+    await this.#agentLeases.shutdown();
     await this.#store.recoverInterrupted();
     if (this.#releaseLock) await this.#releaseLock();
     this.#releaseLock = null;

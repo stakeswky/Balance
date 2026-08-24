@@ -58,6 +58,8 @@ export interface PlannerDependencies {
     command: AgentCommand;
     agent: NativeAgentId;
     signal: AbortSignal;
+    runId: string;
+    attempt: number;
   }): Promise<{ stdoutLines: string[]; events: OrchestratorEvent[] }>;
   createSchemaFile(runId: string, schema: object): Promise<string>;
   recentSuccessRates(): Promise<Record<NativeAgentId, number | null>>;
@@ -152,6 +154,7 @@ function capacitiesFromServer(
 export async function analyzePlan(
   input: AnalyzeRequest,
   dependencies: PlannerDependencies,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<PlanDraft> {
   let request: AnalyzeRequest;
   try {
@@ -179,7 +182,6 @@ export async function analyzePlan(
   );
   if (!isAbsolute(schemaPath)) throw new Error("planner schema file must use an absolute path");
   const inlineSchema = JSON.stringify(orchestratorPlanJsonSchema);
-  const abortController = new AbortController();
   let parsedPlan = null;
   let issues: unknown[] | null = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -195,7 +197,9 @@ export async function analyzePlan(
     const result = await dependencies.runPlanCommand({
       command,
       agent: coordinator,
-      signal: abortController.signal,
+      signal,
+      runId,
+      attempt,
     });
     try {
       parsedPlan = parseOrchestratorPlan(extractStructuredPlan(coordinator, result.stdoutLines));

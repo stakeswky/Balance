@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
+import { createAgentLeaseManager } from "./agent-lease.server.ts";
 import { fingerprintPlan } from "./plan.ts";
 import { createRunStore } from "./run-store.server.ts";
 import {
@@ -103,6 +105,7 @@ function run(status: OrchestratorRun["status"] = "draft"): OrchestratorRun {
 }
 
 async function harness(initial = run()) {
+  const runId = initial.id;
   const root = await mkdtemp(join(tmpdir(), "balance-scheduler-"));
   const store = createRunStore(root);
   await store.initialize();
@@ -113,6 +116,7 @@ async function harness(initial = run()) {
   let integrationHead = "a".repeat(40);
   let active = 0;
   let maxActive = 0;
+  const leaseManager = createAgentLeaseManager({ globalMaxConcurrency: 3 });
   const registration = (path: string, branch: string): WorktreeRegistration => ({
     path,
     branch,
@@ -136,7 +140,7 @@ async function harness(initial = run()) {
       calls.push("create:integration");
       return registration(
         join(root, "runs", input.runId, "integration"),
-        "balance/run-a1b2c3d4e5f6-result",
+        `balance/run-${input.runId.slice(-12)}-result`,
       );
     },
     async createTaskWorktree(input) {
@@ -162,7 +166,7 @@ async function harness(initial = run()) {
       const taskId = commitOwners.get(sha);
       if (taskId) {
         calls.push(`pick-task:${taskId}`);
-        assert.equal((await store.get(RUN_ID))?.tasks.find((task) => task.id === taskId)?.status, "integrating");
+        assert.equal((await store.get(runId))?.tasks.find((task) => task.id === taskId)?.status, "integrating");
       }
       integrationHead = `${(Number.parseInt(integrationHead[0]!, 16) + 1).toString(16)}`.repeat(40);
     },
@@ -190,6 +194,21 @@ async function harness(initial = run()) {
     },
     async runtimeFor(agent) {
       return { agent, ok: true, path: `/native/${agent}`, version: "1", error: null };
+    },
+    async acquireAgentLease(input) {
+      calls.push(`lease:wait:${input.role}:${input.agent}:${input.taskId}`);
+      const lease = await leaseManager.acquire(input);
+      calls.push(`lease:got:${input.role}:${input.agent}:${input.taskId}`);
+      return {
+        ...lease,
+        async release() {
+          await lease.release();
+          calls.push(`lease:released:${input.role}:${input.agent}:${input.taskId}`);
+        },
+      };
+    },
+    async prepareAgentCommand(input) {
+      return { command: input.command, secrets: [], cleanup: async () => undefined };
     },
     startProcess(input) {
       const taskId = input.command.cwd.split("/").at(-1)!;
@@ -240,7 +259,7 @@ async function harness(initial = run()) {
     maxConcurrency: 3,
   };
   const request: StartRunRequest = {
-    runId: RUN_ID,
+    runId,
     fingerprint: initial.draft.fingerprint,
     trustedRepository: true,
     confirmedRepository: { path: "/repo", device: 11, inode: 22, baseSha: "a".repeat(40) },
@@ -252,6 +271,7 @@ async function harness(initial = run()) {
     controllers,
     dependencies,
     request,
+    leaseManager,
     get maxActive() {
       return maxActive;
     },
@@ -309,6 +329,74 @@ test("rejects untrusted, stale, dirty-analysis and capacity-blocked starts befor
     () => scheduleRun(blockedHarness.request, blockedHarness.dependencies),
     /capacity/i,
   );
+});
+
+test("serializes the same Agent across two concurrently running schedules", async () => {
+  const first = await harness();
+  const secondRun = run();
+  secondRun.id = "run_20260824140001_a1b2c3d4e5f7";
+  secondRun.draft.runId = secondRun.id;
+  const { fingerprint: _fingerprint, createdAt: _createdAt, ...fingerprintInput } = secondRun.draft;
+  secondRun.draft.fingerprint = fingerprintPlan(fingerprintInput);
+  const second = await harness(secondRun);
+  const leases = createAgentLeaseManager({ globalMaxConcurrency: 3 });
+  first.dependencies.acquireAgentLease = leases.acquire;
+  second.dependencies.acquireAgentLease = leases.acquire;
+  const active = { claude: 0, codex: 0, grok: 0 };
+  const maximum = { ...active };
+  for (const dependencies of [first.dependencies, second.dependencies]) {
+    const start = dependencies.startProcess;
+    dependencies.startProcess = (input) => {
+      active[input.agent] += 1;
+      maximum[input.agent] = Math.max(maximum[input.agent], active[input.agent]);
+      const process = start(input);
+      return {
+        ...process,
+        completion: process.completion.finally(() => { active[input.agent] -= 1; }),
+      };
+    };
+  }
+  const [firstResult, secondResult] = await Promise.all([
+    scheduleRun(first.request, first.dependencies).then((handle) => handle.completion),
+    scheduleRun(second.request, second.dependencies).then((handle) => handle.completion),
+  ]);
+  assert.equal(firstResult.status, "completed");
+  assert.equal(secondResult.status, "completed");
+  assert.deepEqual(maximum, { claude: 1, codex: 1, grok: 0 });
+  assert.deepEqual(leases.snapshot(), { active: 0, waiting: 0 });
+});
+
+test("cancelling while waiting for an Agent lease never starts that task", async () => {
+  const single = run();
+  single.draft.plan.tasks = single.draft.plan.tasks.filter((task) => task.id === "ui");
+  single.draft.assignedTasks = single.draft.assignedTasks.filter((task) => task.id === "ui");
+  single.tasks = single.tasks.filter((task) => task.id === "ui");
+  const { fingerprint: _fingerprint, createdAt: _createdAt, ...fingerprintInput } = single.draft;
+  single.draft.fingerprint = fingerprintPlan(fingerprintInput);
+  const h = await harness(single);
+  const leases = createAgentLeaseManager({ globalMaxConcurrency: 3 });
+  h.dependencies.acquireAgentLease = leases.acquire;
+  const held = await leases.acquire({
+    agent: "codex", runId: "outside", taskId: "held", role: "planning",
+    signal: new AbortController().signal,
+  });
+  const handle = await scheduleRun(h.request, h.dependencies);
+  for (let attempt = 0; attempt < 100 && leases.snapshot().waiting === 0; attempt += 1) {
+    await delay(5);
+  }
+  assert.equal(
+    leases.snapshot().waiting,
+    1,
+    JSON.stringify({ calls: h.calls, run: await h.store.get(single.id) }),
+  );
+  assert.equal(h.calls.some((call) => call === "start:ui:codex"), false);
+  await handle.cancel();
+  const result = await handle.completion;
+  assert.equal(result.status, "cancelled");
+  await held.release();
+  await nextTurn();
+  assert.equal(h.calls.some((call) => call === "start:ui:codex"), false);
+  assert.deepEqual(leases.snapshot(), { active: 0, waiting: 0 });
 });
 
 test("runs dependency waves with per-agent isolation, verifies, commits, integrates and completes", async () => {
@@ -478,6 +566,10 @@ test("aborts a cherry-pick conflict and gives the coordinator one verified repai
   const result = await (await scheduleRun(h.request, h.dependencies)).completion;
   assert.equal(result.status, "completed");
   assert.equal(conflictStarts, 1);
+  assert.equal(
+    h.calls.filter((call) => call === "lease:got:repair:claude:conflict:ui").length,
+    1,
+  );
   assert.match(conflictPrompt, /ui\.ts/);
   assert.match(conflictPrompt, /shared\.ts/);
   assert.match(conflictPrompt, /UI|Implement UI/);

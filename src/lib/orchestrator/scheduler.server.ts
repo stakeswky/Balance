@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildExecuteCommand, type AgentCommand } from "./adapters.ts";
+import type { AgentLease, AgentLeaseManager } from "./agent-lease.server.ts";
 import type {
   RepositorySnapshot,
   abortCherryPick,
@@ -56,6 +57,7 @@ export interface SchedulerDependencies {
   abortCherryPick: typeof abortCherryPick;
   assertOriginalHeadUnchanged: typeof assertOriginalHeadUnchanged;
   removeRegisteredWorktree: typeof removeRegisteredWorktree;
+  acquireAgentLease: AgentLeaseManager["acquire"];
   runtimeFor(agent: NativeAgentId): Promise<AgentRuntimeProbe>;
   startProcess(input: Parameters<typeof startAgentProcess>[0]): RunningProcess;
   runVerification(input: {
@@ -67,7 +69,7 @@ export interface SchedulerDependencies {
   stateRoot: string;
   maxConcurrency?: 1 | 2 | 3;
   conflictedFiles?(integrationPath: string): Promise<string[]>;
-  prepareAgentCommand?(input: {
+  prepareAgentCommand(input: {
     command: AgentCommand;
     agent: NativeAgentId;
     runId: string;
@@ -194,17 +196,22 @@ export async function resolveIntegrationConflict(
     worktreePath: input.integrationPath,
     task: conflictTask,
   });
-  const prepared = dependencies.prepareAgentCommand
-    ? await dependencies.prepareAgentCommand({
-        command: baseCommand,
-        agent: input.run.coordinator,
-        runId: input.run.id,
-        taskId: `conflict:${input.taskId}`,
-      })
-    : { command: baseCommand, secrets: [], cleanup: async () => undefined };
-  let process: RunningProcess;
+  const prepared = await dependencies.prepareAgentCommand({
+    command: baseCommand,
+    agent: input.run.coordinator,
+    runId: input.run.id,
+    taskId: `conflict:${input.taskId}`,
+  });
+  let lease: AgentLease | null = null;
   try {
-    process = dependencies.startProcess({
+    lease = await dependencies.acquireAgentLease({
+      agent: input.run.coordinator,
+      runId: input.run.id,
+      taskId: `conflict:${input.taskId}`,
+      role: "repair",
+      signal: input.signal,
+    });
+    const process = dependencies.startProcess({
       command: prepared.command,
       agent: input.run.coordinator,
       signal: input.signal,
@@ -219,26 +226,29 @@ export async function resolveIntegrationConflict(
         });
       },
     });
-  } catch (error) {
-    await prepared.cleanup();
-    throw error;
+    const result = await process.completion;
+    if (input.signal.aborted) throw new CancelledError();
+    if (result.exitCode !== 0)
+      throw new Error(`coordinator conflict repair exited with code ${result.exitCode}`);
+    for (const verificationCommand of task.verificationCommands) {
+      const verification = await dependencies.runVerification({
+        command: verificationCommand,
+        cwd: input.integrationPath,
+        signal: input.signal,
+      });
+      if (verification.exitCode !== 0) throw new Error(`conflict verification failed for ${task.id}`);
+    }
+    return await dependencies.commitTaskWorktree(
+      input.integrationPath,
+      `fix(orchestrator): resolve ${task.id} integration conflict`,
+    );
+  } finally {
+    try {
+      await prepared.cleanup();
+    } finally {
+      await lease?.release();
+    }
   }
-  const result = await process.completion.finally(() => prepared.cleanup());
-  if (input.signal.aborted) throw new CancelledError();
-  if (result.exitCode !== 0)
-    throw new Error(`coordinator conflict repair exited with code ${result.exitCode}`);
-  for (const verificationCommand of task.verificationCommands) {
-    const verification = await dependencies.runVerification({
-      command: verificationCommand,
-      cwd: input.integrationPath,
-      signal: input.signal,
-    });
-    if (verification.exitCode !== 0) throw new Error(`conflict verification failed for ${task.id}`);
-  }
-  return dependencies.commitTaskWorktree(
-    input.integrationPath,
-    `fix(orchestrator): resolve ${task.id} integration conflict`,
-  );
 }
 
 export async function scheduleRun(
@@ -296,50 +306,57 @@ export async function scheduleRun(
     integrationWorktree: WorktreeRegistration,
   ): Promise<void> => {
     if (cancelRequested) throw new CancelledError();
-    const current = await dependencies.store.get(request.runId);
-    const task = current?.tasks.find((candidate) => candidate.id === taskId);
-    if (!current || !task) throw new Error(`task disappeared: ${taskId}`);
-    await markTask(taskId, (state) => ({
-      ...state,
-      status: "preparing",
-      startedAt: dependencies.now(),
-    }));
-    const worktree = await dependencies.createTaskWorktree({
-      repository,
-      runId: request.runId,
-      taskId,
-      stateRoot: dependencies.stateRoot,
-      baseSha,
-      integrationWorktree,
-    });
-    await markTask(taskId, (state) => ({
-      ...state,
-      worktree,
-    }));
-    if (cancelRequested) throw new CancelledError();
-    const runtime = await dependencies.runtimeFor(task.assignedAgent);
-    if (!runtime.ok || !runtime.path)
-      throw new Error(`${task.assignedAgent} native CLI is unavailable`);
     const controller = new AbortController();
     taskControllers.set(taskId, controller);
-    const baseCommand = buildExecuteCommand({
-      agent: task.assignedAgent,
-      binaryPath: runtime.path,
-      worktreePath: worktree.path,
-      task,
-    });
-    const prepared = dependencies.prepareAgentCommand
-      ? await dependencies.prepareAgentCommand({
-          command: baseCommand,
-          agent: task.assignedAgent,
-          runId: request.runId,
-          taskId,
-        })
-      : { command: baseCommand, secrets: [], cleanup: async () => undefined };
-    await markTask(taskId, (state) => ({ ...state, status: "running" }));
-    let process: RunningProcess;
+    let prepared: Awaited<ReturnType<SchedulerDependencies["prepareAgentCommand"]>> | null = null;
+    let lease: AgentLease | null = null;
     try {
-      process = dependencies.startProcess({
+      const current = await dependencies.store.get(request.runId);
+      const task = current?.tasks.find((candidate) => candidate.id === taskId);
+      if (!current || !task) throw new Error(`task disappeared: ${taskId}`);
+      await markTask(taskId, (state) => ({
+        ...state,
+        status: "preparing",
+        startedAt: dependencies.now(),
+      }));
+      const worktree = await dependencies.createTaskWorktree({
+        repository,
+        runId: request.runId,
+        taskId,
+        stateRoot: dependencies.stateRoot,
+        baseSha,
+        integrationWorktree,
+      });
+      await markTask(taskId, (state) => ({
+        ...state,
+        worktree,
+      }));
+      if (cancelRequested || controller.signal.aborted) throw new CancelledError();
+      const runtime = await dependencies.runtimeFor(task.assignedAgent);
+      if (!runtime.ok || !runtime.path)
+        throw new Error(`${task.assignedAgent} native CLI is unavailable`);
+      const baseCommand = buildExecuteCommand({
+        agent: task.assignedAgent,
+        binaryPath: runtime.path,
+        worktreePath: worktree.path,
+        task,
+      });
+      prepared = await dependencies.prepareAgentCommand({
+        command: baseCommand,
+        agent: task.assignedAgent,
+        runId: request.runId,
+        taskId,
+      });
+      lease = await dependencies.acquireAgentLease({
+        agent: task.assignedAgent,
+        runId: request.runId,
+        taskId,
+        role: "execution",
+        signal: controller.signal,
+      });
+      if (cancelRequested || controller.signal.aborted) throw new CancelledError();
+      await markTask(taskId, (state) => ({ ...state, status: "running" }));
+      const process = dependencies.startProcess({
         command: prepared.command,
         agent: task.assignedAgent,
         signal: controller.signal,
@@ -354,37 +371,39 @@ export async function scheduleRun(
           });
         },
       });
-    } catch (error) {
+      runningProcesses.set(taskId, process);
+      const processResult = await process.completion;
+      if (cancelRequested || controller.signal.aborted) throw new CancelledError();
+      if (processResult.exitCode !== 0)
+        throw new Error(`native Agent exited with code ${processResult.exitCode}`);
+      await markTask(taskId, (state) => ({ ...state, status: "verifying" }));
+      for (const verificationCommand of task.verificationCommands) {
+        if (cancelRequested || controller.signal.aborted) throw new CancelledError();
+        const result = await dependencies.runVerification({
+          command: verificationCommand,
+          cwd: worktree.path,
+          signal: controller.signal,
+        });
+        if (result.exitCode !== 0) {
+          throw new Error(
+            `verification failed: ${verificationCommand.executable} ${verificationCommand.args.join(" ")}`,
+          );
+        }
+      }
+      const commitSha = await dependencies.commitTaskWorktree(
+        worktree.path,
+        `balance(${task.id}): ${task.title}`,
+      );
+      await markTask(taskId, (state) => ({ ...state, status: "integrating", commitSha }));
+    } finally {
+      runningProcesses.delete(taskId);
       taskControllers.delete(taskId);
-      await prepared.cleanup();
-      throw error;
-    }
-    runningProcesses.set(taskId, process);
-    const processResult = await process.completion.finally(() => prepared.cleanup());
-    runningProcesses.delete(taskId);
-    taskControllers.delete(taskId);
-    if (cancelRequested) throw new CancelledError();
-    if (processResult.exitCode !== 0)
-      throw new Error(`native Agent exited with code ${processResult.exitCode}`);
-    await markTask(taskId, (state) => ({ ...state, status: "verifying" }));
-    for (const verificationCommand of task.verificationCommands) {
-      if (cancelRequested) throw new CancelledError();
-      const result = await dependencies.runVerification({
-        command: verificationCommand,
-        cwd: worktree.path,
-        signal: controller.signal,
-      });
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `verification failed: ${verificationCommand.executable} ${verificationCommand.args.join(" ")}`,
-        );
+      try {
+        await prepared?.cleanup();
+      } finally {
+        await lease?.release();
       }
     }
-    const commitSha = await dependencies.commitTaskWorktree(
-      worktree.path,
-      `balance(${task.id}): ${task.title}`,
-    );
-    await markTask(taskId, (state) => ({ ...state, status: "integrating", commitSha }));
   };
 
   const failTask = async (taskId: string, error: unknown): Promise<void> => {

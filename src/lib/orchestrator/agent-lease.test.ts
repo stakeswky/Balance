@@ -6,7 +6,7 @@ import { createAgentLeaseManager } from "./agent-lease.server.ts";
 test("serializes the same Agent across runs in FIFO order", async () => {
   const manager = createAgentLeaseManager({ globalMaxConcurrency: 3, now: () => 100 });
   const first = await manager.acquire({
-    agent: "codex", runId: "run-one", taskId: "task-one", role: "execution",
+    agent: "codex", runId: "run-one", taskId: "task-one", role: "planning",
     signal: new AbortController().signal,
   });
   const order: string[] = [];

@@ -19,6 +19,7 @@ export interface AgentLeaseManager {
     role: AgentLeaseRole;
     signal: AbortSignal;
   }): Promise<AgentLease>;
+  setGlobalMaxConcurrency(value: number): void;
   shutdown(): Promise<void>;
   snapshot(): { active: number; waiting: number };
 }
@@ -50,11 +51,12 @@ export function createAgentLeaseManager(options: {
   const now = options.now ?? Date.now;
   const active = new Map<NativeAgentId, symbol>();
   const waiting: LeaseRequest[] = [];
+  let globalMaxConcurrency = options.globalMaxConcurrency;
   let shuttingDown = false;
 
   const drain = (): void => {
     if (shuttingDown) return;
-    while (active.size < options.globalMaxConcurrency) {
+    while (active.size < globalMaxConcurrency) {
       const index = waiting.findIndex(
         (request) => !request.signal.aborted && !active.has(request.agent),
       );
@@ -106,6 +108,13 @@ export function createAgentLeaseManager(options: {
         input.signal.addEventListener("abort", request.onAbort, { once: true });
         drain();
       });
+    },
+    setGlobalMaxConcurrency(value) {
+      if (!Number.isSafeInteger(value) || value < 1) {
+        throw new Error("global Agent concurrency must be a positive safe integer");
+      }
+      globalMaxConcurrency = value;
+      drain();
     },
     async shutdown() {
       if (shuttingDown) return;
