@@ -47,6 +47,7 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
   for (const testId of [
     "orchestrator-panel",
     "orchestrator-repository-input",
+    "orchestrator-choose-folder",
     "orchestrator-validate",
     "orchestrator-prompt",
     "orchestrator-coordinator",
@@ -77,6 +78,10 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
   assert.match(panel, /工作目录/);
   assert.match(panel, /最小环境/);
   assert.match(panel, /仅可查看，不能自动续跑/);
+  assert.match(panel, /chooseRepositoryDirectory/);
+  assert.match(panel, /选择文件夹/);
+  assert.match(panel, /role="alert"/);
+  assert.match(panel, /choosingRepository/);
 });
 
 test("quota evidence chooses a conservative trustworthy dollar window and fresh official fallback", async () => {

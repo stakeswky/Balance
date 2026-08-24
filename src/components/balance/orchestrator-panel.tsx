@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { FolderOpen } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
 import { useOrchestratorController } from "@/lib/orchestrator/client";
+import { chooseRepositoryDirectory } from "@/lib/orchestrator/folder-picker";
 import type {
   NativeAgentId,
   OrchestratorEvent,
@@ -91,6 +93,15 @@ export function OrchestratorPanel({
 }) {
   const controller = useOrchestratorController(quotaEvidence);
   const [trusted, setTrusted] = useState(false);
+  const [choosingRepository, setChoosingRepository] = useState(false);
+  const [folderPickerError, setFolderPickerError] = useState<string | null>(null);
+
+  const chooseRepository = () =>
+    chooseRepositoryDirectory({
+      onChoosingChange: setChoosingRepository,
+      onPathSelected: controller.setRepositoryPath,
+      onError: setFolderPickerError,
+    });
 
   useEffect(() => {
     setTrusted(false);
@@ -134,25 +145,52 @@ export function OrchestratorPanel({
             </CardHint>
             <div className="mt-4 flex flex-col gap-2 sm:flex-row">
               <Input
+                className="min-w-0 flex-1"
                 data-testid="orchestrator-repository-input"
-                aria-label="仓库绝对路径"
-                placeholder="/absolute/path/to/repository"
+                aria-label="本地 Git 仓库文件夹"
+                placeholder="选择文件夹，或粘贴本地 Git 仓库绝对路径"
                 value={controller.repositoryPath}
-                onChange={(event) => controller.setRepositoryPath(event.target.value)}
+                onChange={(event) => {
+                  setFolderPickerError(null);
+                  controller.setRepositoryPath(event.target.value);
+                }}
                 disabled={
+                  choosingRepository ||
                   Boolean(controller.loading) ||
                   Boolean(controller.run && ACTIVE_STATUSES.has(controller.run.status))
                 }
               />
               <Button
+                data-testid="orchestrator-choose-folder"
+                variant="secondary"
+                onClick={() => void chooseRepository()}
+                disabled={
+                  choosingRepository ||
+                  Boolean(controller.loading) ||
+                  Boolean(controller.run && ACTIVE_STATUSES.has(controller.run.status))
+                }
+              >
+                <FolderOpen aria-hidden="true" />
+                {choosingRepository ? "选择中" : "选择文件夹"}
+              </Button>
+              <Button
                 data-testid="orchestrator-validate"
                 variant="secondary"
                 onClick={() => void controller.validate()}
-                disabled={Boolean(controller.loading) || !controller.repositoryPath.trim()}
+                disabled={
+                  choosingRepository ||
+                  Boolean(controller.loading) ||
+                  !controller.repositoryPath.trim()
+                }
               >
                 {controller.loading === "validate" ? "校验中" : "校验仓库"}
               </Button>
             </div>
+            {folderPickerError ? (
+              <p className="mt-2 text-xs text-crit" role="alert">
+                {folderPickerError}
+              </p>
+            ) : null}
 
             {validation ? (
               <div
