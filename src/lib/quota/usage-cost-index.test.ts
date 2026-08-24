@@ -7,7 +7,7 @@ import {
 } from "./usage-cost-index.ts";
 import { eventsInWindow, observeWindow } from "./quota-value.ts";
 import type { UsageEvent } from "./types.ts";
-import type { AgentId } from "./types.ts";
+import type { UsageAgentId } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // deterministic pseudo-random generator (xorshift32, fixed seed)
@@ -29,10 +29,10 @@ function pickOne<T>(rng: () => number, items: T[]): T {
 // ---------------------------------------------------------------------------
 // fixture: 500 events with edge cases for parity checking
 // ---------------------------------------------------------------------------
-const AGENTS: AgentId[] = ["claude", "grok", "codex"];
+const AGENTS: UsageAgentId[] = ["claude", "grok", "codex"];
 
 // Models with known pricing (modelRaw values the pricing table resolves)
-const KNOWN_MODELS: { agent: AgentId; model: string; modelRaw: string }[] = [
+const KNOWN_MODELS: { agent: UsageAgentId; model: string; modelRaw: string }[] = [
   { agent: "claude", model: "opus", modelRaw: "claude-opus-5" },
   { agent: "claude", model: "sonnet", modelRaw: "claude-sonnet-4-20250514" },
   { agent: "codex", model: "gpt-5.4", modelRaw: "gpt-5.4" },
@@ -41,7 +41,7 @@ const KNOWN_MODELS: { agent: AgentId; model: string; modelRaw: string }[] = [
 ];
 
 // Some unknown models (no pricing match -> cost=0)
-const UNKNOWN_MODELS: { agent: AgentId; model: string; modelRaw: string }[] = [
+const UNKNOWN_MODELS: { agent: UsageAgentId; model: string; modelRaw: string }[] = [
   { agent: "claude", model: "haiku", modelRaw: "unknown-model-xyz" },
   { agent: "codex", model: "gpt-5.4", modelRaw: "" },
 ];
@@ -105,8 +105,8 @@ function generateEvents(rng: () => number): UsageEvent[] {
   return events;
 }
 
-function generateWindows(rng: () => number, events: UsageEvent[]): { agent: AgentId; start: number; end: number }[] {
-  const windows: { agent: AgentId; start: number; end: number }[] = [];
+function generateWindows(rng: () => number, events: UsageEvent[]): { agent: UsageAgentId; start: number; end: number }[] {
+  const windows: { agent: UsageAgentId; start: number; end: number }[] = [];
   const baseTs = 1_000_000;
   const maxTs = baseTs + 520 * 1000;
 

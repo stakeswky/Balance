@@ -53,7 +53,7 @@ function official(partial: Partial<OfficialSlice> = {}): OfficialSlice {
 test("weekly dashboard lists only monitored agents", () => {
   const rows = weeklyQuotaRows({
     events: [event({ agent: "claude" }), event({ agent: "grok", model: "grok-4.6", id: "e2" })],
-    availability: { claude: true, grok: false, codex: false },
+    availability: { claude: true, grok: false, codex: false, antigravity: false },
     demoMode: false,
     official: { claude: official(), grok: null, codex: null, antigravity: null },
     claudePlanId: "claude-max-20x",
@@ -77,7 +77,7 @@ test("weekly dashboard lists only monitored agents", () => {
 test("preferred subscription is the loosest window-or-week load", () => {
   const rows = weeklyQuotaRows({
     events: [],
-    availability: { claude: true, grok: true, codex: true },
+    availability: { claude: true, grok: true, codex: true, antigravity: false },
     demoMode: true,
     official: {
       claude: official({ agent: "claude", weekPct: 80, windowPct: 90 }),
@@ -101,7 +101,7 @@ test("preferred subscription is the loosest window-or-week load", () => {
 test("preferred subscription keeps the first agent when loads tie", () => {
   const rows = weeklyQuotaRows({
     events: [],
-    availability: { claude: true, grok: true, codex: false },
+    availability: { claude: true, grok: true, codex: false, antigravity: false },
     demoMode: false,
     official: {
       claude: official({ agent: "claude", weekPct: 10, windowPct: 10 }),
@@ -122,7 +122,7 @@ test("preferred subscription keeps the first agent when loads tie", () => {
 test("weekly dashboard includes Claude Fable week limit when official reports it", () => {
   const rows = weeklyQuotaRows({
     events: [],
-    availability: { claude: true, grok: false, codex: false },
+    availability: { claude: true, grok: false, codex: false, antigravity: false },
     demoMode: false,
     official: {
       claude: official({
@@ -149,7 +149,7 @@ test("weekly dashboard is empty when nothing is monitored", () => {
   assert.deepEqual(
     weeklyQuotaRows({
       events: [],
-      availability: { claude: false, grok: false, codex: false },
+      availability: { claude: false, grok: false, codex: false, antigravity: false },
       demoMode: false,
       official: { claude: null, grok: null, codex: null, antigravity: null },
       claudePlanId: "claude-max-20x",
@@ -168,4 +168,33 @@ test("reset copy and source labels stay compact", () => {
   assert.equal(weekSourceLabel("official"), "官方");
   assert.equal(weekSourceLabel("official-stale"), "官方快照");
   assert.equal(weekSourceLabel("local-estimate"), "本地估算");
+});
+
+test("weekly dashboard shows Antigravity official quota without a fake Codex plan", () => {
+  const antigravity = official({
+    agent: "antigravity",
+    planLabel: null,
+    windowPct: 55,
+    weekPct: 62,
+    windowResetsAt: 2_000,
+    weekResetsAt: 3_000,
+    source: "antigravity-quota-summary",
+  });
+  const rows = weeklyQuotaRows({
+    events: [],
+    availability: { claude: false, grok: false, codex: false, antigravity: true },
+    demoMode: false,
+    official: { claude: null, grok: null, codex: null, antigravity },
+    claudePlanId: "claude-max-20x",
+    grokPlanId: "grok-super",
+    codexPlanId: "chatgpt-plus",
+    weekBoostPct: 0,
+    now: 1_000,
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.agent, "antigravity");
+  assert.equal(rows[0]?.planName, "官方余量");
+  assert.equal(rows[0]?.windowUsedPct, 55);
+  assert.equal(rows[0]?.usedPct, 62);
+  assert.equal(preferredSubscriptionHint(rows[0]!, rows).title, "现在用 Antigravity");
 });

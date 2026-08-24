@@ -15,6 +15,7 @@ const buttonVariants = cva(
         claude: "bg-claude text-accent-fg hover:opacity-90",
         grok: "bg-grok text-accent-fg hover:opacity-90",
         codex: "bg-codex text-accent-fg hover:opacity-90",
+        antigravity: "bg-antigravity text-accent-fg hover:opacity-90",
       },
       size: {
         default: "h-11 px-4",

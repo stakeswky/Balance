@@ -1,7 +1,7 @@
 import { exclusiveCachedInput, normalizeImageTokens, normalizeToken, optionalModel, usageSpeed } from "./tokens.ts";
-import type { AgentId, ModelId, UsageAnomaly, UsageEvent } from "./types.ts";
+import type { ModelId, UsageAgentId, UsageAnomaly, UsageEvent } from "./types.ts";
 
-function asModel(raw: string, agent: AgentId): ModelId {
+function asModel(raw: string, agent: UsageAgentId): ModelId {
   const s = raw.toLowerCase();
   if (agent === "claude") {
     if (s.includes("fable") || s.includes("mythos")) return "fable";
@@ -32,7 +32,7 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEvent | null {
+function parseOne(raw: unknown, fallbackAgent: UsageAgentId, index: number): UsageEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
 
@@ -40,7 +40,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   const usage = (o.usage ?? msg.usage ?? o.token_usage ?? {}) as Record<string, unknown>;
 
   const agentRaw = String(o.agent ?? o.source ?? fallbackAgent).toLowerCase();
-  const agent: AgentId = agentRaw.includes("grok") || agentRaw.includes("xai")
+  const agent: UsageAgentId = agentRaw.includes("grok") || agentRaw.includes("xai")
     ? "grok"
     : agentRaw.includes("codex") || agentRaw.includes("openai")
       ? "codex"
@@ -119,7 +119,7 @@ function parseOne(raw: unknown, fallbackAgent: AgentId, index: number): UsageEve
   };
 }
 
-export function parseUsagePayload(text: string, fallbackAgent: AgentId = "claude"): UsageEvent[] {
+export function parseUsagePayload(text: string, fallbackAgent: UsageAgentId = "claude"): UsageEvent[] {
   const trimmed = text.trim();
   if (!trimmed) return [];
   const events: UsageEvent[] = [];

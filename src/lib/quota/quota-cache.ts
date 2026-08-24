@@ -1,8 +1,8 @@
 // quota-cache.ts —— 同构模块：schema + identity + hydrate。禁止 node 内建 import。
 import { z } from "zod";
 import type {
-  AgentId,
   ModelId,
+  UsageAgentId,
   UsageAnomalyCode,
   UsageEvent,
   UsageSpeed,
@@ -88,7 +88,7 @@ export function quotaEventIdentity(event: UsageEvent): string {
 
 export interface CachedQuotaEvent {
   idHash: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   /** 未知未来值允许读取；hydrate 时保留安全标签并显式禁用计价。 */
   model: string;
   modelRaw?: string;
@@ -109,7 +109,7 @@ export interface CachedQuotaEvent {
 
 export interface CachedLogCursor {
   pathHash: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   modelRaw?: string;
   resumeOffset: number;
   observedSize: number;
@@ -147,7 +147,7 @@ const knownCachedModels = new Set<ModelId>([
   "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20",
 ]);
 
-const fallbackCachedModel: Record<AgentId, ModelId> = {
+const fallbackCachedModel: Record<UsageAgentId, ModelId> = {
   claude: "sonnet",
   codex: "gpt-5.6-sol",
   grok: "grok-4.6",

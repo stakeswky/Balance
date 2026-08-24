@@ -22,6 +22,8 @@
   --color-codex-dim: var(--codex-dim);
   --color-grok: var(--grok);
   --color-grok-dim: var(--grok-dim);
+  --color-antigravity: var(--antigravity);
+  --color-antigravity-dim: var(--antigravity-dim);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-crit: var(--crit);
@@ -56,6 +58,8 @@ html[data-theme="light"] {
   --codex-dim: rgb(47 106 120 / 0.12);
   --grok: #6b665c;
   --grok-dim: rgb(107 102 92 / 0.12);
+  --antigravity: #526fba;
+  --antigravity-dim: rgb(82 111 186 / 0.12);
   --ok: #3d6b48;
   --warn: #9a6f28;
   --crit: #a14a42;
@@ -87,6 +91,8 @@ html[data-theme="dark"] {
   --codex-dim: rgb(122 163 176 / 0.16);
   --grok: #c8c2b4;
   --grok-dim: rgb(200 194 180 / 0.16);
+  --antigravity: #91a9e8;
+  --antigravity-dim: rgb(145 169 232 / 0.16);
   --ok: #8aa88a;
   --warn: #c4a46a;
   --crit: #c47a72;

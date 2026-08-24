@@ -1,6 +1,6 @@
 import { eventWeekShare, eventWindowShare, inWindow } from "./engine.ts";
 import { planById } from "./plans.ts";
-import type { AgentId, ModelId, SessionState, UsageEvent } from "./types.ts";
+import type { ModelId, SessionState, UsageAgentId, UsageEvent } from "./types.ts";
 import { WEEK_MS, WINDOW_MS } from "./types.ts";
 
 function mulberry32(seed: number) {
@@ -118,7 +118,7 @@ function modelRawOf(model: ModelId): string {
 
 function makeEvent(
   rng: () => number,
-  agent: AgentId,
+  agent: UsageAgentId,
   ts: number,
   sessionId: string,
   task: string,
@@ -183,7 +183,7 @@ function makeEvent(
 
 function fillAgent(
   rng: () => number,
-  agent: AgentId,
+  agent: UsageAgentId,
   now: number,
   windowTarget: number,
   weekTarget: number,
@@ -240,14 +240,14 @@ export function seedHistory(now = Date.now()): UsageEvent[] {
 
 export function nextLiveEvent(
   rng: () => number,
-  agent: AgentId,
+  agent: UsageAgentId,
   session: SessionState,
   now: number,
 ): UsageEvent {
   return makeEvent(rng, agent, now, session.id, session.task, session.model, 0.72);
 }
 
-export function newSession(rng: () => number, agent: AgentId, now: number): SessionState {
+export function newSession(rng: () => number, agent: UsageAgentId, now: number): SessionState {
   const tasks = agent === "claude" ? CLAUDE_TASKS : agent === "grok" ? GROK_TASKS : CODEX_TASKS;
   const model = agent === "claude" ? claudeModel(rng) : agent === "grok" ? grokModel(rng) : codexModel(rng);
   return {

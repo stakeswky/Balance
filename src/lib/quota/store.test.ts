@@ -7,9 +7,10 @@ import {
   emptyAlertLatches,
   migrateQuotaPersist,
   useQuota,
+  type QuotaAlertLatches,
   type QuotaState,
 } from "./store.ts";
-import type { AgentId, UsageEvent } from "./types.ts";
+import type { UsageAgentId, UsageEvent } from "./types.ts";
 import { CALIBRATION_RETENTION_MS } from "./types.ts";
 
 const initialState = useQuota.getState();
@@ -19,7 +20,7 @@ const initialLive = [initialState.liveClaude, initialState.liveGrok, initialStat
 
 const RECENT_TS = Date.now() - 60_000;
 
-function event(agent: AgentId, id: string, ts = RECENT_TS): UsageEvent {
+function event(agent: UsageAgentId, id: string, ts = RECENT_TS): UsageEvent {
   return {
     id,
     agent,
@@ -58,6 +59,16 @@ function officialClaude(now: number): OfficialSlice {
   };
 }
 
+function officialAntigravity(now: number): OfficialSlice {
+  return {
+    ...officialClaude(now),
+    agent: "antigravity",
+    windowPct: 55,
+    weekPct: 62,
+    source: "antigravity-quota-summary",
+  };
+}
+
 let snapshot: ReturnType<typeof useQuota.getState>;
 
 beforeEach(() => {
@@ -66,8 +77,8 @@ beforeEach(() => {
   useQuota.setState({
     events: [real],
     realEvents: [real],
-    agentAvailability: { claude: true, grok: false, codex: true },
-    captureEnabled: { claude: true, grok: true, codex: false },
+    agentAvailability: { claude: true, grok: false, codex: true, antigravity: false },
+    captureEnabled: { claude: true, grok: true, codex: false, antigravity: false },
     demoMode: false,
     liveClaude: true,
     liveGrok: false,
@@ -114,7 +125,7 @@ test("minimal mode defaults on, geek toggle persists, and v0 storage migrates to
   assert.ok(partialize);
   const persisted = partialize(state) as Partial<typeof state>;
   assert.equal(persisted.minimalMode, false);
-  assert.equal(useQuota.persist.getOptions().version, 2);
+  assert.equal(useQuota.persist.getOptions().version, 3);
 
   const fromV0False = migrateQuotaPersist({ minimalMode: false, demoMode: true }, 0);
   assert.equal(fromV0False.minimalMode, true);
@@ -131,6 +142,31 @@ test("minimal mode defaults on, geek toggle persists, and v0 storage migrates to
     migrateQuotaPersist({}, 1).alertLatches,
     emptyAlertLatches(),
   );
+});
+
+test("persist v3 adds Antigravity availability and alert latches", () => {
+  const migrated = migrateQuotaPersist(
+    {
+      agentAvailability: { claude: true, grok: false, codex: false },
+      captureEnabled: { claude: true, grok: true, codex: true },
+      alertLatches: { claudeWin: true },
+    },
+    2,
+  );
+  assert.deepEqual(migrated.agentAvailability, {
+    claude: true,
+    grok: false,
+    codex: false,
+    antigravity: false,
+  });
+  assert.deepEqual(migrated.captureEnabled, {
+    claude: true,
+    grok: true,
+    codex: true,
+    antigravity: false,
+  });
+  assert.equal((migrated.alertLatches as QuotaAlertLatches).antigravityWin, false);
+  assert.equal((migrated.alertLatches as QuotaAlertLatches).antigravityWeek, false);
 });
 
 test("alert latch persists one warning until usage drops or threshold changes", () => {
@@ -276,7 +312,7 @@ test("demo can be enabled and disabled without losing real events or calibration
 });
 
 test("availability disables missing real collectors but demo keeps all streams", () => {
-  useQuota.getState().setAgentAvailability({ claude: false, grok: true, codex: false });
+  useQuota.getState().setAgentAvailability({ claude: false, grok: true, codex: false, antigravity: false });
   assert.equal(useQuota.getState().liveClaude, false);
   assert.equal(useQuota.getState().liveGrok, true);
   assert.equal(useQuota.getState().liveCodex, false);
@@ -347,7 +383,12 @@ test("setBothLive respects availability in real mode and controls every demo str
   assert.equal(useQuota.getState().liveClaude, true);
   assert.equal(useQuota.getState().liveGrok, false);
   assert.equal(useQuota.getState().liveCodex, true);
-  assert.deepEqual(useQuota.getState().captureEnabled, { claude: true, grok: true, codex: true });
+  assert.deepEqual(useQuota.getState().captureEnabled, {
+    claude: true,
+    grok: true,
+    codex: true,
+    antigravity: false,
+  });
 
   useQuota.getState().setDemoMode(true);
   useQuota.getState().setBothLive(false);
@@ -377,6 +418,32 @@ test("official samples are calibrated from realEvents instead of demo events", (
   assert.ok(sample);
   assert.ok(sample.cumulativeObservedUsd > 0);
   assert.ok(sample.cumulativeObservedUsd < 0.02);
+});
+
+test("Antigravity official state never creates token calibration or capture state", () => {
+  const now = Date.now();
+  const antigravity = officialAntigravity(now);
+  const samplesBefore = useQuota.getState().quotaSamples;
+  const latchesBefore = {
+    ...emptyAlertLatches(),
+    claudeWin: true,
+  };
+  useQuota.setState({ alertLatches: latchesBefore });
+
+  useQuota.getState().setOfficial({
+    claude: null,
+    grok: null,
+    codex: null,
+    antigravity,
+  });
+  useQuota.getState().recordOfficialSamples(now);
+  useQuota.getState().recordOfficialHistory([antigravity]);
+
+  const state = useQuota.getState();
+  assert.equal(state.official.antigravity, antigravity);
+  assert.equal(state.quotaSamples, samplesBefore);
+  assert.deepEqual(state.alertLatches, latchesBefore);
+  assert.equal(state.captureEnabled.antigravity, false);
 });
 
 test("same-tick Claude total and Fable alerts receive distinct ids", () => {

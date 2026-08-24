@@ -1,4 +1,5 @@
 import { costBreakdown, eventRawTokens } from "./cost.ts";
+import { AGENT_LABEL } from "./agent.ts";
 import { modelDisplayLabel } from "./model-label.ts";
 import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, MODEL_META, planById } from "./plans.ts";
 import type { OfficialSlice } from "./official.ts";
@@ -9,6 +10,7 @@ import type {
   ModelWeekLimitSnapshot,
   ModelShare,
   PlanDef,
+  UsageAgentId,
   UsageEvent,
 } from "./types.ts";
 import { WEEK_MS, WINDOW_MS, activityIdOf } from "./types.ts";
@@ -31,7 +33,7 @@ export function apiUsd(event: UsageEvent): number {
   return costBreakdown(event).totalUsd;
 }
 
-export function inWindow(events: UsageEvent[], now: number, span: number, agent?: AgentId) {
+export function inWindow(events: UsageEvent[], now: number, span: number, agent?: UsageAgentId) {
   const from = now - span;
   return events.filter((e) => e.ts >= from && e.ts <= now && (agent ? e.agent === agent : true));
 }
@@ -45,6 +47,27 @@ function meterStatus(windowPct: number, weekPct: number): MeterSnapshot["status"
   if (windowPct >= 88 || weekPct >= 88) return "critical";
   if (windowPct >= 68 || weekPct >= 72) return "watch";
   return "ok";
+}
+
+export function emptyMeter(agent: AgentId, now: number): MeterSnapshot {
+  return {
+    agent,
+    windowPct: 0,
+    weekPct: 0,
+    windowTokens: 0,
+    weekTokens: 0,
+    windowReasoningMin: 0,
+    weekReasoningMin: 0,
+    windowBudget: 0,
+    weekBudget: 0,
+    windowResetsAt: now + WINDOW_MS,
+    weekResetsAt: now + WEEK_MS,
+    burnPctPerHour: 0,
+    etaMs: null,
+    apiUsdWindow: 0,
+    apiUsdWeek: 0,
+    status: "ok",
+  };
 }
 
 export type MeterDataSource = "official" | "official-stale" | "local-estimate";
@@ -125,7 +148,7 @@ export function modelWeekLimitFor(
 
 export function meterFor(
   events: UsageEvent[],
-  agent: AgentId,
+  agent: UsageAgentId,
   plan: PlanDef,
   now: number,
   boostPct: number,
@@ -205,7 +228,7 @@ export function applyOfficial(meter: MeterSnapshot, official: OfficialSlice | nu
   };
 }
 
-export function modelShares(events: UsageEvent[], agent: AgentId, now: number, span: number): ModelShare[] {
+export function modelShares(events: UsageEvent[], agent: UsageAgentId, now: number, span: number): ModelShare[] {
   const slice = inWindow(events, now, span, agent);
   const byLabel = new Map<string, { model: ModelId; tokens: number; events: number }>();
   let total = 0;
@@ -279,7 +302,7 @@ export function dailySeries(events: UsageEvent[], now: number, days: number) {
 
 export interface SessionGroup {
   id: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   task: string;
   model: ModelId;
   modelRaw?: string;
@@ -349,7 +372,7 @@ function scaledComparedPct(rawPct: number, baselineRawPct: number, baselineOffic
 
 export function comparePlans(
   events: UsageEvent[],
-  agent: AgentId,
+  agent: UsageAgentId,
   plans: PlanDef[],
   now: number,
   boostPct: number,
@@ -421,8 +444,7 @@ export function routingAdvice(meters: readonly MeterSnapshot[]) {
         Math.max(a.windowPct, a.weekPct) - Math.max(b.windowPct, b.weekPct),
     )[0];
   if (strained && receiver) {
-    const name =
-      receiver.agent === "claude" ? "Claude" : receiver.agent === "grok" ? "Grok" : "Codex";
+    const name = AGENT_LABEL[receiver.agent];
     tips.push({
       title: `把重活交给 ${name}`,
       body: `${name} 当前窗口更宽裕，下一趟长任务优先走这一路。`,

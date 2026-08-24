@@ -6,6 +6,7 @@ import {
 } from "./agent-availability.ts";
 import {
   applyOfficial,
+  emptyMeter,
   formatDuration,
   meterDataSources,
   meterFor,
@@ -14,7 +15,7 @@ import {
 } from "./engine.ts";
 import type { OfficialQuota } from "./official.ts";
 import { planById } from "./plans.ts";
-import type { AgentId, MeterSnapshot, UsageEvent } from "./types.ts";
+import { isUsageAgentId, type AgentId, type MeterSnapshot, type UsageEvent } from "./types.ts";
 
 export interface WeeklyFableLimit {
   usedPct: number;
@@ -51,10 +52,26 @@ export function weeklyQuotaRows(opts: {
   const agents = visibleAgentIds(opts.availability, opts.demoMode, opts.events);
   const events = eventsForAgents(opts.events, agents);
   return agents.map((agent) => {
+    const official = opts.official[agent];
+    if (!isUsageAgentId(agent)) {
+      const meter = applyOfficial(emptyMeter(agent, opts.now), official);
+      const usedPct = meter.weekPct;
+      return {
+        agent,
+        label: AGENT_LABEL[agent],
+        planName: official?.planLabel?.trim() || "官方余量",
+        usedPct,
+        remainPct: Math.max(0, 100 - usedPct),
+        windowUsedPct: meter.windowPct,
+        windowRemainPct: Math.max(0, 100 - meter.windowPct),
+        resetsAt: meter.weekResetsAt,
+        source: meterDataSources(official).week,
+        status: usedPct >= 88 ? "critical" : usedPct >= 72 ? "watch" : "ok",
+      };
+    }
     const plan = planById(
       agent === "claude" ? opts.claudePlanId : agent === "grok" ? opts.grokPlanId : opts.codexPlanId,
     );
-    const official = opts.official[agent];
     const meter = applyOfficial(meterFor(events, agent, plan, opts.now, opts.weekBoostPct), official);
     const usedPct = meter.weekPct;
     const fableLimit = agent === "claude" ? modelWeekLimitFor(plan, official, "fable") : null;
@@ -110,7 +127,7 @@ export function preferredSubscriptionHint(
   preferred: WeeklyQuotaRow,
   rows: readonly WeeklyQuotaRow[],
 ): { title: string; body: string } {
-  const name = preferred.agent === "claude" ? "Claude" : preferred.agent === "grok" ? "Grok" : "Codex";
+  const name = AGENT_LABEL[preferred.agent];
   const load = subscriptionLoad(preferred);
   const othersTight = rows.some(
     (row) => row.agent !== preferred.agent && subscriptionLoad(row) >= 70,

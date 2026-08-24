@@ -18,6 +18,7 @@ import { InlineHelp } from "@/components/ui/inline-help";
 import { eventsForAgents, visibleAgentIds } from "@/lib/quota/agent-availability";
 import {
   applyOfficial,
+  emptyMeter,
   meterDataSources,
   meterFor,
   modelWeekLimitFor,
@@ -38,6 +39,7 @@ import {
 import { quotaValueFor, quotaValueForPool } from "@/lib/quota/quota-value";
 import type { OfficialLoadState } from "@/lib/quota/quota-label";
 import { useQuota } from "@/lib/quota/store";
+import { isUsageAgentId, type AgentId, type MeterSnapshot } from "@/lib/quota/types";
 import { useTheme } from "@/lib/theme";
 import { AGENT_LABEL } from "@/lib/quota/agent";
 import {
@@ -100,13 +102,17 @@ export function Dashboard() {
     () => visibleAgentIds(agentAvailability, demoMode, realEvents),
     [agentAvailability, demoMode, realEvents],
   );
+  const visibleUsageAgents = useMemo(
+    () => visibleAgents.filter(isUsageAgentId),
+    [visibleAgents],
+  );
   const visibleEvents = useMemo(
-    () => eventsForAgents(events, visibleAgents),
-    [events, visibleAgents],
+    () => eventsForAgents(events, visibleUsageAgents),
+    [events, visibleUsageAgents],
   );
   const analyticsEvents = useMemo(
-    () => eventsForAgents(demoMode ? events : calibrationEvents, visibleAgents),
-    [demoMode, events, calibrationEvents, visibleAgents],
+    () => eventsForAgents(demoMode ? events : calibrationEvents, visibleUsageAgents),
+    [demoMode, events, calibrationEvents, visibleUsageAgents],
   );
 
   useEffect(() => {
@@ -114,6 +120,7 @@ export function Dashboard() {
     let inFlight = false;
     const checkAlerts = (t = Date.now()) => {
       const state = useQuota.getState();
+      if (state.demoMode) return;
       const activeAgents = visibleAgentIds(
         state.agentAvailability,
         state.demoMode,
@@ -124,12 +131,12 @@ export function Dashboard() {
         activeAgents,
       );
       const check = (
-        agent: "claude" | "grok" | "codex",
-        meter: ReturnType<typeof meterFor>,
+        agent: AgentId,
+        meter: MeterSnapshot,
         kind: PrimaryWindowKind,
         sources: MeterDataSources | null,
-        winKey: "claudeWin" | "grokWin" | "codexWin",
-        weekKey: "claudeWeek" | "grokWeek" | "codexWeek",
+        winKey: "claudeWin" | "grokWin" | "codexWin" | "antigravityWin",
+        weekKey: "claudeWeek" | "grokWeek" | "codexWeek" | "antigravityWeek",
         name: string,
       ) => {
         const decision = quotaAlertDecision({
@@ -186,9 +193,14 @@ export function Dashboard() {
         meterFor(activeEvents, "codex", planById(state.codexPlanId), t, state.weekBoostPct),
         state.official.codex,
       );
+      const antigravityMeter = applyOfficial(
+        emptyMeter("antigravity", t),
+        state.official.antigravity,
+      );
       const claudeSources = meterDataSources(state.official.claude);
       const grokSources = meterDataSources(state.official.grok);
       const codexSources = meterDataSources(state.official.codex);
+      const antigravitySources = meterDataSources(state.official.antigravity);
       const claudeDecisionMeter = state.demoMode
         ? claudeMeter
         : officialOnlyMeter(claudeMeter, claudeSources);
@@ -198,6 +210,10 @@ export function Dashboard() {
       const codexDecisionMeter = state.demoMode
         ? codexMeter
         : officialOnlyMeter(codexMeter, codexSources);
+      const antigravityDecisionMeter = officialOnlyMeter(
+        antigravityMeter,
+        antigravitySources,
+      );
       if (activeAgents.includes("claude")) {
         if (claudeDecisionMeter) {
           check(
@@ -249,6 +265,17 @@ export function Dashboard() {
           "codexWin",
           "codexWeek",
           "Codex",
+        );
+      }
+      if (activeAgents.includes("antigravity") && antigravityDecisionMeter) {
+        check(
+          "antigravity",
+          antigravityDecisionMeter,
+          state.official.antigravity?.windowKind ?? "five_hour",
+          antigravitySources,
+          "antigravityWin",
+          "antigravityWeek",
+          "Antigravity",
         );
       }
     };
@@ -364,11 +391,16 @@ export function Dashboard() {
       applyOfficial(meterFor(analyticsEvents, "codex", codexPlan, now, weekBoostPct), official.codex),
     [analyticsEvents, codexPlan, now, weekBoostPct, official.codex],
   );
+  const antigravityMeter = useMemo(
+    () => applyOfficial(emptyMeter("antigravity", now), official.antigravity),
+    [now, official.antigravity],
+  );
   const claudeSources = meterDataSources(official.claude);
   const grokSources = meterDataSources(official.grok);
   const codexSources = meterDataSources(official.codex);
+  const antigravitySources = meterDataSources(official.antigravity);
 
-  const live = visibleAgents.some((agent) =>
+  const live = visibleUsageAgents.some((agent) =>
     agent === "claude" ? liveClaude : agent === "grok" ? liveGrok : liveCodex,
   );
   const claudeWeekVal = useMemo(
@@ -413,12 +445,20 @@ export function Dashboard() {
       return valuation ? [{ pool, valuation }] : [];
     });
   }, [official.claude, analyticsEvents, now, quotaSamples, calibrationTruncatedBeforeMs]);
-  const combinedUsd = visibleAgents.reduce((sum, agent) => {
+  const antigravityPoolViews = useMemo<QuotaPoolView[]>(() => {
+    const slice = official.antigravity;
+    if (!slice) return [];
+    return (slice.quotaPools ?? []).flatMap((pool) => {
+      const valuation = quotaValueForPool([], slice, pool, now, [], null);
+      return valuation ? [{ pool, valuation }] : [];
+    });
+  }, [official.antigravity, now]);
+  const combinedUsd = visibleUsageAgents.reduce((sum, agent) => {
     if (agent === "claude") return sum + claudeWeekVal.l1Usd;
     if (agent === "grok") return sum + grokWeekVal.l1Usd;
     return sum + codexWeekVal.l1Usd;
   }, 0);
-  const subUsd = visibleAgents.reduce((sum, agent) => {
+  const subUsd = visibleUsageAgents.reduce((sum, agent) => {
     const plan = agent === "claude" ? claudePlan : agent === "grok" ? grokPlan : codexPlan;
     return sum + (plan.kind === "subscription" ? plan.priceUsd : 0);
   }, 0);
@@ -437,6 +477,11 @@ export function Dashboard() {
       meter: codexMeter,
       kind: official.codex?.windowKind ?? "five_hour",
       sources: codexSources,
+    },
+    {
+      meter: antigravityMeter,
+      kind: official.antigravity?.windowKind ?? "five_hour",
+      sources: antigravitySources,
     },
   ] satisfies {
     meter: typeof claudeMeter;
@@ -472,7 +517,7 @@ export function Dashboard() {
   });
   const tighter = tightestQuota(primaryLimits);
   const tighterPct = tighter?.pct ?? 0;
-  const watching = visibleAgents
+  const watching = visibleUsageAgents
     .map((agent) => {
       if (agent === "claude") return liveClaude ? "Claude" : null;
       if (agent === "grok") return liveGrok ? "Grok" : null;
@@ -570,7 +615,12 @@ export function Dashboard() {
           <div
             className={cn("flex flex-col gap-4", fitMonitor && "min-h-0 flex-1 overflow-hidden")}
           >
-            <section className="grid shrink-0 items-stretch gap-4 lg:grid-cols-[minmax(0,15rem)_1fr]">
+            <section className={cn(
+              "grid shrink-0 items-stretch gap-4",
+              visibleUsageAgents.length
+                ? "lg:grid-cols-[minmax(0,15rem)_1fr]"
+                : "max-w-xl lg:grid-cols-1",
+            )}>
               {tighter ? (
                 <Card className="flex h-full flex-col justify-between gap-5">
                   <div className="flex flex-col gap-2">
@@ -615,12 +665,13 @@ export function Dashboard() {
                 </Card>
               ) : null}
 
-              <Card className="flex h-full flex-col">
+              {visibleUsageAgents.length ? (
+                <Card className="flex h-full flex-col">
                 <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <CardTitle>协同时间线</CardTitle>
                     <InlineHelp
-                      label={`协同时间线：${visibleAgents.length} 路 Agent 共享同一口 5 小时时钟`}
+                      label={`协同时间线：${visibleUsageAgents.length} 路 Agent 共享同一口 5 小时时钟`}
                     />
                   </div>
                   <Button
@@ -631,12 +682,19 @@ export function Dashboard() {
                     {live ? "全部暂停" : "开始协同"}
                   </Button>
                 </div>
-                <DualTimeline agents={visibleAgents} events={visibleEvents} now={now} />
+                <DualTimeline agents={visibleUsageAgents} events={visibleEvents} now={now} />
                 {adviceMeters.length ? <AdvicePlan meters={adviceMeters} /> : null}
-              </Card>
+                </Card>
+              ) : null}
             </section>
 
-            <section className="grid min-w-0 shrink-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <section className={cn(
+              "grid min-w-0 shrink-0 gap-4",
+              visibleAgents.length === 1 && "max-w-xl grid-cols-1",
+              visibleAgents.length >= 2 && "md:grid-cols-2",
+              visibleAgents.length === 3 && "xl:grid-cols-3",
+              visibleAgents.length >= 4 && "xl:grid-cols-4",
+            )}>
               {visibleAgents.includes("claude") ? (
                 <AgentCard
                   name="Claude Code"
@@ -738,9 +796,29 @@ export function Dashboard() {
                   onToggle={() => useQuota.getState().toggleLive("codex")}
                 />
               ) : null}
+              {visibleAgents.includes("antigravity") ? (
+                <AgentCard
+                  name="Antigravity"
+                  adapter="agy · ~/.gemini"
+                  plan={null}
+                  meter={antigravityMeter}
+                  session={null}
+                  live={official.antigravity != null}
+                  minimalMode={minimalMode}
+                  officialOnly
+                  windowLabel="5 小时窗"
+                  quotaSources={antigravitySources}
+                  officialLoadState={demoMode ? undefined : officialLoadState}
+                  quotaNote={official.antigravity ? "Google 官方 quota summary" : undefined}
+                  quotaPools={antigravityPoolViews}
+                  weekResetsAt={official.antigravity?.weekResetsAt ?? null}
+                  events={[]}
+                  now={now}
+                />
+              ) : null}
             </section>
 
-            <section
+            {visibleUsageAgents.length ? <section
               className={cn(
                 "grid min-h-0 gap-4",
                 fitMonitor ? "flex-1" : "lg:grid-cols-[1.2fr_0.8fr]",
@@ -750,12 +828,12 @@ export function Dashboard() {
                 <div className="flex items-center gap-1.5">
                   <CardTitle>近 24 小时 token</CardTitle>
                   <InlineHelp
-                    label={`近 24 小时 token：按小时叠加，便于看 ${visibleAgents.length} 路 Agent 燃烧节奏`}
+                    label={`近 24 小时 token：按小时叠加，便于看 ${visibleUsageAgents.length} 路 Agent 燃烧节奏`}
                   />
                 </div>
                 <div className={fitMonitor ? "mt-2 min-h-0 flex-1" : "mt-3"}>
                   <UsageChart
-                    agents={visibleAgents}
+                    agents={visibleUsageAgents}
                     events={visibleEvents}
                     now={now}
                     className={fitMonitor ? "h-full min-h-0" : undefined}
@@ -771,7 +849,7 @@ export function Dashboard() {
                   </div>
                 </Card>
               ) : null}
-            </section>
+            </section> : null}
           </div>
         ) : null}
 
@@ -779,7 +857,7 @@ export function Dashboard() {
 
         {view === "report" ? (
           <ReportPanel
-            agents={visibleAgents}
+            agents={visibleUsageAgents}
             events={analyticsEvents}
             now={now}
             claudeMeter={claudeMeter}
@@ -796,7 +874,7 @@ export function Dashboard() {
           />
         ) : null}
 
-        {view === "plugin" ? <PluginPanel agents={visibleAgents} /> : null}
+        {view === "plugin" ? <PluginPanel agents={visibleUsageAgents} /> : null}
       </main>
     </div>
   );

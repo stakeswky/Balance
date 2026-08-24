@@ -369,7 +369,7 @@ export function windowBounds(
 
 export function eventsInWindow(
   events: UsageEvent[],
-  agent: AgentId,
+  agent: UsageAgentId,
   start: number,
   end: number,
 ): UsageEvent[] {
@@ -779,7 +779,7 @@ type SampleObservationInput =
 
 export function makeSample(opts: {
   windowId: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   product?: string | null;
   timestampMs: number;
   usedPercent: number;
@@ -957,7 +957,7 @@ export function historicalWindowPrior(
   samples: QuotaSample[],
   currentWindowId: string,
   currentWindowStartMs: number,
-  agent: AgentId,
+  agent: UsageAgentId,
   kind: "five_hour" | "weekly",
   planLabel: string | null,
   usedPct: number,
@@ -1020,7 +1020,7 @@ export function historicalWindowPrior(
 
 export function quotaValueFor(
   events: UsageEvent[],
-  agent: AgentId,
+  agent: UsageAgentId,
   official: OfficialSlice | null | undefined,
   kind: "five_hour" | "weekly",
   now: number,

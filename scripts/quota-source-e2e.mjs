@@ -131,6 +131,44 @@ function officialSlice(partial = {}) {
   };
 }
 
+function antigravityOfficialSlice() {
+  const fetchedAt = E2E_NOW;
+  const weekReset = E2E_NOW + 4 * 24 * 60 * 60 * 1000;
+  const fiveHourReset = E2E_NOW + 3 * 60 * 60 * 1000;
+  const quotaPool = (id, label, usagePercent, resetsAt, durationMs) => ({
+    id,
+    label,
+    kind: "quota-window",
+    usagePercent,
+    startsAt: resetsAt - durationMs,
+    resetsAt,
+    durationMs,
+    models: [],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt,
+    stale: false,
+  });
+  return officialSlice({
+    agent: "antigravity",
+    windowPct: 55,
+    weekPct: 62,
+    windowResetsAt: fiveHourReset,
+    weekResetsAt: weekReset,
+    weekStartedAt: weekReset - 7 * 24 * 60 * 60 * 1000,
+    planLabel: null,
+    modelWeekLimits: undefined,
+    quotaPools: [
+      quotaPool("gemini-weekly", "Gemini Models · 每周", 28, weekReset, 7 * 24 * 60 * 60 * 1000),
+      quotaPool("gemini-5h", "Gemini Models · 5 小时", 55, fiveHourReset, 5 * 60 * 60 * 1000),
+      quotaPool("3p-weekly", "Claude and GPT models · 每周", 62, weekReset, 7 * 24 * 60 * 60 * 1000),
+      quotaPool("3p-5h", "Claude and GPT models · 5 小时", 20, fiveHourReset, 5 * 60 * 60 * 1000),
+    ],
+    source: "antigravity-quota-summary",
+    fetchedAt,
+  });
+}
+
 function cachedQuotaEvent(event) {
   return {
     idHash: createHash("sha256")
@@ -192,8 +230,8 @@ function persistedState(extra = {}) {
     demoMode: false,
     minimalMode: false,
     adapterHint: false,
-    agentAvailability: { claude: true, grok: false, codex: false },
-    captureEnabled: { claude: true, grok: false, codex: false },
+    agentAvailability: { claude: true, grok: false, codex: false, antigravity: false },
+    captureEnabled: { claude: true, grok: false, codex: false, antigravity: false },
     events: [],
     realEvents: [],
     liveClaude: false,
@@ -232,6 +270,26 @@ const SCENARIOS = {
       "26%",
     ],
     absent: ["当前显示本地估算", "官方快照"],
+  },
+  antigravity: {
+    persistVersion: 3,
+    cardHeading: "Antigravity",
+    antigravityGeek: true,
+    expectedSanitizedOfficial: true,
+    availability: { claude: false, grok: false, codex: false, antigravity: true },
+    state: {
+      minimalMode: true,
+      agentAvailability: { claude: false, grok: false, codex: false, antigravity: true },
+      captureEnabled: { claude: false, grok: false, codex: false, antigravity: false },
+    },
+    official: {
+      claude: null,
+      grok: null,
+      codex: null,
+      antigravity: antigravityOfficialSlice(),
+    },
+    present: [],
+    absent: [],
   },
   partial: {
     official: {
@@ -587,6 +645,7 @@ async function runScenario(browser, scenarioName, viewportName) {
   let officialStage = 0;
   const serverFnRequests = [];
   const scannerBodies = [];
+  const officialResponseBodies = [];
   await context.addInitScript(({ state, version }) => {
     if (localStorage.getItem("balance-quota-v8") == null) {
       localStorage.setItem(
@@ -615,11 +674,17 @@ async function runScenario(browser, scenarioName, viewportName) {
     const request = route.request();
     serverFnRequests.push(`${request.method()} ${request.url()}`);
     if (isRequest(request, AVAILABILITY_IDS, "pullAgentAvailability")) {
+      const availabilityFixture = scenario.availability ?? {
+        claude: true,
+        grok: false,
+        codex: false,
+        antigravity: false,
+      };
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         headers: { "x-tss-serialized": "true" },
-        body: serialized({ claude: true, grok: false, codex: false }),
+        body: serialized(availabilityFixture),
       });
       return;
     }
@@ -691,11 +756,13 @@ async function runScenario(browser, scenarioName, viewportName) {
       const officialFixture = officialSequence?.length
         ? officialSequence[Math.min(officialStage, officialSequence.length - 1)]
         : (scenario.official ?? { claude: null, grok: null, codex: null, antigravity: null });
+      const officialBody = serialized(officialFixture);
+      officialResponseBodies.push(officialBody);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         headers: { "x-tss-serialized": "true" },
-        body: serialized(officialFixture),
+        body: officialBody,
       });
       return;
     }
@@ -741,7 +808,7 @@ async function runScenario(browser, scenarioName, viewportName) {
   try {
     const response = await page.goto(BASE, { waitUntil: "domcontentloaded" });
     if (response?.status() !== 200) throw new Error(`homepage status ${response?.status()}`);
-    const card = cardAround(page, "Claude Code");
+    const card = cardAround(page, scenario.cardHeading ?? "Claude Code");
     await card.waitFor();
     if (scenario.expectOfficialRequest !== false && officialSeen < 1) {
       throw new Error(`official fixture was not intercepted: ${JSON.stringify(serverFnRequests)}`);
@@ -759,6 +826,36 @@ async function runScenario(browser, scenarioName, viewportName) {
     for (const text of scenario.absent) {
       if (await card.getByText(text, { exact: true }).count()) {
         throw new Error(`unexpected text: ${text}`);
+      }
+    }
+    if (scenario.antigravityGeek) {
+      assert.equal(
+        await card.getByTestId("quota-antigravity-week-remaining").textContent(),
+        "38%",
+      );
+      assert.equal(await card.getByRole("button", { name: /采集|暂停/ }).count(), 0);
+      await page.getByRole("button", { name: "设置" }).click();
+      await page.getByRole("switch", { name: "极客模式" }).click();
+      await page.getByRole("button", { name: "监控" }).click();
+      for (const label of [
+        "Gemini Models · 每周（官方）",
+        "Gemini Models · 5 小时（官方）",
+        "Claude and GPT models · 每周（官方）",
+        "Claude and GPT models · 5 小时（官方）",
+      ]) {
+        assert.equal(
+          await card.getByText(label, { exact: true }).count(),
+          1,
+          `missing ${label}; card=${JSON.stringify(await card.innerText())}`,
+        );
+      }
+      assert.equal(await card.getByText(/API 等价/).count(), 0);
+    }
+    if (scenario.expectedSanitizedOfficial) {
+      assert.ok(officialResponseBodies.length > 0);
+      const delivered = officialResponseBodies.join("\n");
+      for (const secretMarker of ["Bearer ", "access_token", "refresh_token", "Authorization"]) {
+        assert.equal(delivered.includes(secretMarker), false);
       }
     }
     if (scenario.expectNoAlerts) {
@@ -896,7 +993,7 @@ async function runScenario(browser, scenarioName, viewportName) {
     ) {
       throw new Error(JSON.stringify(diagnostics));
     }
-    if ((scenarioName === "full" || scenarioName === "stale" || scenarioName === "pools" || scenarioName === "historical-prior" || scenarioName === "truncated") && viewportName === "desktop") {
+    if ((scenarioName === "full" || scenarioName === "stale" || scenarioName === "pools" || scenarioName === "historical-prior" || scenarioName === "truncated" || scenarioName === "antigravity") && viewportName === "desktop") {
       await page.screenshot({
         path: shotPath(`quota-source-${scenarioName}-${viewportName}.png`),
         fullPage: true,

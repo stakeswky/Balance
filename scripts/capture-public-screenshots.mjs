@@ -74,8 +74,8 @@ const publicPersistedState = {
     onboardingComplete: true,
     demoMode: true,
     adapterHint: true,
-    agentAvailability: { claude: true, grok: true, codex: true },
-    captureEnabled: { claude: true, grok: true, codex: true },
+    agentAvailability: { claude: true, grok: true, codex: true, antigravity: false },
+    captureEnabled: { claude: true, grok: true, codex: true, antigravity: false },
     claudePlanId: "claude-max-20x",
     grokPlanId: "grok-super",
     codexPlanId: "chatgpt-plus",
@@ -216,7 +216,7 @@ async function capture(browser, spec) {
         headers: { "x-tss-serialized": "true" },
         body: JSON.stringify(
           toCrossJSON({
-            result: { claude: true, grok: true, codex: true },
+            result: { claude: true, grok: true, codex: true, antigravity: false },
             error: undefined,
             context: {},
           }),

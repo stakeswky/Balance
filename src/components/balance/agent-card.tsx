@@ -11,6 +11,7 @@ import {
   modelLabel,
 } from "@/components/balance/format";
 import { MeterBar } from "@/components/balance/meter-bar";
+import { agentFillClass } from "@/lib/quota/agent";
 import {
   inWindow,
   modelShares,
@@ -47,7 +48,7 @@ import type {
   SessionState,
   UsageEvent,
 } from "@/lib/quota/types";
-import { WEEK_MS, WINDOW_MS } from "@/lib/quota/types";
+import { isUsageAgentId, WEEK_MS, WINDOW_MS } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
 const CONFIDENCE_LABEL: Record<QuotaValue["confidence"], string> = {
@@ -76,6 +77,7 @@ export function AgentCard({
   session,
   live,
   minimalMode = true,
+  officialOnly = false,
   activeTasks,
   liveNote,
   windowLabel = "5 小时窗",
@@ -93,11 +95,12 @@ export function AgentCard({
 }: {
   name: string;
   adapter: string;
-  plan: PlanDef;
+  plan: PlanDef | null;
   meter: MeterSnapshot;
   session: SessionState | null;
   live: boolean;
   minimalMode?: boolean;
+  officialOnly?: boolean;
   activeTasks?: AgentLiveInfo[];
   liveNote?: string;
   windowLabel?: string;
@@ -111,19 +114,24 @@ export function AgentCard({
   weekResetsAt?: number | null;
   events: UsageEvent[];
   now: number;
-  onToggle: () => void;
+  onToggle?: () => void;
 }) {
   const tone = meter.agent;
-  const shares = modelShares(events, meter.agent, now, WEEK_MS);
-  const weeklyView = minimalMode || windowLabel === "本周额度";
+  const usageAgent = isUsageAgentId(meter.agent) ? meter.agent : null;
+  const shares = usageAgent ? modelShares(events, usageAgent, now, WEEK_MS) : [];
+  const weeklyView = minimalMode
+    ? officialOnly
+      ? meter.weekPct >= meter.windowPct
+      : true
+    : windowLabel === "本周额度";
   const weekMeterLabel = minimalMode ? "本周额度" : quotaSourceLabel("本周额度", quotaSources.week);
   const primaryPct = weeklyView ? meter.weekPct : meter.windowPct;
   const remain = Math.max(0, 100 - primaryPct);
-  const weighted = inWindow(events, now, WINDOW_MS, meter.agent).reduce(
+  const weighted = (usageAgent ? inWindow(events, now, WINDOW_MS, usageAgent) : []).reduce(
     (s, e) => s + weightedTokens(e),
     0,
   );
-  const weekWeighted = inWindow(events, now, WEEK_MS, meter.agent).reduce(
+  const weekWeighted = (usageAgent ? inWindow(events, now, WEEK_MS, usageAgent) : []).reduce(
     (s, e) => s + weightedTokens(e),
     0,
   );
@@ -149,9 +157,17 @@ export function AgentCard({
   const hasStaleSnapshot =
     Object.values(quotaSources).includes("official-stale") ||
     (quotaPools ?? []).some(({ valuation }) => valuation.kind === "stale");
+  const officialUnavailable = officialOnly && !hasFreshOfficial && !hasStaleSnapshot;
   const sourceMessage = officialLoadState
     ? quotaSourceMessage(officialLoadState, hasFreshOfficial, hasLocalEstimate, hasStaleSnapshot)
     : null;
+  const displayedSourceMessage = officialOnly && officialUnavailable
+    ? officialLoadState === "loading"
+      ? "正在读取 Antigravity 官方余量。"
+      : officialLoadState === "error"
+        ? "Antigravity 官方余量读取失败，请稍后重试。"
+        : "暂未读取到 Antigravity 官方余量。"
+    : sourceMessage;
   const effectiveStatus = effectiveQuotaStatus(
     freshMeter?.status ?? "ok",
     hasFreshPool ? freshPoolPct : null,
@@ -177,7 +193,9 @@ export function AgentCard({
     ? statusCopy[effectiveStatus]
     : hasStaleSnapshot
       ? "官方快照"
-      : "本地估算";
+      : officialOnly
+        ? "暂无官方数据"
+        : "本地估算";
   const primaryRemainingLabel = minimalMode
     ? "本周额度剩余"
     : primarySource === "official"
@@ -200,7 +218,7 @@ export function AgentCard({
         : "估算已用";
   const primary = primaryKind === "weekly" ? weekValue : windowValue;
   const valueSections =
-    weekValue && windowValue
+    usageAgent && weekValue && windowValue
       ? apiEquivalentSections(meter.agent, primaryKind, weekValue, windowValue)
       : [];
   const diagnosticMessages = [...new Set(
@@ -216,6 +234,13 @@ export function AgentCard({
     weekValue && weekValue.confidence !== "none"
       ? formatUsdRange(weekValue.totalLowUsd, weekValue.totalHighUsd)
       : "样本不足";
+  const planName = plan?.name ?? "官方余量";
+  const minimalStatus = officialOnly
+    ? effectiveQuotaStatus(
+      primaryPct >= 88 ? "critical" : primaryPct >= 72 ? "watch" : "ok",
+      hasFreshPool ? freshPoolPct : null,
+    )
+    : weeklyStatus;
 
   return (
     <Card className="flex h-full flex-col p-4 sm:p-5">
@@ -225,47 +250,53 @@ export function AgentCard({
             <span className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-faint")} />
             <CardTitle>{name}</CardTitle>
             {minimalMode ? (
-              <InlineHelp label={`套餐：${plan.name} · 配置路径：${adapter}`} />
+              <InlineHelp label={`${officialOnly ? "官方余量" : `套餐：${planName}`} · 配置路径：${adapter}`} />
             ) : (
               <Badge tone={hasFreshOfficial ? effectiveStatus : "mute"}>{statusLabel}</Badge>
             )}
           </div>
           {!minimalMode ? (
             <CardHint className="mt-1 break-words">
-              {plan.name} · {adapter}
+              {planName} · {adapter}
               {quotaNote ? ` · ${quotaNote}` : ""}
             </CardHint>
           ) : null}
         </div>
-        <Button variant="secondary" size="sm" onClick={onToggle} aria-pressed={live}>
-          {live ? <Pause /> : <Play />}
-          {live ? "暂停" : "采集"}
-        </Button>
+        {!officialOnly && onToggle ? (
+          <Button variant="secondary" size="sm" onClick={onToggle} aria-pressed={live}>
+            {live ? <Pause /> : <Play />}
+            {live ? "暂停" : "采集"}
+          </Button>
+        ) : null}
       </CardHeader>
 
       <div className="flex items-end justify-between gap-4">
         <div>
-          <p className="text-xs text-mute">{minimalMode ? "本周剩余" : primaryRemainingLabel}</p>
+          <p className="text-xs text-mute">
+            {minimalMode ? (weeklyView ? "本周剩余" : `${windowLabel}剩余`) : primaryRemainingLabel}
+          </p>
           <p
-            data-testid={minimalMode ? `quota-${meter.agent}-week-remaining` : undefined}
+            data-testid={minimalMode ? `quota-${meter.agent}-${weeklyView ? "week" : "window"}-remaining` : undefined}
             aria-label={
               minimalMode
-                ? `本周剩余 ${remain.toFixed(0)}%，${statusCopy[weeklyStatus]}`
+                ? officialUnavailable
+                  ? "暂无官方余量"
+                  : `${weeklyView ? "本周" : windowLabel}剩余 ${remain.toFixed(0)}%，${statusCopy[minimalStatus]}`
                 : undefined
             }
             className={cn(
               "mt-1 font-mono leading-none font-medium tracking-tight tabular",
               minimalMode ? "text-3xl" : "text-4xl",
-              minimalMode && weeklyStatus === "ok" && "text-ok",
-              minimalMode && weeklyStatus === "watch" && "text-warn",
-              minimalMode && weeklyStatus === "critical" && "text-crit",
+              minimalMode && minimalStatus === "ok" && "text-ok",
+              minimalMode && minimalStatus === "watch" && "text-warn",
+              minimalMode && minimalStatus === "critical" && "text-crit",
             )}
           >
-            {remain.toFixed(0)}
-            <span className="ml-1 text-lg text-mute">%</span>
+            {officialUnavailable ? "—" : remain.toFixed(0)}
+            {!officialUnavailable ? <span className="ml-1 text-lg text-mute">%</span> : null}
           </p>
         </div>
-        {!minimalMode ? (
+        {!minimalMode && !officialUnavailable ? (
           <div className="text-right text-xs text-mute">
             {weeklyView ? (
               <>
@@ -273,9 +304,11 @@ export function AgentCard({
                   {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
                   <span className="text-faint"> %</span>
                 </p>
-                <p className="mt-1">
-                  {meter.agent !== "codex" ? "API 等价按公开价折算" : "credit 按公开价等价折算"}
-                </p>
+                {!officialOnly ? (
+                  <p className="mt-1">
+                    {meter.agent !== "codex" ? "API 等价按公开价折算" : "credit 按公开价等价折算"}
+                  </p>
+                ) : null}
               </>
             ) : (
               <>
@@ -299,19 +332,23 @@ export function AgentCard({
         ) : null}
       </div>
 
-      {!minimalMode && sourceMessage ? (
+      {!minimalMode && displayedSourceMessage ? (
         <p className="mt-4 rounded-xl bg-raised px-3 py-2 text-xs leading-relaxed text-mute">
-          {sourceMessage}
+          {displayedSourceMessage}
         </p>
       ) : null}
 
       <div className="mt-4 space-y-3">
-        {weeklyView ? (
+        {officialUnavailable ? (
+          <p className="rounded-xl bg-raised px-3 py-3 text-sm text-mute">
+            暂未读取到官方额度
+          </p>
+        ) : weeklyView ? (
           <div>
             <MeterBar
               value={meter.weekPct}
               tone={weeklyTone}
-              label={minimalMode ? "已用" : weekMeterLabel}
+              label={minimalMode ? "本周额度" : weekMeterLabel}
               detail={minimalMode ? null : weekReset}
             />
             {minimalMode && weekResetHint ? (
@@ -356,7 +393,7 @@ export function AgentCard({
               label={weekMeterLabel}
               detail={weekReset}
             />
-            <QuotaPoolRows rows={quotaPools ?? []} tone={tone} />
+            <QuotaPoolRows rows={quotaPools ?? []} tone={tone} now={now} />
           </>
         )}
       </div>
@@ -375,7 +412,7 @@ export function AgentCard({
                   <div
                     className={cn(
                       "h-full rounded-full",
-                      tone === "claude" ? "bg-claude" : tone === "grok" ? "bg-grok" : "bg-codex",
+                      agentFillClass(tone),
                     )}
                     style={{ width: `${Math.max(0, Math.min(100, p.usagePercent ?? 0))}%` }}
                   />
@@ -388,7 +425,7 @@ export function AgentCard({
         </div>
       ) : null}
 
-      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
+      {!officialOnly ? <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
         {minimalMode ? (
           <>
             <Stat
@@ -512,15 +549,15 @@ export function AgentCard({
             ) : null}
           </>
         )}
-      </dl>
-      {!minimalMode ? (
+      </dl> : null}
+      {!minimalMode && !officialOnly ? (
         <>
           <p className="mt-3 text-[11px] leading-5 text-faint">
             按当前片段模型组合校准 · 本地日志覆盖 · 不是账户现金余额
             {valueSections.some((section) => section.value.rolling) ? " · 滚动窗口金额" : ""}
-            {valueSections.some((section) => section.value.externalUsageDetected)
-              ? " · 检测到本机以外用量"
-              : ""}
+            {diagnosticMessages.map((message) => (
+              <span key={message} className="block">· {message}</span>
+            ))}
           </p>
 
           {parallel ? (
@@ -580,7 +617,7 @@ export function AgentCard({
                     <div
                       className={cn(
                         "h-full rounded-full",
-                        tone === "claude" ? "bg-claude" : tone === "grok" ? "bg-grok" : "bg-codex",
+                        agentFillClass(tone),
                       )}
                       style={{ width: `${s.pct}%` }}
                     />
@@ -618,7 +655,7 @@ function formatCreditL1(value?: QuotaValue): { text: string; dim: boolean } {
   return { text: credits, dim: false };
 }
 
-function QuotaPoolRows({ rows, tone }: { rows: QuotaPoolView[]; tone: AgentId }) {
+function QuotaPoolRows({ rows, tone, now }: { rows: QuotaPoolView[]; tone: AgentId; now: number }) {
   if (!rows.length) return null;
   return (
     <div className="mt-4 space-y-3" aria-label="独立额度池">
@@ -663,6 +700,7 @@ function QuotaPoolRows({ rows, tone }: { rows: QuotaPoolView[]; tone: AgentId })
                 value={valuation.value.usedPercent}
                 tone={tone}
                 label={`${label}${suffix}`}
+                detail={formatWeekResetLabel(pool.resetsAt, now, { prefix: "刷新" })}
               />
             </div>
           );

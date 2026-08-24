@@ -8,11 +8,11 @@ import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { detectedAgentIds, visibleAgentIds } from "@/lib/quota/agent-availability";
 import { useQuota } from "@/lib/quota/store";
-import type { AgentId } from "@/lib/quota/types";
+import { isUsageAgentId, type UsageAgentId } from "@/lib/quota/types";
 import { pullAgentAvailability } from "@/lib/quota/watch";
 import { cn } from "@/lib/utils";
 
-const CAPTURE: Record<AgentId, { name: string; adapter: string }> = {
+const CAPTURE: Record<UsageAgentId, { name: string; adapter: string }> = {
   claude: { name: "Claude Code", adapter: "~/.claude" },
   grok: { name: "Grok", adapter: "~/.grok" },
   codex: { name: "Codex", adapter: "~/.codex" },
@@ -61,6 +61,13 @@ export function SettingsPanel() {
   const sampleCount = useQuota((s) => s.quotaSamples.length);
   const detectedAgents = detectedAgentIds(agentAvailability);
   const visibleAgents = visibleAgentIds(agentAvailability, demoMode, realEvents);
+  const detectedUsageAgents = detectedAgents.filter(isUsageAgentId);
+  const visibleUsageAgents = visibleAgents.filter(isUsageAgentId);
+  const liveByAgent: Record<UsageAgentId, boolean> = {
+    claude: liveClaude,
+    grok: liveGrok,
+    codex: liveCodex,
+  };
 
   const detect = async () => {
     setDetecting(true);
@@ -102,16 +109,16 @@ export function SettingsPanel() {
         <CardTitle>日志采集</CardTitle>
         <CardHint className="mt-1">关掉某一路后，不再读取对应客户端的新回合。</CardHint>
         <div className="mt-4 space-y-2">
-          {detectedAgents.map((agent) => (
+          {detectedUsageAgents.map((agent) => (
             <CaptureToggle
               key={agent}
               name={CAPTURE[agent].name}
               adapter={CAPTURE[agent].adapter}
-              live={agent === "claude" ? liveClaude : agent === "grok" ? liveGrok : liveCodex}
+              live={liveByAgent[agent]}
               onToggle={() => useQuota.getState().toggleLive(agent)}
             />
           ))}
-          {detectedAgents.length === 0 ? (
+          {detectedUsageAgents.length === 0 ? (
             <p className="rounded-xl bg-raised px-3 py-4 text-sm leading-relaxed text-mute">
               暂未检测到本机 Agent。运行一次 Agent 后，使用上方“重新检测”更新采集入口。
             </p>
@@ -139,7 +146,7 @@ export function SettingsPanel() {
       </Card>
 
       <PlansPanel
-        agents={visibleAgents}
+        agents={visibleUsageAgents}
         claudePlanId={claudePlanId}
         grokPlanId={grokPlanId}
         codexPlanId={codexPlanId}

@@ -1,4 +1,4 @@
-import type { AgentId, ModelId, PlanDef } from "./types.ts";
+import type { ModelId, PlanDef, UsageAgentId } from "./types.ts";
 
 export const CLAUDE_PLANS: PlanDef[] = [
   {
@@ -176,13 +176,13 @@ export function planById(id: string): PlanDef {
   return found;
 }
 
-export function plansFor(agent: AgentId): PlanDef[] {
+export function plansFor(agent: UsageAgentId): PlanDef[] {
   return ALL_PLANS.filter((p) => p.agent === agent);
 }
 
 export const MODEL_META: Record<
   ModelId,
-  { label: string; agent: AgentId; weight: number; inPerM: number; outPerM: number }
+  { label: string; agent: UsageAgentId; weight: number; inPerM: number; outPerM: number }
 > = {
   fable: { label: "Fable 5", agent: "claude", weight: 8, inPerM: 10, outPerM: 50 },
   opus: { label: "Opus 5", agent: "claude", weight: 5, inPerM: 5, outPerM: 25 },

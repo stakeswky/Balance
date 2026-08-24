@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
 import { useQuota } from "@/lib/quota/store";
-import type { AgentId } from "@/lib/quota/types";
+import type { UsageAgentId } from "@/lib/quota/types";
 
 const SAMPLE = `{
   "model": "sonnet",
@@ -20,7 +20,7 @@ const SAMPLE = `{
 }`;
 
 const ADAPTER: Record<
-  AgentId,
+  UsageAgentId,
   { name: string; path: string; detail: string; textClass: string }
 > = {
   claude: {
@@ -44,17 +44,17 @@ const ADAPTER: Record<
   },
 };
 
-const DEFAULT_LABEL: Record<AgentId, string> = {
+const DEFAULT_LABEL: Record<UsageAgentId, string> = {
   claude: "默认 Claude",
   grok: "默认 Grok",
   codex: "默认 Codex",
 };
 
-export function PluginPanel({ agents }: { agents: readonly AgentId[] }) {
+export function PluginPanel({ agents }: { agents: readonly UsageAgentId[] }) {
   const importText = useQuota((s) => s.importText);
   const loadImported = useQuota((s) => s.loadImported);
   const [blob, setBlob] = useState(SAMPLE);
-  const [agent, setAgent] = useState<AgentId | null>(agents[0] ?? null);
+  const [agent, setAgent] = useState<UsageAgentId | null>(agents[0] ?? null);
   const selectedAgent = agent && agents.includes(agent) ? agent : (agents[0] ?? null);
 
   useEffect(() => {

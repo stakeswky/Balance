@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { formatTokens } from "@/components/balance/format";
 import { CLAUDE_PLANS, CODEX_PLANS, GROK_PLANS } from "@/lib/quota/plans";
-import type { AgentId, PlanDef } from "@/lib/quota/types";
+import type { PlanDef, UsageAgentId } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
 function PlanList({
@@ -69,7 +69,7 @@ export function PlansPanel({
   onAlertWindow,
   onAlertWeek,
 }: {
-  agents: readonly AgentId[];
+  agents: readonly UsageAgentId[];
   claudePlanId: string;
   grokPlanId: string;
   codexPlanId: string;

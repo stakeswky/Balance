@@ -15,7 +15,7 @@ import {
 import { agentDotClass } from "@/lib/quota/agent";
 import { CLAUDE_PLANS, CODEX_PLANS, GROK_PLANS } from "@/lib/quota/plans";
 import type { QuotaAlert } from "@/lib/quota/store";
-import type { AgentId, MeterSnapshot, PlanDef, UsageEvent } from "@/lib/quota/types";
+import { isUsageAgentId, type MeterSnapshot, type PlanDef, type UsageAgentId, type UsageEvent } from "@/lib/quota/types";
 import { WEEK_MS } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 
@@ -39,7 +39,7 @@ const REPORT_AGENT_CONFIG = [
     plans: CODEX_PLANS,
   },
 ] satisfies Array<{
-  agent: AgentId;
+  agent: UsageAgentId;
   planTitle: string;
   shareTitle: string;
   plans: PlanDef[];
@@ -96,7 +96,7 @@ function PlanCompare({
 }: {
   title: string;
   events: UsageEvent[];
-  agent: AgentId;
+  agent: UsageAgentId;
   currentId: string;
   currentMeter: MeterSnapshot;
   plans: PlanDef[];
@@ -173,7 +173,7 @@ export function ReportPanel({
   onClearAlerts,
   onOpenSession,
 }: {
-  agents: readonly AgentId[];
+  agents: readonly UsageAgentId[];
   events: UsageEvent[];
   now: number;
   claudeMeter: MeterSnapshot;
@@ -189,17 +189,19 @@ export function ReportPanel({
   onOpenSession: (id: string) => void;
 }) {
   const visibleEvents = events.filter((event) => agents.includes(event.agent));
-  const visibleAlerts = alerts.filter((alert) => agents.includes(alert.agent));
+  const visibleAlerts = alerts.filter(
+    (alert) => isUsageAgentId(alert.agent) && agents.includes(alert.agent),
+  );
   const week = inWindow(visibleEvents, now, WEEK_MS);
   const allSessions = groupSessions(visibleEvents, now, WEEK_MS);
   const sessions = allSessions.slice(0, 8);
   const weekTokens = week.reduce((s, e) => s + rawTokens(e), 0);
-  const meterByAgent: Record<AgentId, MeterSnapshot> = {
+  const meterByAgent: Record<UsageAgentId, MeterSnapshot> = {
     claude: claudeMeter,
     grok: grokMeter,
     codex: codexMeter,
   };
-  const currentPlanByAgent: Record<AgentId, string> = {
+  const currentPlanByAgent: Record<UsageAgentId, string> = {
     claude: claudePlanId,
     grok: grokPlanId,
     codex: codexPlanId,

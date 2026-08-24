@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyOfficial, routingAdvice } from "./engine.ts";
+import { AGENT_LABEL } from "./agent.ts";
 import type { OfficialSlice } from "./official.ts";
 import {
   apiEquivalentSections,
@@ -209,6 +210,21 @@ test("tightest quota includes a stricter Fable sub-limit", () => {
     { label: "Claude Fable 5", pct: 80, resetsAt: 20 },
   ]);
   assert.deepEqual(result, { label: "Claude Fable 5", pct: 80, resetsAt: 20 });
+});
+
+test("Antigravity has stable labels and routing advice never calls it Codex", () => {
+  assert.equal(AGENT_LABEL.antigravity, "Antigravity");
+  assert.equal(quotaPoolLabel({
+    id: "gemini-weekly",
+    label: "Gemini Models · 每周",
+    kind: "quota-window",
+  }), "Gemini Models · 每周");
+  const tips = routingAdvice([
+    meter({ agent: "claude", windowPct: 80, weekPct: 80 }),
+    meter({ agent: "antigravity", windowPct: 10, weekPct: 10 }),
+  ]);
+  assert.ok(tips.some((tip) => tip.title.includes("Antigravity")));
+  assert.ok(tips.every((tip) => !tip.title.includes("Codex") && !tip.body.includes("Codex")));
 });
 
 const WEEK_RESET = Date.parse("2026-08-26T20:59:00Z");

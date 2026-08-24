@@ -19,13 +19,25 @@ import {
 } from "./official.ts";
 import { quotaEventIdentity } from "./quota-cache.ts";
 import { activityIdOf, CALIBRATION_RETENTION_MS } from "./types.ts";
-import type { AgentId, AgentLiveInfo, ModelId, SessionState, UsageEvent } from "./types.ts";
+import type { AgentId, AgentLiveInfo, ModelId, SessionState, UsageAgentId, UsageEvent } from "./types.ts";
 
 const MAX_DISPLAY_EVENTS = 20_000;
 const MAX_CALIBRATION_EVENTS = 100_000;
 const MAX_ALERTS = 40;
 
-export const QUOTA_PERSIST_VERSION = 2;
+export const QUOTA_PERSIST_VERSION = 3;
+
+function normalizeAvailability(value: unknown): AgentAvailability {
+  const source = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    claude: source.claude === true,
+    grok: source.grok === true,
+    codex: source.codex === true,
+    antigravity: source.antigravity === true,
+  };
+}
 
 export function migrateQuotaPersist(
   persisted: unknown,
@@ -39,6 +51,11 @@ export function migrateQuotaPersist(
     state.minimalMode = true;
   }
   if (fromVersion < 2) {
+    state.alertLatches = normalizeAlertLatches(state.alertLatches);
+  }
+  if (fromVersion < 3) {
+    state.agentAvailability = normalizeAvailability(state.agentAvailability);
+    state.captureEnabled = normalizeAvailability(state.captureEnabled);
     state.alertLatches = normalizeAlertLatches(state.alertLatches);
   }
   return state;
@@ -60,6 +77,8 @@ const QUOTA_ALERT_LATCH_KEYS = [
   "grokWeek",
   "codexWin",
   "codexWeek",
+  "antigravityWin",
+  "antigravityWeek",
 ] as const;
 
 export type QuotaAlertLatchKey = typeof QUOTA_ALERT_LATCH_KEYS[number];
@@ -78,6 +97,8 @@ export function normalizeAlertLatches(value: unknown): QuotaAlertLatches {
     grokWeek: source.grokWeek === true,
     codexWin: source.codexWin === true,
     codexWeek: source.codexWeek === true,
+    antigravityWin: source.antigravityWin === true,
+    antigravityWeek: source.antigravityWeek === true,
   };
 }
 
@@ -106,7 +127,10 @@ function clearAgentAlertLatches(
   if (agent === "grok") {
     return { ...current, grokWin: false, grokWeek: false };
   }
-  return { ...current, codexWin: false, codexWeek: false };
+  if (agent === "codex") {
+    return { ...current, codexWin: false, codexWeek: false };
+  }
+  return { ...current, antigravityWin: false, antigravityWeek: false };
 }
 
 interface TrimmedEventState {
@@ -224,7 +248,7 @@ export interface QuotaState {
   alertWeekPct: number;
   alertLatches: QuotaAlertLatches;
   alerts: QuotaAlert[];
-  setPlan: (agent: AgentId, id: string) => void;
+  setPlan: (agent: UsageAgentId, id: string) => void;
   setBoost: (n: number) => void;
   setAlertWindow: (n: number) => void;
   setAlertWeek: (n: number) => void;
@@ -235,10 +259,10 @@ export interface QuotaState {
   setOnboardingComplete: (complete: boolean) => void;
   setDemoMode: (on: boolean) => void;
   setMinimalMode: (on: boolean) => void;
-  toggleLive: (agent: AgentId) => void;
+  toggleLive: (agent: UsageAgentId) => void;
   setBothLive: (on: boolean) => void;
   tick: (now?: number) => UsageEvent[];
-  importText: (text: string, agent: AgentId) => number;
+  importText: (text: string, agent: UsageAgentId) => number;
   ingestClaudeLogs: (
     incoming: UsageEvent[],
     opts?: { replace?: boolean; live?: AgentLiveInfo | null; active?: AgentLiveInfo[] },
@@ -313,7 +337,7 @@ type IngestOptions = {
 
 function idleIngestPatch(
   state: QuotaState,
-  agent: AgentId,
+  agent: UsageAgentId,
   opts: IngestOptions | undefined,
 ): Partial<QuotaState> {
   const live = opts?.live;
@@ -357,7 +381,7 @@ export const useQuota = create<QuotaState>()(
       demoMode: false,
       minimalMode: true,
       agentAvailability: { ...EMPTY_AGENT_AVAILABILITY },
-      captureEnabled: { ...ALL_AGENT_AVAILABILITY },
+      captureEnabled: { ...ALL_AGENT_AVAILABILITY, antigravity: false },
       onboardingComplete: false,
       claudeCursor: 0,
       grokCursor: 0,
@@ -522,6 +546,7 @@ export const useQuota = create<QuotaState>()(
           claude: on,
           grok: on,
           codex: on,
+          antigravity: false,
         };
         set({
           captureEnabled,
@@ -542,7 +567,7 @@ export const useQuota = create<QuotaState>()(
         let codexSession =
           state.codexSession ?? (state.demoMode && state.liveCodex ? newSession(rng, "codex", now) : null);
 
-        const maybeRotate = (session: SessionState, agent: AgentId) => {
+        const maybeRotate = (session: SessionState, agent: UsageAgentId) => {
           if (session.events > 0 && (session.events >= 8 || now - session.startedAt > 18 * 60_000) && rng() < 0.22) {
             return newSession(rng, agent, now);
           }

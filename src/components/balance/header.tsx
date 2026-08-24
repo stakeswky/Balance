@@ -32,6 +32,14 @@ export function Header({
           <span className="grid size-8 place-items-center rounded-xl bg-raised shadow-[var(--shadow-border)]">
             <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
               <path
+                d="M1 16a11 11 0 0 1 22 0"
+                fill="none"
+                stroke="currentColor"
+                className="text-antigravity"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <path
                 d="M2 16a10 10 0 0 1 20 0"
                 fill="none"
                 stroke="currentColor"

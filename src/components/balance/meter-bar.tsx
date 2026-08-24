@@ -7,7 +7,7 @@ export function MeterBar({
   detail,
 }: {
   value: number;
-  tone: "claude" | "grok" | "codex" | "ok" | "warn" | "crit";
+  tone: "claude" | "grok" | "codex" | "antigravity" | "ok" | "warn" | "crit";
   label?: string;
   detail?: string | null;
 }) {
@@ -27,6 +27,7 @@ export function MeterBar({
             tone === "claude" && "bg-claude",
             tone === "grok" && "bg-grok",
             tone === "codex" && "bg-codex",
+            tone === "antigravity" && "bg-antigravity",
             tone === "ok" && "bg-ok",
             tone === "warn" && "bg-warn",
             tone === "crit" && "bg-crit",

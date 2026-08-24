@@ -1,5 +1,5 @@
 import { rawTokens } from "./engine.ts";
-import { WINDOW_MS, activityIdOf, type AgentId, type UsageEvent } from "./types.ts";
+import { WINDOW_MS, activityIdOf, type UsageAgentId, type UsageEvent } from "./types.ts";
 
 export interface TimelineSession {
   id: string;
@@ -11,7 +11,7 @@ export interface TimelineSession {
 
 export function timelineSessions(
   events: UsageEvent[],
-  agent: AgentId,
+  agent: UsageAgentId,
   now: number,
 ): TimelineSession[] {
   const from = now - WINDOW_MS;

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { eventsForAgents, visibleAgentIds } from "./agent-availability.ts";
-import type { AgentId, UsageEvent } from "./types.ts";
+import type { UsageAgentId, UsageEvent } from "./types.ts";
 
-function event(agent: AgentId, id = `event-${agent}`): UsageEvent {
+function event(agent: UsageAgentId, id = `event-${agent}`): UsageEvent {
   return {
     id,
     agent,
@@ -20,7 +20,7 @@ function event(agent: AgentId, id = `event-${agent}`): UsageEvent {
 }
 
 test("real mode shows only detected agents", () => {
-  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: true }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: true, antigravity: false }, false, []), [
     "claude",
     "codex",
   ]);
@@ -28,19 +28,19 @@ test("real mode shows only detected agents", () => {
 
 test("manual data makes an undetected agent visible", () => {
   assert.deepEqual(
-    visibleAgentIds({ claude: false, grok: false, codex: false }, false, [event("grok")]),
+    visibleAgentIds({ claude: false, grok: false, codex: false, antigravity: false }, false, [event("grok")]),
     ["grok"],
   );
 });
 
 test("real mode with no detected or imported agents has no active data", () => {
-  const agents = visibleAgentIds({ claude: false, grok: false, codex: false }, false, []);
+  const agents = visibleAgentIds({ claude: false, grok: false, codex: false, antigravity: false }, false, []);
   assert.deepEqual(agents, []);
   assert.deepEqual(eventsForAgents([event("claude"), event("grok"), event("codex")], agents), []);
 });
 
 test("demo mode always shows all three agents", () => {
-  assert.deepEqual(visibleAgentIds({ claude: false, grok: false, codex: false }, true, []), [
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: false, codex: false, antigravity: false }, true, []), [
     "claude",
     "grok",
     "codex",
@@ -64,29 +64,29 @@ test("eventsForAgents removes unavailable agent data from summaries", () => {
 });
 
 test("real mode covers every single-agent and two-agent combination", () => {
-  const none = { claude: false, grok: false, codex: false };
-  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: false }, false, []), [
+  const none = { claude: false, grok: false, codex: false, antigravity: false };
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: false, antigravity: false }, false, []), [
     "claude",
   ]);
-  assert.deepEqual(visibleAgentIds({ claude: false, grok: true, codex: false }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: true, codex: false, antigravity: false }, false, []), [
     "grok",
   ]);
-  assert.deepEqual(visibleAgentIds({ claude: false, grok: false, codex: true }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: false, codex: true, antigravity: false }, false, []), [
     "codex",
   ]);
-  assert.deepEqual(visibleAgentIds({ claude: true, grok: true, codex: false }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: true, codex: false, antigravity: false }, false, []), [
     "claude",
     "grok",
   ]);
-  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: true }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: false, codex: true, antigravity: false }, false, []), [
     "claude",
     "codex",
   ]);
-  assert.deepEqual(visibleAgentIds({ claude: false, grok: true, codex: true }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: false, grok: true, codex: true, antigravity: false }, false, []), [
     "grok",
     "codex",
   ]);
-  assert.deepEqual(visibleAgentIds({ claude: true, grok: true, codex: true }, false, []), [
+  assert.deepEqual(visibleAgentIds({ claude: true, grok: true, codex: true, antigravity: false }, false, []), [
     "claude",
     "grok",
     "codex",
@@ -103,4 +103,11 @@ test("hidden agent events are excluded from visible token totals", () => {
     visible.reduce((sum, item) => sum + item.tokensIn + item.tokensOut, 0),
     110,
   );
+});
+
+test("Antigravity is visible from CLI availability but never becomes a demo usage agent", () => {
+  const availability = { claude: false, grok: false, codex: false, antigravity: true };
+  assert.deepEqual(visibleAgentIds(availability, false, []), ["antigravity"]);
+  assert.deepEqual(visibleAgentIds(availability, true, []), ["claude", "grok", "codex"]);
+  assert.deepEqual(eventsForAgents([event("claude")], ["antigravity"]), []);
 });

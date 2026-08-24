@@ -40,7 +40,8 @@ test("secondary monitor descriptions move into accessible hover help", () => {
   assert.match(dashboard, /<InlineHelp/);
   assert.match(dashboard, /协同时间线：/);
   assert.match(dashboard, /近 24 小时 token：/);
-  assert.match(agentCard, /套餐：\$\{plan\.name\} · 配置路径：\$\{adapter\}/);
+  assert.match(agentCard, /套餐：\$\{planName\}/);
+  assert.match(agentCard, /配置路径：\$\{adapter\}/);
 });
 
 test("minimal weekly reset keeps absolute time in hover help", () => {
@@ -74,4 +75,15 @@ test("monitor cards and dashboard use compact spacing", () => {
   assert.match(dashboard, /flex flex-col gap-4/);
   assert.doesNotMatch(dashboard, /self-start/);
   assert.doesNotMatch(dashboard, /space-y-5/);
+});
+
+test("Antigravity uses an official-only card with its own visual tone", () => {
+  const dashboard = read("src/components/balance/dashboard.tsx");
+  const agentCard = read("src/components/balance/agent-card.tsx");
+  const styles = read("src/styles.css");
+  assert.match(dashboard, /name="Antigravity"/);
+  assert.match(dashboard, /officialOnly/);
+  assert.match(agentCard, /!officialOnly && onToggle/);
+  assert.match(styles, /--color-antigravity:/);
+  assert.match(styles, /--antigravity:/);
 });

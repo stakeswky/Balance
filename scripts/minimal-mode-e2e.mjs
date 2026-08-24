@@ -27,9 +27,9 @@ const mobileShot = checkedOutputPath(resolve(repoRoot, "screenshots", "minimal-m
   repoRoot,
 ]);
 mkdirSync(dirname(desktopShot), { recursive: true });
-const ALL_AGENTS = { claude: true, grok: true, codex: true };
-const CLAUDE_ONLY = { claude: true, grok: false, codex: false };
-const NO_AGENTS = { claude: false, grok: false, codex: false };
+const ALL_AGENTS = { claude: true, grok: true, codex: true, antigravity: false };
+const CLAUDE_ONLY = { claude: true, grok: false, codex: false, antigravity: false };
+const NO_AGENTS = { claude: false, grok: false, codex: false, antigravity: false };
 function serializeAvailability(availability) {
   const flag = (on) => (on ? { t: 2, s: 2 } : { t: 2, s: 3 });
   return JSON.stringify({

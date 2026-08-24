@@ -14,6 +14,7 @@ const ADAPTER: Record<(typeof AGENT_IDS)[number], string> = {
   claude: "~/.claude 或 ~/.config/claude",
   grok: "$GROK_HOME 或 ~/.grok",
   codex: "$CODEX_HOME 或 ~/.codex",
+  antigravity: "agy · ~/.gemini",
 };
 
 export function Onboarding({

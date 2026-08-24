@@ -25,9 +25,9 @@ export interface ProviderReportedCost {
 
 export type UsageAgentId = "claude" | "codex" | "grok";
 export type OfficialAgentId = UsageAgentId | "antigravity";
-export type AgentId = UsageAgentId;
+export type AgentId = OfficialAgentId;
 
-export function isUsageAgentId(agent: OfficialAgentId): agent is UsageAgentId {
+export function isUsageAgentId(agent: AgentId): agent is UsageAgentId {
   return agent !== "antigravity";
 }
 

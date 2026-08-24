@@ -1,5 +1,5 @@
 import { costBreakdown, eventRawTokens } from "./cost.ts";
-import type { AgentId, UsageEvent } from "./types.ts";
+import type { UsageAgentId, UsageEvent } from "./types.ts";
 
 export interface WindowObservation {
   observedUsd: number;
@@ -21,10 +21,10 @@ interface AgentCostIndex {
 }
 
 export interface UsageCostIndex {
-  agents: Record<AgentId, AgentCostIndex>;
+  agents: Record<UsageAgentId, AgentCostIndex>;
 }
 
-const AGENTS: AgentId[] = ["claude", "grok", "codex"];
+const AGENTS: UsageAgentId[] = ["claude", "grok", "codex"];
 
 export function deduplicateUsageEvents(events: UsageEvent[]): UsageEvent[] {
   const seen = new Set<string>();
@@ -71,7 +71,7 @@ function upperBound(values: number[], target: number): number {
 
 export function buildUsageCostIndex(events: UsageEvent[]): UsageCostIndex {
   const agents = Object.fromEntries(AGENTS.map((agent) => [agent, emptyAgentIndex()])) as Record<
-    AgentId,
+    UsageAgentId,
     AgentCostIndex
   >;
   const uniqueEvents = deduplicateUsageEvents(events);
@@ -107,7 +107,7 @@ export function buildUsageCostIndex(events: UsageEvent[]): UsageCostIndex {
 
 export function observeIndexedWindow(
   index: UsageCostIndex,
-  agent: AgentId,
+  agent: UsageAgentId,
   start: number,
   end: number,
 ): WindowObservation {

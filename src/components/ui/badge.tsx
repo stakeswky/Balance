@@ -14,6 +14,7 @@ const badgeVariants = cva(
         claude: "bg-claude-dim text-claude",
         grok: "bg-grok-dim text-grok",
         codex: "bg-codex-dim text-codex",
+        antigravity: "bg-antigravity-dim text-antigravity",
       },
     },
     defaultVariants: { tone: "mute" },

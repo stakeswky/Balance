@@ -1,6 +1,6 @@
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { hourlySeries } from "@/lib/quota/engine";
-import type { AgentId, UsageEvent } from "@/lib/quota/types";
+import type { UsageAgentId, UsageEvent } from "@/lib/quota/types";
 import { cn } from "@/lib/utils";
 import { formatTokens } from "./format";
 
@@ -10,7 +10,7 @@ export function UsageChart({
   now,
   className,
 }: {
-  agents: readonly AgentId[];
+  agents: readonly UsageAgentId[];
   events: UsageEvent[];
   now: number;
   className?: string;

@@ -1,10 +1,10 @@
 import { agentTextClass } from "@/lib/quota/agent";
-import type { AgentId, UsageEvent } from "@/lib/quota/types";
+import type { UsageAgentId, UsageEvent } from "@/lib/quota/types";
 import { WINDOW_MS } from "@/lib/quota/types";
 import { timelineSessions } from "@/lib/quota/timeline-sessions";
 import { cn } from "@/lib/utils";
 
-function Lane({ agent, events, now }: { agent: AgentId; events: UsageEvent[]; now: number }) {
+function Lane({ agent, events, now }: { agent: UsageAgentId; events: UsageEvent[]; now: number }) {
   const blocks = timelineSessions(events, agent, now);
   const from = now - WINDOW_MS;
   return (
@@ -34,7 +34,7 @@ export function DualTimeline({
   events,
   now,
 }: {
-  agents: readonly AgentId[];
+  agents: readonly UsageAgentId[];
   events: UsageEvent[];
   now: number;
 }) {

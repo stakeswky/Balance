@@ -540,9 +540,9 @@ try {
   for (const [name, payload] of PROD
     ? []
     : [
-        ["claude-only", { claude: true, grok: false, codex: false }],
-        ["grok-only", { claude: false, grok: true, codex: false }],
-        ["codex-only", { claude: false, grok: false, codex: true }],
+        ["claude-only", { claude: true, grok: false, codex: false, antigravity: false }],
+        ["grok-only", { claude: false, grok: true, codex: false, antigravity: false }],
+        ["codex-only", { claude: false, grok: false, codex: true, antigravity: false }],
       ]) {
     const agent = name.replace("-only", "");
     await assertCase(
@@ -569,7 +569,7 @@ try {
   if (!PROD)
     await assertCase("zero agents shows recoverable empty states", async () => {
       const { context, page, bucket } = await newPage(browser, { width: 1280, height: 900 });
-      await startFresh(page, { payload: { claude: false, grok: false, codex: false } });
+      await startFresh(page, { payload: { claude: false, grok: false, codex: false, antigravity: false } });
       await waitForOnboarding(page);
       await page.getByText("未检测到").nth(2).waitFor({ timeout: 20_000 });
       await enterWorkbench(page);
@@ -629,10 +629,10 @@ try {
       await seedPersist(page, {
         onboardingComplete: true,
         demoMode: false,
-        agentAvailability: { claude: true, grok: true, codex: true },
+        agentAvailability: { claude: true, grok: true, codex: true, antigravity: false },
       });
       const hook = await interceptAvailability(page, {
-        payload: { claude: true, grok: false, codex: false },
+        payload: { claude: true, grok: false, codex: false, antigravity: false },
         hold: true,
       });
       await page.reload({ waitUntil: "domcontentloaded" });

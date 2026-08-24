@@ -3,21 +3,21 @@ import { resolve } from "node:path";
 import type { CachedLogCursor } from "./quota-cache.ts";
 import { isSafeModelRaw } from "./quota-cache.ts";
 import type { FileCursor, InventoryEntry } from "./file-inventory.server.ts";
-import type { AgentId } from "./types.ts";
+import type { UsageAgentId } from "./types.ts";
 
 export interface SeededLogCursor {
   path: string;
   cached: CachedLogCursor;
 }
 
-export function logPathHash(agent: AgentId, path: string): string {
+export function logPathHash(agent: UsageAgentId, path: string): string {
   return createHash("sha256")
     .update(`${agent}\0${resolve(path)}`, "utf8")
     .digest("hex");
 }
 
 export function cachedLogCursor(
-  agent: AgentId,
+  agent: UsageAgentId,
   path: string,
   cursor: FileCursor,
   modelRaw?: string,
@@ -37,7 +37,7 @@ export function cachedLogCursor(
 }
 
 export function snapshotLogCursors(
-  agent: AgentId,
+  agent: UsageAgentId,
   files: ReadonlyMap<string, FileCursor>,
   modelForPath: (path: string) => string | undefined = () => undefined,
 ): CachedLogCursor[] {
@@ -48,7 +48,7 @@ export function snapshotLogCursors(
 }
 
 export function seedFileCursors(
-  agent: AgentId,
+  agent: UsageAgentId,
   entries: readonly InventoryEntry[],
   files: Map<string, FileCursor>,
   cached: readonly CachedLogCursor[],

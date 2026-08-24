@@ -25,9 +25,9 @@ import {
   type QuotaBootstrapPage,
   type QuotaCacheSnapshot,
 } from "./quota-cache.ts";
-import type { AgentId, UsageEvent } from "./types.ts";
+import type { UsageAgentId, UsageEvent } from "./types.ts";
 
-export function eventIdHash(agent: AgentId, id: string): string {
+export function eventIdHash(agent: UsageAgentId, id: string): string {
   return createHash("sha256").update(`${agent}\0${id}`, "utf8").digest("hex");
 }
 
@@ -356,7 +356,7 @@ function sameCursor(left: CachedLogCursor, right: CachedLogCursor): boolean {
 
 function replaceAgentCursors(
   cache: QuotaServerCacheState,
-  agent: AgentId,
+  agent: UsageAgentId,
   incoming: CachedLogCursor[],
 ): boolean {
   const next = new Map(
@@ -384,9 +384,9 @@ function sameQuotaEventForCache(left: UsageEvent, right: UsageEvent): boolean {
 }
 
 export interface QuotaCacheCoordinator {
-  resumeCursors: (agent: AgentId) => CachedLogCursor[];
+  resumeCursors: (agent: UsageAgentId) => CachedLogCursor[];
   recordScan: (
-    agent: AgentId,
+    agent: UsageAgentId,
     incomingEvents: UsageEvent[],
     incomingCursors: CachedLogCursor[],
     now?: number,
@@ -416,7 +416,7 @@ export function createQuotaCacheCoordinator(deps: QuotaCacheCoordinatorDeps): Qu
       return [...current().cursors.values()].filter((cursor) => cursor.agent === agent);
     },
     async recordScan(
-      agent: AgentId,
+      agent: UsageAgentId,
       incomingEvents: UsageEvent[],
       incomingCursors: CachedLogCursor[],
       now = Date.now(),
@@ -456,12 +456,12 @@ const quotaCacheCoordinator = createQuotaCacheCoordinator({
   enqueue: enqueueQuotaCacheWrite,
 });
 
-export function quotaResumeCursors(agent: AgentId): CachedLogCursor[] {
+export function quotaResumeCursors(agent: UsageAgentId): CachedLogCursor[] {
   return quotaCacheCoordinator.resumeCursors(agent);
 }
 
 export function recordQuotaScan(
-  agent: AgentId,
+  agent: UsageAgentId,
   events: UsageEvent[],
   cursors: CachedLogCursor[],
   now = Date.now(),
