@@ -70,4 +70,8 @@ test("desktop lifecycle waits for one live task process tree", async () => {
   assert.match(source, /taskEventPids\(events\)\.length >= 2/);
   assert.match(source, /taskEventPids\(closeRun\.events\)/);
   assert.match(source, /taskEventPids\(interruptedRun\.events\)/);
+  assert.match(source, /e2e-source-home/);
+  assert.match(source, /HOME: e2eHome/);
+  assert.match(source, /CODEX_HOME: e2eCodexHome/);
+  assert.match(source, /GROK_HOME: e2eGrokHome/);
 });

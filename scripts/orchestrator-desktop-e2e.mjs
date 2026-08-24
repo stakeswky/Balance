@@ -213,9 +213,21 @@ async function waitForHealth(app) {
 }
 
 function launchApp(stateDirectory, logDescriptor) {
+  const e2eHome = join(stateDirectory, "e2e-source-home");
+  const e2eCodexHome = join(e2eHome, ".codex");
+  const e2eGrokHome = join(e2eHome, ".grok");
+  for (const directory of [e2eHome, join(e2eHome, ".claude"), e2eCodexHome, e2eGrokHome]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
   return spawn(APP_EXECUTABLE, [], {
     cwd: join(APP_BUNDLE, "Contents/MacOS"),
-    env: { ...process.env, BALANCE_E2E_STATE_DIR: stateDirectory },
+    env: {
+      ...process.env,
+      HOME: e2eHome,
+      CODEX_HOME: e2eCodexHome,
+      GROK_HOME: e2eGrokHome,
+      BALANCE_E2E_STATE_DIR: stateDirectory,
+    },
     stdio: ["ignore", logDescriptor, logDescriptor],
   });
 }
