@@ -108,6 +108,33 @@ function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 20_000);
 }
 
+function startReservationHeartbeat(
+  reservation: CapacityReservation,
+  onFailure: (error: unknown) => void,
+): { stop(): Promise<void> } {
+  let stopped = false;
+  let inFlight = Promise.resolve();
+  const timer = setInterval(() => {
+    if (stopped) return;
+    inFlight = inFlight
+      .then(() => reservation.renew())
+      .catch((error: unknown) => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(timer);
+        onFailure(error);
+      });
+  }, reservation.renewalIntervalMs);
+  timer.unref();
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await inFlight;
+    },
+  };
+}
+
 function hasAssignedAgent(
   task: TaskRunState,
 ): task is TaskRunState & { assignedAgent: NativeAgentId } {
@@ -335,6 +362,9 @@ export async function resolveIntegrationConflict(
   });
   let lease: AgentLease | null = null;
   let capacityReservation: CapacityReservation | null = null;
+  let reservationHeartbeat: { stop(): Promise<void> } | null = null;
+  let reservationFailure: unknown = null;
+  let runningProcess: RunningProcess | null = null;
   const startedAt = dependencies.now();
   const activityEvents: OrchestratorEvent[] = [];
   let succeeded = false;
@@ -345,6 +375,10 @@ export async function resolveIntegrationConflict(
       requests: { [input.repairAgent]: 1 },
       availableUnits: await dependencies.availableExecutionUnits(input.run),
       signal: input.signal,
+    });
+    reservationHeartbeat = startReservationHeartbeat(capacityReservation, (error) => {
+      reservationFailure ??= error;
+      void runningProcess?.cancel().catch(() => undefined);
     });
     lease = await dependencies.acquireAgentLease({
       agent: input.repairAgent,
@@ -369,7 +403,11 @@ export async function resolveIntegrationConflict(
         });
       },
     });
+    runningProcess = process;
     const result = await process.completion;
+    if (reservationFailure) {
+      throw new Error(`repair capacity reservation renewal failed: ${errorMessage(reservationFailure)}`);
+    }
     if (input.signal.aborted) throw new CancelledError();
     if (result.exitCode !== 0)
       throw new Error(`coordinator conflict repair exited with code ${result.exitCode}`);
@@ -379,37 +417,47 @@ export async function resolveIntegrationConflict(
         cwd: input.integrationPath,
         signal: input.signal,
       });
+      if (reservationFailure) {
+        throw new Error(`repair capacity reservation renewal failed: ${errorMessage(reservationFailure)}`);
+      }
       if (verification.exitCode !== 0) throw new Error(`conflict verification failed for ${task.id}`);
     }
     const commitSha = await dependencies.commitTaskWorktree(
       input.integrationPath,
       `fix(orchestrator): resolve ${task.id} integration conflict`,
     );
+    if (reservationFailure) {
+      throw new Error(`repair capacity reservation renewal failed: ${errorMessage(reservationFailure)}`);
+    }
     succeeded = true;
     return commitSha;
   } finally {
     try {
-      await prepared.cleanup();
+      await reservationHeartbeat?.stop();
     } finally {
       try {
-        await lease?.release();
+        await prepared.cleanup();
       } finally {
         try {
-          await capacityReservation?.release();
+          await lease?.release();
         } finally {
-          const { sessionId, usage } = summarizeAgentEvents(activityEvents);
-          await dependencies.store.appendActivity({
-            runId: input.run.id,
-            taskId: input.taskId,
-            agent: input.repairAgent,
-            role: "repair",
-            startedAt,
-            finishedAt: Math.max(dependencies.now(), startedAt),
-            success: succeeded,
-            sessionId,
-            usage,
-            events: activityEvents,
-          });
+          try {
+            await capacityReservation?.release();
+          } finally {
+            const { sessionId, usage } = summarizeAgentEvents(activityEvents);
+            await dependencies.store.appendActivity({
+              runId: input.run.id,
+              taskId: input.taskId,
+              agent: input.repairAgent,
+              role: "repair",
+              startedAt,
+              finishedAt: Math.max(dependencies.now(), startedAt),
+              success: succeeded,
+              sessionId,
+              usage,
+              events: activityEvents,
+            });
+          }
         }
       }
     }
@@ -804,12 +852,27 @@ export async function scheduleRun(
           terminal = true;
           return waiting;
         }
+        let reservationFailure: unknown = null;
+        const reservationHeartbeat = startReservationHeartbeat(reservation, (error) => {
+          reservationFailure ??= error;
+          for (const controller of taskControllers.values()) controller.abort();
+          void Promise.allSettled([...runningProcesses.values()].map((process) => process.cancel()));
+        });
+        const assertReservationHealthy = (): void => {
+          if (reservationFailure) {
+            throw new Error(
+              `wave capacity reservation renewal failed: ${errorMessage(reservationFailure)}`,
+            );
+          }
+        };
         const results = await Promise.allSettled(
           wave.map((task) => executeTask(task.id, baseSha, integration)),
         );
         try {
+          assertReservationHealthy();
           let failure: unknown = null;
           for (let index = 0; index < wave.length; index += 1) {
+            assertReservationHealthy();
             const task = wave[index]!;
             const result = results[index]!;
             pending.delete(task.id);
@@ -863,6 +926,7 @@ export async function scheduleRun(
                 status: "completed",
                 finishedAt: dependencies.now(),
               }));
+              assertReservationHealthy();
               integrated.add(task.id);
               await cleanupTask(task.id);
             } catch (error) {
@@ -897,7 +961,11 @@ export async function scheduleRun(
             return (await dependencies.store.get(request.runId))!;
           }
         } finally {
-          await reservation.release();
+          try {
+            await reservationHeartbeat.stop();
+          } finally {
+            await reservation.release();
+          }
         }
       }
       await dependencies.assertOriginalHeadUnchanged(repository);

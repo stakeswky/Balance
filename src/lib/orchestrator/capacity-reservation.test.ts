@@ -107,6 +107,32 @@ test("abort, expiry, releaseRun and shutdown clear reservations safely", async (
   await manager.shutdown();
 });
 
+test("renewal keeps an active wave reserved beyond its original TTL", async () => {
+  let now = 1_000;
+  const manager = createCapacityReservationManager({ ttlMs: 50, now: () => now });
+  const first = await manager.reserveWave({
+    runId: "run-one", waveId: "wave-1", requests: { codex: 6 },
+    availableUnits: AVAILABLE, signal: new AbortController().signal,
+  });
+  assert.equal(first.expiresAt, 1_050);
+
+  now = 1_040;
+  await first.renew();
+  assert.equal(first.expiresAt, 1_090);
+  now = 1_060;
+  await assert.rejects(
+    () => manager.reserveWave({
+      runId: "run-two", waveId: "wave-1", requests: { codex: 6 },
+      availableUnits: AVAILABLE, signal: new AbortController().signal,
+    }),
+    CapacityReservationConflictError,
+  );
+
+  now = 1_091;
+  assert.equal(manager.snapshot().active, 0);
+  await assert.rejects(() => first.renew(), /expired|active|released/i);
+});
+
 test("rejects invalid units and a changed duplicate request", async () => {
   const manager = createCapacityReservationManager({ ttlMs: 60_000 });
   const signal = new AbortController().signal;

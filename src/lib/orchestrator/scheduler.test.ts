@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { createAgentLeaseManager } from "./agent-lease.server.ts";
-import { createCapacityReservationManager } from "./capacity-reservation.server.ts";
+import {
+  CapacityReservationConflictError,
+  createCapacityReservationManager,
+} from "./capacity-reservation.server.ts";
 import { fingerprintPlan } from "./plan.ts";
 import { createRunStore } from "./run-store.server.ts";
 import {
@@ -648,6 +651,41 @@ test("turns a cross-run reservation conflict into a resumable wait", async () =>
   assert.equal(h.reservationManager.snapshot().active, 1);
   await held.release();
   assert.equal(h.reservationManager.snapshot().active, 0);
+});
+
+test("renews a wave reservation until execution and integration finish", async () => {
+  const h = await harness();
+  const reservations = createCapacityReservationManager({ ttlMs: 30 });
+  h.dependencies.reserveWaveCapacity = reservations.reserveWave;
+  h.dependencies.startProcess = () => ({
+    pid: 812,
+    completion: delay(100).then(() => ({
+      exitCode: 0,
+      signal: null,
+      stdoutLines: [],
+      stderrLines: [],
+    })),
+    async cancel() {},
+  });
+
+  const completion = scheduleRun(h.request, h.dependencies).then((handle) => handle.completion);
+  for (let attempt = 0; attempt < 100 && reservations.snapshot().active === 0; attempt += 1) {
+    await delay(2);
+  }
+  assert.equal(reservations.snapshot().active, 1);
+  await delay(60);
+  await assert.rejects(
+    () => reservations.reserveWave({
+      runId: "another-run",
+      waveId: "wave-1",
+      requests: { codex: 10 },
+      availableUnits: { claude: 10, codex: 10, grok: 10 },
+      signal: new AbortController().signal,
+    }),
+    CapacityReservationConflictError,
+  );
+  assert.equal((await completion).status, "completed");
+  assert.equal(reservations.snapshot().active, 0);
 });
 
 test("rechecks quota before every dependency wave and deterministically reassigns remaining work", async () => {

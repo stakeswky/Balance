@@ -25,7 +25,9 @@ export interface CapacityReservation {
   waveId: string;
   requests: Partial<Record<NativeAgentId, number>>;
   acquiredAt: number;
-  expiresAt: number;
+  readonly expiresAt: number;
+  readonly renewalIntervalMs: number;
+  renew(): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -178,6 +180,7 @@ export function createCapacityReservationManager(options: {
 
       const token = Symbol(key);
       const acquiredAt = now();
+      let expiresAt = acquiredAt + ttlMs;
       const abortListener = () => releaseToken(key, token);
       let released = false;
       const handle: CapacityReservation = {
@@ -185,7 +188,18 @@ export function createCapacityReservationManager(options: {
         waveId: input.waveId,
         requests,
         acquiredAt,
-        expiresAt: acquiredAt + ttlMs,
+        get expiresAt() {
+          return expiresAt;
+        },
+        renewalIntervalMs: Math.max(1, Math.floor(ttlMs / 3)),
+        async renew() {
+          if (released) throw new Error("capacity reservation was released");
+          const current = active.get(key);
+          if (!current || current.token !== token) {
+            throw new Error("capacity reservation is no longer active or has expired");
+          }
+          expiresAt = now() + ttlMs;
+        },
         async release() {
           if (released) return;
           released = true;
