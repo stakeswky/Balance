@@ -15,6 +15,7 @@ import { isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { redactAgentOutput } from "./adapters.ts";
+import { TASK_UNITS } from "./capacity.ts";
 import { parseOrchestratorPlan } from "./plan.ts";
 import { quotaCapacityEvidenceSchema } from "./schemas.ts";
 import {
@@ -45,6 +46,7 @@ const TERMINAL_RUN_STATUSES = new Set<RunStatus>([
   "unschedulable",
 ]);
 const IDLE_RESUMABLE_RUN_STATUSES = new Set<RunStatus>([
+  "draft",
   "partial_ready",
   "waiting_quota",
   "partial_completed",
@@ -395,6 +397,32 @@ export function migrateLegacyRun(input: unknown): unknown {
   if (Array.isArray(plan?.tasks)) plan.tasks.forEach(migrateLegacyTask);
   if (Array.isArray(draft.assignedTasks)) draft.assignedTasks.forEach(migrateLegacyTask);
   if (Array.isArray(migrated.tasks)) migrated.tasks.forEach(migrateLegacyTask);
+  const assignedTasks = Array.isArray(draft.assignedTasks) ? draft.assignedTasks : [];
+  const planTasks = Array.isArray(plan?.tasks) ? plan.tasks : [];
+  const assignedIds = new Set(assignedTasks
+    .map((task) => objectRecord(task)?.id)
+    .filter((id): id is string => typeof id === "string"));
+  draft.runnableTasks = structuredClone(assignedTasks);
+  draft.deferredTasks = planTasks
+    .map(objectRecord)
+    .filter((task): task is Record<string, unknown> => task !== null)
+    .filter((task) => typeof task.id === "string" && !assignedIds.has(task.id))
+    .map((task) => ({
+      taskId: task.id,
+      reason: "quota",
+      blockedBy: Array.isArray(task.dependsOn)
+        ? task.dependsOn.filter((id): id is string => typeof id === "string")
+        : [],
+      requiredUnits: typeof task.size === "string" && task.size in TASK_UNITS
+        ? TASK_UNITS[task.size as keyof typeof TASK_UNITS]
+        : 1,
+      eligibleAgents: [],
+      eligibleAfter: null,
+    }));
+  draft.scheduleDiagnostics = [
+    "旧版 Scheduler 记录已迁移为只读展示；额度与角色快照不可追溯，请重新分析后使用 V2 调度。",
+  ];
+  draft.agentProfiles = [];
   const quotaSnapshot = objectRecord(draft.quotaSnapshot);
   const evidence = objectRecord(quotaSnapshot?.evidence);
   const codexEvidence = objectRecord(evidence?.codex);

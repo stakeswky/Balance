@@ -266,14 +266,28 @@ test("recovers only nonterminal runs and tasks as interrupted", async () => {
     status: "completed",
     taskStatus: "completed",
   });
+  const draft = sampleRun({
+    id: "run_20260824120010_a1b2c3d4e5fe",
+    status: "draft",
+    taskStatus: "queued",
+  });
+  const partialReady = sampleRun({
+    id: "run_20260824120011_a1b2c3d4e5ff",
+    status: "partial_ready",
+    taskStatus: "queued",
+  });
   await store.create(running);
   await store.create(blocked);
   await store.create(completed);
+  await store.create(draft);
+  await store.create(partialReady);
   assert.deepEqual(await store.recoverInterrupted(), [running.id]);
   assert.equal((await store.get(running.id))?.status, "interrupted");
   assert.equal((await store.get(running.id))?.tasks[0]?.status, "interrupted");
   assert.deepEqual(await store.get(blocked.id), blocked);
   assert.deepEqual(await store.get(completed.id), completed);
+  assert.deepEqual(await store.get(draft.id), draft);
+  assert.deepEqual(await store.get(partialReady.id), partialReady);
 });
 
 test("quarantines corrupt run files and emits a private diagnostic", async () => {
@@ -307,6 +321,11 @@ test("migrates legacy capacity-blocked runs to a read-only V2 representation", a
     delete task.splittable;
   }
   draft.assignedTasks = [];
+  delete draft.runnableTasks;
+  delete draft.deferredTasks;
+  delete draft.scheduleDiagnostics;
+  delete draft.agentProfiles;
+  delete draft.quotaSnapshot;
   legacy.tasks = [];
   const runRoot = join(root, "runs", legacy.id as string);
   await mkdir(runRoot, { mode: 0o700 });
@@ -317,6 +336,13 @@ test("migrates legacy capacity-blocked runs to a read-only V2 representation", a
   assert.equal(migrated?.status, "capacity_blocked");
   assert.equal(migrated?.draft.plan.tasks[0]?.priority, "normal");
   assert.equal(migrated?.draft.plan.tasks[0]?.splittable, false);
+  assert.deepEqual(migrated?.draft.runnableTasks, []);
+  assert.deepEqual(migrated?.draft.assignedTasks, []);
+  assert.equal(migrated?.draft.deferredTasks?.[0]?.taskId, "task-api");
+  assert.equal(migrated?.draft.deferredTasks?.[0]?.reason, "quota");
+  assert.match(migrated?.draft.scheduleDiagnostics?.[0] ?? "", /旧版|重新分析/i);
+  assert.deepEqual(migrated?.draft.agentProfiles, []);
+  assert.equal(migrated?.draft.quotaSnapshot, undefined);
   assert.match(migrated?.draft.legacyCompatibility ?? "", /旧版|只读|V2/i);
 });
 
