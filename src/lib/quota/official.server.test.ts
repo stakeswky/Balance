@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { ANTIGRAVITY_SUMMARY_FIXTURE } from "./antigravity.test-fixture.ts";
 import {
   CLAUDE_USAGE_STALE_MS,
   CLAUDE_USAGE_URL,
@@ -16,11 +17,19 @@ import {
   CODEX_USAGE_URL,
   GROK_BILLING_URL,
   legacyClaudeSnapshotPath,
+  officialFilesMtime,
   readClaudeOauthAuth,
   readClaudeStatuslineSnapshot,
-  readOfficialQuota,
+  readOfficialQuota as readOfficialQuotaImpl,
   resolveClaudeSnapshotPath,
 } from "./official.server.ts";
+import { parseAntigravityQuotaSummary } from "./official.ts";
+
+const readOfficialQuota: typeof readOfficialQuotaImpl = (options) => readOfficialQuotaImpl({
+  ...options,
+  readAntigravityIdentity: options?.readAntigravityIdentity ?? (async () => null),
+  readAntigravity: options?.readAntigravity ?? (async () => null),
+});
 
 function fixtureHome() {
   const home = mkdtempSync(join(tmpdir(), "balance-official-"));
@@ -1018,4 +1027,177 @@ test("statusline snapshot resolver and freshness gates reject bad captures", () 
   assert.equal(readClaudeStatuslineSnapshot(path, now), null);
   writeFileSync(path, "not json\n");
   assert.equal(readClaudeStatuslineSnapshot(path, now), null);
+});
+
+test("readOfficialQuota returns Antigravity without blocking existing providers", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+
+  const quota = await readOfficialQuota({
+    home,
+    grokHome,
+    now,
+    skipCache: true,
+    fetchImpl: async () => new Response("nope", { status: 401 }),
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-a",
+    readAntigravity: async () => antigravity,
+  });
+
+  assert.deepEqual(quota.antigravity, antigravity);
+  assert.equal(quota.grok?.source, "unified-billing-log");
+});
+
+test("readOfficialQuota reuses the fresh Antigravity cache", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-antigravity-cache-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  let reads = 0;
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    cacheMs: 30_000,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-a",
+    readAntigravity: async () => {
+      reads += 1;
+      return antigravity;
+    },
+  });
+
+  assert.deepEqual((await readAt(now)).antigravity, antigravity);
+  assert.deepEqual((await readAt(now + 5_000)).antigravity, antigravity);
+  assert.equal(reads, 1);
+});
+
+test("readOfficialQuota marks same-session Antigravity fallback stale", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-antigravity-stale-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  let reads = 0;
+  const readAt = (at: number, skipCache: boolean) => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    skipCache,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-a",
+    readAntigravity: async () => {
+      reads += 1;
+      return reads === 1 ? antigravity : null;
+    },
+  });
+
+  assert.ok((await readAt(now, true)).antigravity?.quotaPools?.every((pool) => pool.stale === false));
+  assert.ok((await readAt(now + 31_000, true)).antigravity?.quotaPools?.every((pool) => pool.stale === true));
+  assert.ok((await readAt(now + 31_001, false)).antigravity?.quotaPools?.every((pool) => pool.stale === true));
+  assert.equal(reads, 2);
+});
+
+test("readOfficialQuota discards Antigravity data when identity changes during refresh", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-antigravity-switch-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  const identities = ["agy-session-a", "agy-session-a", "agy-session-a", "agy-session-b", "agy-session-b", "agy-session-b"];
+  let reads = 0;
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    skipCache: true,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => identities.shift() ?? null,
+    readAntigravity: async () => {
+      reads += 1;
+      return antigravity;
+    },
+  });
+
+  assert.deepEqual((await readAt(now)).antigravity, antigravity);
+  assert.equal((await readAt(now + 31_000)).antigravity, null);
+  assert.deepEqual((await readAt(now + 62_000)).antigravity, antigravity);
+  assert.equal(reads, 3);
+});
+
+test("readOfficialQuota does not let Antigravity discovery failures break other providers", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const quota = await readOfficialQuota({
+    home,
+    grokHome,
+    skipCache: true,
+    fetchImpl: async () => new Response("nope", { status: 401 }),
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => {
+      throw new Error("credential discovery failed");
+    },
+    readAntigravity: async () => {
+      throw new Error("quota fetch failed");
+    },
+  });
+
+  assert.equal(quota.antigravity, null);
+  assert.equal(quota.grok?.source, "unified-billing-log");
+});
+
+test("readOfficialQuota refreshes Antigravity when only its cache is missing", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-antigravity-fast-path-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  let identity: string | null = null;
+  let reads = 0;
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    cacheMs: 30_000,
+    fetchImpl: async (input) => String(input) === CLAUDE_USAGE_URL
+      ? Response.json({
+        five_hour: { utilization: 10, resets_at: "2026-08-25T15:00:00Z" },
+        seven_day: { utilization: 20, resets_at: "2026-09-01T10:00:00Z" },
+      })
+      : new Response("nope", { status: 401 }),
+    readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+    readAntigravityIdentity: async () => identity,
+    readAntigravity: async () => {
+      reads += 1;
+      return antigravity;
+    },
+  });
+
+  assert.equal((await readAt(now)).antigravity, null);
+  identity = "agy-session-a";
+  assert.deepEqual((await readAt(now + 5_000)).antigravity, antigravity);
+  assert.equal(reads, 2);
+});
+
+test("officialFilesMtime watches every Antigravity credential fallback", () => {
+  const credentialPaths = [
+    [".gemini", "jetski-standalone-oauth-token"],
+    [".gemini", "antigravity-cli", "antigravity-oauth-token"],
+    [".gemini", "oauth_creds.json"],
+  ];
+  for (const parts of credentialPaths) {
+    const home = mkdtempSync(join(tmpdir(), "balance-antigravity-mtime-"));
+    const path = join(home, ...parts);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "fixture");
+    assert.equal(officialFilesMtime(home), statSync(path).mtimeMs);
+  }
 });

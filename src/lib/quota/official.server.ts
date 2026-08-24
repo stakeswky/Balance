@@ -23,6 +23,10 @@ import {
   type ParsedFileCache,
 } from "./local-file-cache.server.ts";
 import {
+  antigravitySessionIdentity,
+  readAntigravityQuota,
+} from "./antigravity.server.ts";
+import {
   codexAuthFromFile,
   collapseOfficialPlateaus,
   grokAccessTokenFromAuthFile,
@@ -71,6 +75,13 @@ interface ClaudeCacheEntry {
   lastAttemptFailed: boolean;
 }
 
+interface AntigravityCacheEntry {
+  checkedAt: number;
+  loadedAt: number;
+  slice: OfficialSlice | null;
+  lastAttemptFailed: boolean;
+}
+
 interface ClaudeSnapshotFile {
   version: 1;
   claude: ClaudeCacheEntry;
@@ -83,6 +94,12 @@ type ClaudeLockResult<T> =
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 type ReadClaudeAuth = (home: string, now: number) => Promise<ClaudeOauthAuth | null>;
+type ReadAntigravityIdentity = (options: { home?: string }) => Promise<string | null>;
+type ReadAntigravity = (options: {
+  home?: string;
+  fetchImpl?: FetchLike;
+  now?: number;
+}) => Promise<OfficialSlice | null>;
 type ExecFileText = (
   file: string,
   args: string[],
@@ -104,6 +121,8 @@ const execFileText: ExecFileText = async (file, args, options) => {
 const claudeCache = new Map<string, ClaudeCacheEntry>();
 const grokCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 const codexCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
+const antigravityCache = new Map<string, AntigravityCacheEntry>();
+const antigravityCacheKeyByHome = new Map<string, string>();
 
 // File-level caches for local official data files.
 // readClaudeOfficial and readGrokLog/readOfficialHistory use these to skip
@@ -761,6 +780,8 @@ export async function readOfficialQuota(opts?: {
   cacheMs?: number;
   snapshotPath?: string;
   statuslineSnapshotPath?: string;
+  readAntigravityIdentity?: ReadAntigravityIdentity;
+  readAntigravity?: ReadAntigravity;
 }): Promise<OfficialQuota> {
   const home = opts?.home ?? homedir();
   const now = opts?.now ?? Date.now();
@@ -793,12 +814,32 @@ export async function readOfficialQuota(opts?: {
   if (claudeHit) claudeCache.set(home, claudeHit);
   const grokHit = !opts?.skipCache ? grokCache.get(grokHome) : undefined;
   const codexHit = !opts?.skipCache ? codexCache.get(codexHome) : undefined;
+  const identifyAntigravity = opts?.readAntigravityIdentity ?? antigravitySessionIdentity;
+  const readAntigravity = opts?.readAntigravity ?? readAntigravityQuota;
+  const currentAntigravityKey = async (): Promise<string | null> => {
+    try {
+      const identity = await identifyAntigravity({ home });
+      return identity ? `${home}\0${identity}` : null;
+    } catch {
+      return null;
+    }
+  };
+  let antigravityKey = await currentAntigravityKey();
+  const previousAntigravityKey = antigravityCacheKeyByHome.get(home);
+  if (antigravityKey && previousAntigravityKey && previousAntigravityKey !== antigravityKey) {
+    antigravityCache.delete(previousAntigravityKey);
+  }
+  if (antigravityKey) antigravityCacheKeyByHome.set(home, antigravityKey);
+  const antigravityHit = antigravityKey ? antigravityCache.get(antigravityKey) : undefined;
   const claudeFresh = Boolean(
     !opts?.skipCache && claudeHit && now - claudeHit.checkedAt < cacheMs,
   );
   const grokFresh = Boolean(grokHit && now - grokHit.at < cacheMs);
   const codexFresh = Boolean(codexHit && now - codexHit.at < cacheMs);
-  if (claudeFresh && grokFresh && codexFresh) {
+  const antigravityFresh = Boolean(
+    !opts?.skipCache && antigravityHit && now - antigravityHit.checkedAt < cacheMs,
+  );
+  if (claudeFresh && grokFresh && codexFresh && antigravityFresh) {
     return {
       claude: mergeClaudeSources(
         claudeHit?.lastAttemptFailed
@@ -807,7 +848,9 @@ export async function readOfficialQuota(opts?: {
       ),
       grok: mergeGrokOfficial(grokHit?.slice ?? null, log),
       codex: codexHit?.slice ?? codexLog,
-      antigravity: null,
+      antigravity: antigravityHit?.lastAttemptFailed
+        ? staleOfficial(antigravityHit.slice)
+        : antigravityHit?.slice ?? null,
     };
   }
 
@@ -922,11 +965,53 @@ export async function readOfficialQuota(opts?: {
     codexCache.set(codexHome, { at: now, slice: codexLive });
   }
 
+  let antigravityLive: OfficialSlice | null = antigravityFresh
+    ? antigravityHit?.lastAttemptFailed
+      ? staleOfficial(antigravityHit.slice)
+      : antigravityHit?.slice ?? null
+    : null;
+  if (!antigravityFresh) {
+    let fetched: OfficialSlice | null = null;
+    try {
+      fetched = await readAntigravity({ home, fetchImpl: opts?.fetchImpl, now });
+    } catch {
+      fetched = null;
+    }
+    const keyAfterRefresh = await currentAntigravityKey();
+    if (!antigravityKey || keyAfterRefresh !== antigravityKey) {
+      if (antigravityKey) antigravityCache.delete(antigravityKey);
+      if (keyAfterRefresh) {
+        antigravityCacheKeyByHome.set(home, keyAfterRefresh);
+      } else if (antigravityCacheKeyByHome.get(home) === antigravityKey) {
+        antigravityCacheKeyByHome.delete(home);
+      }
+      antigravityKey = keyAfterRefresh;
+      antigravityLive = null;
+    } else if (fetched) {
+      antigravityCache.set(antigravityKey, {
+        checkedAt: now,
+        loadedAt: now,
+        slice: fetched,
+        lastAttemptFailed: false,
+      });
+      antigravityLive = fetched;
+    } else {
+      antigravityLive = staleOfficial(antigravityHit?.slice ?? null);
+      if (antigravityHit) {
+        antigravityCache.set(antigravityKey, {
+          ...antigravityHit,
+          checkedAt: now,
+          lastAttemptFailed: true,
+        });
+      }
+    }
+  }
+
   return {
     claude: mergeClaudeSources(claudeLive),
     grok: mergeGrokOfficial(grokLive, log),
     codex: codexLive ?? codexLog,
-    antigravity: null,
+    antigravity: antigravityLive,
   };
 }
 
@@ -937,6 +1022,9 @@ export function officialFilesMtime(home = homedir(), grokHome?: string, codexHom
     join(grokHomeOf(home, grokHome), "logs", "unified.jsonl"),
     join(grokHomeOf(home, grokHome), "auth.json"),
     join(codexHomeOf(home, codexHome), "auth.json"),
+    join(home, ".gemini", "jetski-standalone-oauth-token"),
+    join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+    join(home, ".gemini", "oauth_creds.json"),
   ];
   let m = 0;
   for (const p of paths) {
@@ -953,6 +1041,8 @@ export function clearOfficialCache(): void {
   claudeCache.clear();
   grokCache.clear();
   codexCache.clear();
+  antigravityCache.clear();
+  antigravityCacheKeyByHome.clear();
   claudeHistoryFileCache = null;
   claudeHistorySlicesCache = null;
   grokLogFileCache = null;
