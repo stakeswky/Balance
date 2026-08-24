@@ -1,6 +1,6 @@
 # 余量 / Balance
 
-余量（Balance）是一个本地优先的 Claude Code、Grok CLI / Grok Build 和 Codex CLI 配额监控面板。它读取本机 Agent 会话日志和供应商官方订阅百分比，把实际模型/token 用量折算成公开 API 价格等价。
+余量（Balance）是一个本地优先的 Claude Code、Grok CLI / Grok Build、Codex CLI 和 Antigravity CLI 配额监控面板。它读取本机 Agent 会话日志和供应商官方订阅百分比，把可计量的实际模型/token 用量折算成公开 API 价格等价。Antigravity 通过启动指令 `agy` 接入，当前只显示官方百分比，不估算 token/API 等价。
 
 > “API 等价金额”表示同样模型与 token 通过公开 API 调用时的理论价格，不是现金余额，也不是供应商承诺的可提现额度。
 
@@ -52,7 +52,7 @@ npm install
 npm run dev
 ```
 
-打开 <http://localhost:8080>。余量必须运行在保存 Claude / Grok / Codex 本地日志的机器上，才能自动读取真实用量；没有本地数据时仍可使用匿名演示数据，或在「插件」页手动导入 JSON/JSONL。
+打开 <http://localhost:8080>。余量必须运行在保存 Claude / Grok / Codex 本地日志以及已登录 `agy` 的机器上，才能自动读取真实用量和 Antigravity 官方余量；没有本地数据时仍可使用匿名演示数据，或在「插件」页手动导入 JSON/JSONL。
 
 ```bash
 npm test
@@ -62,10 +62,10 @@ npm run build
 
 ## 数据与隐私
 
-Claude、Grok、Codex 分别读取本机 `~/.claude`、`~/.grok`（或 `$GROK_HOME`）、`~/.codex`（或 `$CODEX_HOME`）中的会话日志，再叠加各供应商官方订阅百分比。金额分层与计价规则见 [订阅配额 API 等价金额算法](./docs/subscription-quota-value-algorithm.md)。
+Claude、Grok、Codex 分别读取本机 `~/.claude`、`~/.grok`（或 `$GROK_HOME`）、`~/.codex`（或 `$CODEX_HOME`）中的会话日志，再叠加各供应商官方订阅百分比。Antigravity 只通过本机 `agy`、`~/.gemini` 或 macOS Keychain 中的 `gemini/antigravity` 登录信息读取官方百分比。金额分层与计价规则见 [订阅配额 API 等价金额算法](./docs/subscription-quota-value-algorithm.md)。
 
-- access token 只在服务端读取，不进入浏览器状态，也不写入持久化样本。
-- 不要提交 `~/.claude`、`~/.grok`、`~/.codex`、auth 文件或真实导出日志。
+- access token 和 Keychain credential value 只在服务端读取，不进入浏览器状态、网络响应或持久化样本。
+- 不要提交 `~/.claude`、`~/.grok`、`~/.codex`、`~/.gemini`、auth 文件或真实导出日志。
 - 远端部署无法读取访问者电脑上的本地 Agent 文件。
 - 仓库自带的 Claude 演示数据已经匿名化。
 

@@ -22,6 +22,8 @@
 - 模型族占比、价格版本、覆盖率
 - 不保存 prompt、task、cwd、token 原文、account ID 或 access token
 
+Antigravity 的官方余量由服务端只读访问 macOS Keychain 中 service/account 为 `gemini/antigravity` 的项目；只使用 credential value 完成当次请求，不记录 credential value、请求头、email 或账号 ID，也不会把它们发送给浏览器。
+
 **删除后可从本地日志恢复**：用户删除缓存目录后，应用下次启动时会自动从本地 Agent JSONL 日志重建 L1 金额和采样历史。重建期间 L2/L3 暂时不可用（显示"正在重建校准历史"），待累积足够锚点后恢复。删除缓存不会丢失任何不可恢复的数据。
 
 维护者可在 Apple Silicon Mac 上本地构建同一套产物：

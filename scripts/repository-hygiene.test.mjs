@@ -41,6 +41,11 @@ test("README documents local usage, verification, and real screenshots", () => {
     "Gatekeeper",
     "Linux",
     "Windows",
+    "Antigravity",
+    "agy",
+    "~/.gemini",
+    "只显示官方百分比",
+    "不估算 token/API 等价",
   ]) {
     assert.ok(readme.includes(required), `README missing: ${required}`);
   }
@@ -110,6 +115,24 @@ test("README stays user-facing and omits maintainer verification", () => {
   ]) {
     assert.ok(!readme.includes(forbidden), `README should not include: ${forbidden}`);
   }
+});
+
+test("Antigravity verification scripts fail closed without echoing remote pool ids", () => {
+  const probe = read("scripts/probe-antigravity-quota.mjs");
+  assert.doesNotMatch(probe, /id:\s*pool\.id/);
+  for (const safeId of [
+    "gemini-weekly",
+    "gemini-five-hour",
+    "claude-gpt-weekly",
+    "claude-gpt-five-hour",
+  ]) {
+    assert.ok(probe.includes(safeId), `Antigravity probe missing safe pool id: ${safeId}`);
+  }
+
+  const artifactScan = read("scripts/verify-antigravity-artifact-secrets.mjs");
+  assert.doesNotMatch(artifactScan, /stats\.isSymbolicLink\(\)\) return \[\]/);
+  assert.match(artifactScan, /artifact symlink is not allowed/);
+  assert.match(artifactScan, /artifact root symlink is not allowed/);
 });
 
 test("private local artifacts are ignored", () => {
