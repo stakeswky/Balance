@@ -650,7 +650,7 @@ test("turns a cross-run reservation conflict into a resumable wait", async () =>
   assert.equal(h.reservationManager.snapshot().active, 0);
 });
 
-test("rechecks quota before every dependency wave and preserves prior integrations", async () => {
+test("rechecks quota before every dependency wave and deterministically reassigns remaining work", async () => {
   const h = await harness();
   let checks = 0;
   h.dependencies.availableExecutionUnits = async () => {
@@ -660,13 +660,13 @@ test("rechecks quota before every dependency wave and preserves prior integratio
       : { claude: 0, codex: 10, grok: 10 };
   };
 
-  const waiting = await (await scheduleRun(h.request, h.dependencies)).completion;
-  assert.equal(waiting.status, "waiting_quota");
-  assert.equal(waiting.tasks.find((task) => task.id === "core")?.status, "completed");
-  assert.equal(waiting.tasks.find((task) => task.id === "ui")?.status, "completed");
-  assert.equal(waiting.tasks.find((task) => task.id === "finish")?.status, "blocked");
-  assert.equal(waiting.draft.deferredTasks?.find((task) => task.taskId === "finish")?.reason, "quota");
+  const completed = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.tasks.find((task) => task.id === "core")?.status, "completed");
+  assert.equal(completed.tasks.find((task) => task.id === "ui")?.status, "completed");
+  assert.equal(completed.tasks.find((task) => task.id === "finish")?.status, "completed");
   assert.equal(h.calls.some((call) => call === "start:finish:claude"), false);
+  assert.equal(h.calls.some((call) => call === "start:finish:codex"), true);
 });
 
 test("holds the wave capacity reservation until every successful commit is integrated", async () => {

@@ -39,6 +39,8 @@ import type {
   WorktreeRegistration,
 } from "./types.ts";
 
+const NATIVE_AGENTS = ["claude", "codex", "grok"] as const;
+
 export interface StartRunRequest {
   runId: string;
   fingerprint: string;
@@ -110,6 +112,41 @@ function hasAssignedAgent(
   task: TaskRunState,
 ): task is TaskRunState & { assignedAgent: NativeAgentId } {
   return task.assignedAgent !== null;
+}
+
+function assignWaveForAvailableCapacity(
+  tasks: readonly (TaskRunState & { assignedAgent: NativeAgentId })[],
+  availableUnits: Readonly<Record<NativeAgentId, number>>,
+): Map<string, NativeAgentId> | null {
+  const remaining = new Map(NATIVE_AGENTS.map((agent) => [agent, availableUnits[agent]]));
+  const used = new Set<NativeAgentId>();
+  const assignments = new Map<string, NativeAgentId>();
+  const ordered = tasks.map((task, index) => ({ task, index })).sort((left, right) => (
+    TASK_UNITS[right.task.size] - TASK_UNITS[left.task.size] || left.index - right.index
+  ));
+  const visit = (index: number): boolean => {
+    if (index === ordered.length) return true;
+    const task = ordered[index]!.task;
+    const requiredUnits = TASK_UNITS[task.size];
+    const candidates = NATIVE_AGENTS
+      .filter((agent) => !used.has(agent) && (remaining.get(agent) ?? 0) >= requiredUnits)
+      .sort((left, right) => {
+        if (left === task.assignedAgent && right !== task.assignedAgent) return -1;
+        if (right === task.assignedAgent && left !== task.assignedAgent) return 1;
+        return NATIVE_AGENTS.indexOf(left) - NATIVE_AGENTS.indexOf(right);
+      });
+    for (const agent of candidates) {
+      used.add(agent);
+      remaining.set(agent, (remaining.get(agent) ?? 0) - requiredUnits);
+      assignments.set(task.id, agent);
+      if (visit(index + 1)) return true;
+      assignments.delete(task.id);
+      remaining.set(agent, (remaining.get(agent) ?? 0) + requiredUnits);
+      used.delete(agent);
+    }
+    return false;
+  };
+  return visit(0) ? assignments : null;
 }
 
 function summarizeAgentEvents(events: readonly OrchestratorEvent[]) {
@@ -460,6 +497,7 @@ export async function scheduleRun(
     const activityStartedAt = dependencies.now();
     const activityEvents: OrchestratorEvent[] = [];
     let activitySucceeded = false;
+    let activityAgent = activityTask.assignedAgent;
     const controller = new AbortController();
     taskControllers.set(taskId, controller);
     let prepared: Awaited<ReturnType<SchedulerDependencies["prepareAgentCommand"]>> | null = null;
@@ -470,6 +508,7 @@ export async function scheduleRun(
       if (!current || !task || !hasAssignedAgent(task)) {
         throw new Error(`task disappeared or is unassigned: ${taskId}`);
       }
+      activityAgent = task.assignedAgent;
       await markTask(taskId, (state) => ({
         ...state,
         status: "preparing",
@@ -566,7 +605,7 @@ export async function scheduleRun(
           await dependencies.store.appendActivity({
             runId: request.runId,
             taskId,
-            agent: activityTask.assignedAgent,
+            agent: activityAgent,
             role: "execution",
             startedAt: activityStartedAt,
             finishedAt: Math.max(dependencies.now(), activityStartedAt),
@@ -662,7 +701,7 @@ export async function scheduleRun(
         if (cancelRequested) throw new CancelledError();
         const baseSha = await dependencies.readWorktreeHead(integration.path);
         const usedAgents = new Set<NativeAgentId>();
-        const wave = initial.tasks
+        const plannedWave = initial.tasks
           .filter(hasAssignedAgent)
           .filter(
             (task) =>
@@ -672,10 +711,38 @@ export async function scheduleRun(
               (usedAgents.add(task.assignedAgent), true),
           )
           .slice(0, maxConcurrency);
-        if (wave.length === 0) throw new Error("no runnable task remains in the dependency graph");
+        if (plannedWave.length === 0) throw new Error("no runnable task remains in the dependency graph");
         waveNumber += 1;
-        const currentBeforeWave = await dependencies.store.get(request.runId);
+        let currentBeforeWave = await dependencies.store.get(request.runId);
         if (!currentBeforeWave) throw new Error("run disappeared before wave reservation");
+        const availableUnits = await dependencies.availableExecutionUnits(currentBeforeWave);
+        const refreshedAssignments = assignWaveForAvailableCapacity(plannedWave, availableUnits);
+        const wave = plannedWave.map((task) => ({
+          ...task,
+          assignedAgent: refreshedAssignments?.get(task.id) ?? task.assignedAgent,
+        }));
+        if (wave.some((task, index) => task.assignedAgent !== plannedWave[index]?.assignedAgent)) {
+          const reassigned = new Map(wave.map((task) => [task.id, task.assignedAgent]));
+          currentBeforeWave = await update((run) => ({
+            ...run,
+            draft: {
+              ...run.draft,
+              assignedTasks: run.draft.assignedTasks.map((task) => ({
+                ...task,
+                assignedAgent: reassigned.get(task.id) ?? task.assignedAgent,
+              })),
+              runnableTasks: run.draft.runnableTasks?.map((task) => ({
+                ...task,
+                assignedAgent: reassigned.get(task.id) ?? task.assignedAgent,
+              })),
+            },
+            tasks: run.tasks.map((task) => ({
+              ...task,
+              assignedAgent: reassigned.get(task.id) ?? task.assignedAgent,
+            })),
+            updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+          }));
+        }
         const requests = wave.reduce<Partial<Record<NativeAgentId, number>>>((totals, task) => {
           totals[task.assignedAgent] = (totals[task.assignedAgent] ?? 0) + TASK_UNITS[task.size];
           return totals;
@@ -686,7 +753,7 @@ export async function scheduleRun(
             runId: request.runId,
             waveId: `wave-${waveNumber}`,
             requests,
-            availableUnits: await dependencies.availableExecutionUnits(currentBeforeWave),
+            availableUnits,
             signal: runController.signal,
           });
         } catch (error) {
