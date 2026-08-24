@@ -15,6 +15,7 @@ import {
   createIntegrationWorktree,
   createTaskWorktree,
   inspectRepository,
+  readWorktreeHead,
   removeRegisteredWorktree,
 } from "./git.server.ts";
 import {
@@ -318,6 +319,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       inspectRepository,
       createIntegrationWorktree,
       createTaskWorktree,
+      readWorktreeHead,
       commitTaskWorktree,
       cherryPickTask,
       abortCherryPick,

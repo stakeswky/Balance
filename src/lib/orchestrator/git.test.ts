@@ -182,7 +182,7 @@ test("creates dependent task worktrees from the current trusted integration HEAD
     baseSha: integratedHead, integrationWorktree: integration,
   });
   assert.equal(await readFile(join(taskB.path, "dependency.txt"), "utf8"), "exported by A\n");
-  assert.equal(await git(taskB.path, ["merge-base", "--is-ancestor", taskACommit, "HEAD"]), "");
+  assert.equal(await git(taskB.path, ["merge-base", "--is-ancestor", integratedHead, "HEAD"]), "");
 
   await assert.rejects(
     () => createTaskWorktree({

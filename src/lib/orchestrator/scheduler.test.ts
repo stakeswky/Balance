@@ -109,6 +109,8 @@ async function harness(initial = run()) {
   await store.create(initial);
   const calls: string[] = [];
   const controllers = new Map<string, { resolve: () => void; cancelled: boolean }>();
+  const commitOwners = new Map<string, string>();
+  let integrationHead = "a".repeat(40);
   let active = 0;
   let maxActive = 0;
   const registration = (path: string, branch: string): WorktreeRegistration => ({
@@ -139,6 +141,7 @@ async function harness(initial = run()) {
     },
     async createTaskWorktree(input) {
       calls.push(`create:${input.taskId}`);
+      calls.push(`base:${input.taskId}:${input.baseSha}`);
       return registration(
         join(root, "runs", input.runId, "tasks", input.taskId),
         `balance/run-a1b2c3d4e5f6-${input.taskId}`,
@@ -146,13 +149,26 @@ async function harness(initial = run()) {
     },
     async commitTaskWorktree(_path, message) {
       calls.push(`commit:${message}`);
-      return `${calls.filter((call) => call.startsWith("commit:")).length.toString(16)}`.padStart(
+      const sha = `${calls.filter((call) => call.startsWith("commit:")).length.toString(16)}`.padStart(
         40,
         "0",
       );
+      const taskId = /^balance\(([^)]+)\):/.exec(message)?.[1];
+      if (taskId) commitOwners.set(sha, taskId);
+      return sha;
     },
     async cherryPickTask(_path, sha) {
       calls.push(`pick:${sha}`);
+      const taskId = commitOwners.get(sha);
+      if (taskId) {
+        calls.push(`pick-task:${taskId}`);
+        assert.equal((await store.get(RUN_ID))?.tasks.find((task) => task.id === taskId)?.status, "integrating");
+      }
+      integrationHead = `${(Number.parseInt(integrationHead[0]!, 16) + 1).toString(16)}`.repeat(40);
+    },
+    async readWorktreeHead() {
+      calls.push(`head:integration:${integrationHead}`);
+      return integrationHead;
     },
     async abortCherryPick() {
       calls.push("abort");
@@ -306,7 +322,19 @@ test("runs dependency waves with per-agent isolation, verifies, commits, integra
     true,
   );
   assert.equal(h.maxActive, 2);
-  assert.ok(h.calls.indexOf("start:finish:claude") > h.calls.indexOf("commit:balance(core): Core"));
+  assert.ok(h.calls.indexOf("start:finish:claude") > h.calls.indexOf("pick-task:ui"));
+  assert.deepEqual(h.calls.filter((call) => call.startsWith("pick-task:")), [
+    "pick-task:core", "pick-task:ui", "pick-task:finish",
+  ]);
+  const taskBases = new Map(
+    h.calls.filter((call) => call.startsWith("base:")).map((call) => {
+      const [, taskId, baseSha] = call.split(":");
+      return [taskId!, baseSha!] as const;
+    }),
+  );
+  assert.equal(taskBases.get("core"), "a".repeat(40));
+  assert.equal(taskBases.get("ui"), "a".repeat(40));
+  assert.equal(taskBases.get("finish"), "c".repeat(40));
   assert.deepEqual(
     h.calls.filter((call) => call.startsWith("commit:")),
     ["commit:balance(core): Core", "commit:balance(ui): UI", "commit:balance(finish): Finish"],
