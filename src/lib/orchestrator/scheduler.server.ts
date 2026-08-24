@@ -23,6 +23,7 @@ import type {
   NativeAgentId,
   OrchestratorRun,
   VerificationCommand,
+  WorktreeRegistration,
 } from "./types.ts";
 
 export interface StartRunRequest {
@@ -287,7 +288,11 @@ export async function scheduleRun(
     });
   };
 
-  const executeTask = async (taskId: string): Promise<void> => {
+  const executeTask = async (
+    taskId: string,
+    baseSha: string,
+    integrationWorktree: WorktreeRegistration,
+  ): Promise<void> => {
     if (cancelRequested) throw new CancelledError();
     const current = await dependencies.store.get(request.runId);
     const task = current?.tasks.find((candidate) => candidate.id === taskId);
@@ -302,6 +307,8 @@ export async function scheduleRun(
       runId: request.runId,
       taskId,
       stateRoot: dependencies.stateRoot,
+      baseSha,
+      integrationWorktree,
     });
     await markTask(taskId, (state) => ({
       ...state,
@@ -461,7 +468,9 @@ export async function scheduleRun(
           )
           .slice(0, maxConcurrency);
         if (wave.length === 0) throw new Error("no runnable task remains in the dependency graph");
-        const results = await Promise.allSettled(wave.map((task) => executeTask(task.id)));
+        const results = await Promise.allSettled(
+          wave.map((task) => executeTask(task.id, repository.head, integration)),
+        );
         let failure: unknown = null;
         for (let index = 0; index < wave.length; index += 1) {
           const task = wave[index]!;

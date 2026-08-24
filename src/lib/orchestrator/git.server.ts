@@ -302,6 +302,59 @@ function shortRunId(runId: string): string {
   return runId.slice(-12);
 }
 
+export async function readWorktreeHead(path: string): Promise<string> {
+  const root = await canonicalPathWithoutSymlinks(path, "worktree path");
+  const head = (await runGit(root, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
+  if (!SHA.test(head)) throw new Error("worktree has no valid HEAD commit");
+  return head;
+}
+
+async function assertCurrentIntegrationHead(input: {
+  repository: RepositorySnapshot;
+  runId: string;
+  stateRoot: string;
+  baseSha: string;
+  integrationWorktree: WorktreeRegistration;
+}): Promise<void> {
+  if (!SHA.test(input.baseSha)) throw new Error("task base must be a valid commit SHA");
+  const canonicalStateRoot = await canonicalPathWithoutSymlinks(input.stateRoot, "state root");
+  const expectedPath = join(canonicalStateRoot, "runs", input.runId, "integration");
+  const integrationPath = await canonicalPathWithoutSymlinks(
+    input.integrationWorktree.path,
+    "integration worktree",
+  );
+  if (integrationPath !== expectedPath) {
+    throw new Error("integration worktree path is outside the current run slot");
+  }
+  const expectedBranch = `balance/run-${shortRunId(input.runId)}-result`;
+  if (input.integrationWorktree.branch !== expectedBranch) {
+    throw new Error("integration worktree branch is outside the current run namespace");
+  }
+  const metadata = await stat(integrationPath);
+  if (
+    metadata.dev !== input.integrationWorktree.device ||
+    metadata.ino !== input.integrationWorktree.inode
+  ) {
+    throw new Error("integration worktree identity changed");
+  }
+  const currentBranch = (
+    await runGit(integrationPath, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+  ).stdout.trim();
+  if (currentBranch !== expectedBranch) throw new Error("integration worktree branch changed");
+  const currentHead = await readWorktreeHead(integrationPath);
+  if (input.baseSha !== currentHead) {
+    throw new Error("task base must equal the current integration HEAD");
+  }
+  const descendant = await runGit(
+    input.repository.root,
+    ["merge-base", "--is-ancestor", input.repository.head, input.baseSha],
+    [0, 1],
+  );
+  if (descendant.code !== 0) {
+    throw new Error("current integration HEAD is not descended from the analyzed repository HEAD");
+  }
+}
+
 export async function createIntegrationWorktree(input: {
   repository: RepositorySnapshot;
   runId: string;
@@ -320,12 +373,15 @@ export async function createTaskWorktree(input: {
   runId: string;
   taskId: string;
   stateRoot: string;
+  baseSha: string;
+  integrationWorktree: WorktreeRegistration;
 }): Promise<WorktreeRegistration> {
   assertRunAndTask(input.runId, input.taskId);
   await assertSnapshotCurrent(input.repository);
+  await assertCurrentIntegrationHead(input);
   const target = await preparedTarget(input.stateRoot, ["runs", input.runId, "tasks", input.taskId]);
   const branch = `balance/run-${shortRunId(input.runId)}-${input.taskId}`;
-  await runGit(input.repository.root, ["worktree", "add", "-b", branch, target, input.repository.head]);
+  await runGit(input.repository.root, ["worktree", "add", "-b", branch, target, input.baseSha]);
   return registerWorktree(target);
 }
 

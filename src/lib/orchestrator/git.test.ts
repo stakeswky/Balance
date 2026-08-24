@@ -14,6 +14,7 @@ import {
   createIntegrationWorktree,
   createTaskWorktree,
   inspectRepository,
+  readWorktreeHead,
   removeRegisteredWorktree,
 } from "./git.server.ts";
 import { createRunStore } from "./run-store.server.ts";
@@ -110,7 +111,10 @@ test("isolates integration and task worktrees, bypasses hooks and preserves orig
   }
 
   const integration = await createIntegrationWorktree({ repository: snapshot, runId: RUN_ID, stateRoot });
-  const task = await createTaskWorktree({ repository: snapshot, runId: RUN_ID, taskId: "task-api", stateRoot });
+  const task = await createTaskWorktree({
+    repository: snapshot, runId: RUN_ID, taskId: "task-api", stateRoot,
+    baseSha: snapshot.head, integrationWorktree: integration,
+  });
   assert.equal(integration.path, join(stateRoot, "runs", RUN_ID, "integration"));
   assert.equal(task.path, join(stateRoot, "runs", RUN_ID, "tasks", "task-api"));
   assert.equal(integration.branch, "balance/run-a1b2c3d4e5f6-result");
@@ -136,8 +140,14 @@ test("aborts a conflicting cherry-pick back to a clean integration tree", async 
   await mkdir(join(stateRoot, "runs", RUN_ID, "integration"), { recursive: true });
   await mkdir(join(stateRoot, "runs", RUN_ID, "tasks"), { recursive: true });
   const integration = await createIntegrationWorktree({ repository: snapshot, runId: RUN_ID, stateRoot });
-  const first = await createTaskWorktree({ repository: snapshot, runId: RUN_ID, taskId: "first", stateRoot });
-  const second = await createTaskWorktree({ repository: snapshot, runId: RUN_ID, taskId: "second", stateRoot });
+  const first = await createTaskWorktree({
+    repository: snapshot, runId: RUN_ID, taskId: "first", stateRoot,
+    baseSha: snapshot.head, integrationWorktree: integration,
+  });
+  const second = await createTaskWorktree({
+    repository: snapshot, runId: RUN_ID, taskId: "second", stateRoot,
+    baseSha: snapshot.head, integrationWorktree: integration,
+  });
   await writeFile(join(first.path, "README.md"), "first\n");
   await writeFile(join(second.path, "README.md"), "second\n");
   const firstCommit = await commitTaskWorktree(first.path, "balance(first): first");
@@ -147,6 +157,47 @@ test("aborts a conflicting cherry-pick back to a clean integration tree", async 
   await abortCherryPick(integration.path);
   assert.equal(await git(integration.path, ["status", "--porcelain"]), "");
   assert.equal(await readFile(join(integration.path, "README.md"), "utf8"), "first\n");
+});
+
+test("creates dependent task worktrees from the current trusted integration HEAD", async () => {
+  const repository = await createRepository("dependency-baseline");
+  const snapshot = await inspectRepository(repository, "execute");
+  const stateRoot = await temporaryDirectory("dependency-baseline-state");
+  await mkdir(join(stateRoot, "runs", RUN_ID, "integration"), { recursive: true });
+  await mkdir(join(stateRoot, "runs", RUN_ID, "tasks"), { recursive: true });
+  const integration = await createIntegrationWorktree({ repository: snapshot, runId: RUN_ID, stateRoot });
+
+  const taskA = await createTaskWorktree({
+    repository: snapshot, runId: RUN_ID, taskId: "task-a", stateRoot,
+    baseSha: snapshot.head, integrationWorktree: integration,
+  });
+  await writeFile(join(taskA.path, "dependency.txt"), "exported by A\n");
+  const taskACommit = await commitTaskWorktree(taskA.path, "balance(task-a): export dependency");
+  await cherryPickTask(integration.path, taskACommit);
+  const integratedHead = await readWorktreeHead(integration.path);
+  assert.notEqual(integratedHead, snapshot.head);
+
+  const taskB = await createTaskWorktree({
+    repository: snapshot, runId: RUN_ID, taskId: "task-b", stateRoot,
+    baseSha: integratedHead, integrationWorktree: integration,
+  });
+  assert.equal(await readFile(join(taskB.path, "dependency.txt"), "utf8"), "exported by A\n");
+  assert.equal(await git(taskB.path, ["merge-base", "--is-ancestor", taskACommit, "HEAD"]), "");
+
+  await assert.rejects(
+    () => createTaskWorktree({
+      repository: snapshot, runId: RUN_ID, taskId: "stale-task", stateRoot,
+      baseSha: snapshot.head, integrationWorktree: integration,
+    }),
+    /current integration HEAD/i,
+  );
+  await assert.rejects(
+    () => createTaskWorktree({
+      repository: snapshot, runId: RUN_ID, taskId: "unknown-task", stateRoot,
+      baseSha: "f".repeat(40), integrationWorktree: integration,
+    }),
+    /current integration HEAD|commit/i,
+  );
 });
 
 test("fails closed for executable Git and Agent configuration", async () => {
@@ -228,7 +279,10 @@ test("removes only worktrees registered in the run store and retains only the re
   draftRun.tasks[0]!.status = "queued";
   await store.create(draftRun);
   const integration = await createIntegrationWorktree({ repository: snapshot, runId: RUN_ID, stateRoot });
-  const task = await createTaskWorktree({ repository: snapshot, runId: RUN_ID, taskId: "task-api", stateRoot });
+  const task = await createTaskWorktree({
+    repository: snapshot, runId: RUN_ID, taskId: "task-api", stateRoot,
+    baseSha: snapshot.head, integrationWorktree: integration,
+  });
   await store.update(RUN_ID, (run) => ({
     ...run, status: "ready", integrationWorktree: integration,
     tasks: run.tasks.map((item) => ({ ...item, worktree: task })), updatedAt: run.updatedAt + 1,
