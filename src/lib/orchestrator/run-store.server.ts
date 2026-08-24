@@ -159,6 +159,7 @@ const planDraftSchema = z.object({
   legacyCompatibility: z.string().min(1).max(4_000).optional(),
   quotaSnapshot: quotaSnapshotSchema.optional(),
   agentProfiles: z.array(agentRoleSnapshotSchema).max(3).optional(),
+  continueRequestIds: z.array(z.string().uuid()).max(100).optional(),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   createdAt: timestampSchema,
 }).strict();
@@ -423,6 +424,7 @@ export function migrateLegacyRun(input: unknown): unknown {
     "旧版 Scheduler 记录已迁移为只读展示；额度与角色快照不可追溯，请重新分析后使用 V2 调度。",
   ];
   draft.agentProfiles = [];
+  draft.continueRequestIds = [];
   const quotaSnapshot = objectRecord(draft.quotaSnapshot);
   const evidence = objectRecord(quotaSnapshot?.evidence);
   const codexEvidence = objectRecord(evidence?.codex);
@@ -498,6 +500,7 @@ export interface RunStore {
     role?: AgentActivityRole;
     limit?: number;
   }): Promise<AgentActivityRecord[]>;
+  claimContinueRequest(runId: string, requestId: string): Promise<boolean>;
   recoverInterrupted(): Promise<string[]>;
   pruneExpired(now: number): Promise<string[]>;
   acquireInstanceLock(): Promise<() => Promise<void>>;
@@ -740,6 +743,27 @@ class FileRunStore implements RunStore {
       recovered.push(run.id);
     }
     return recovered.sort();
+  }
+
+  async claimContinueRequest(runId: string, requestId: string): Promise<boolean> {
+    if (!z.string().uuid().safeParse(requestId).success) {
+      throw new Error("continuation request id must be a UUID");
+    }
+    let claimed = false;
+    await this.update(runId, (run) => {
+      const existing = run.draft.continueRequestIds ?? [];
+      if (existing.includes(requestId)) return run;
+      claimed = true;
+      return {
+        ...run,
+        draft: {
+          ...run.draft,
+          continueRequestIds: [...existing, requestId].slice(-100),
+        },
+        updatedAt: Math.max(Date.now(), run.updatedAt + 1),
+      };
+    });
+    return claimed;
   }
 
   async pruneExpired(now: number): Promise<string[]> {

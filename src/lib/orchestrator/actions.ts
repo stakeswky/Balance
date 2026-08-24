@@ -73,6 +73,7 @@ const startRunInputSchema = z
   .strict();
 
 const continueRunInputSchema = startRunInputSchema.extend({
+  requestId: z.string().uuid(),
   quotaEvidence: quotaEvidenceByAgentSchema,
 }).strict();
 
@@ -169,6 +170,7 @@ export const refreshAndContinueOrchestratorRun = createServerFn({ method: "POST"
     const supervisor = await getOrchestratorSupervisor();
     return supervisor.continue({
       runId: data.runId,
+      requestId: data.requestId,
       fingerprint: data.fingerprint,
       trustedRepository: data.trustedRepository,
       confirmedRepository: data.confirmedRepository,

@@ -66,6 +66,7 @@ export interface RunSummary {
 }
 
 export interface ContinueRunRequest extends StartRunRequest {
+  requestId: string;
   quotaEvidence: Record<NativeAgentId, ClientQuotaEvidence>;
 }
 
@@ -180,6 +181,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   readonly #store: RunStore;
   readonly #active = new Map<string, ScheduleHandle>();
   readonly #starting = new Map<string, Promise<ScheduleHandle>>();
+  readonly #continueClaims = new Map<string, string>();
   readonly #planningControllers = new Set<AbortController>();
   readonly #planningOperations = new Set<Promise<unknown>>();
   readonly #agentLeases = createAgentLeaseManager({ globalMaxConcurrency: 3 });
@@ -427,20 +429,52 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
   ): Promise<{ runId: string }> {
     await this.initialize();
     if (this.#shutdown) throw new Error("orchestrator is shutting down");
+    const requestId = idempotent ? (input as ContinueRunRequest).requestId : null;
     if (this.#active.has(input.runId) || this.#starting.has(input.runId)) {
-      if (idempotent) return { runId: input.runId };
+      if (requestId) {
+        const existing = await this.#store.get(input.runId);
+        if (existing?.draft.continueRequestIds?.includes(requestId)) return { runId: input.runId };
+      }
       throw new Error("orchestrator run is already active");
+    }
+    if (requestId) {
+      const inFlightRequestId = this.#continueClaims.get(input.runId);
+      if (inFlightRequestId) {
+        if (inFlightRequestId === requestId) return { runId: input.runId };
+        throw new Error("orchestrator run already has a continuation request in progress");
+      }
+      this.#continueClaims.set(input.runId, requestId);
     }
     if (idempotent) {
       const existing = await this.#store.get(input.runId);
-      if (!existing) throw new Error(`orchestrator run not found: ${input.runId}`);
-      if (existing.status === "completed") return { runId: input.runId };
+      if (!existing) {
+        this.#continueClaims.delete(input.runId);
+        throw new Error(`orchestrator run not found: ${input.runId}`);
+      }
+      if (existing.status === "completed") {
+        this.#continueClaims.delete(input.runId);
+        return { runId: input.runId };
+      }
       if (existing.status === "interrupted") {
+        this.#continueClaims.delete(input.runId);
         throw new Error("interrupted runs are read-only and cannot continue automatically");
       }
+      if (!await this.#store.claimContinueRequest(input.runId, requestId!)) {
+        this.#continueClaims.delete(input.runId);
+        return { runId: input.runId };
+      }
     }
-    const settings = await this.getSettings();
-    if (this.#shutdown) throw new Error("orchestrator is shutting down");
+    let settings: OrchestratorSettings;
+    try {
+      settings = await this.getSettings();
+    } catch (error) {
+      this.#continueClaims.delete(input.runId);
+      throw error;
+    }
+    if (this.#shutdown) {
+      this.#continueClaims.delete(input.runId);
+      throw new Error("orchestrator is shutting down");
+    }
     const starting = scheduleRun(input, {
       store: this.#store,
       inspectRepository,
@@ -516,6 +550,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       handle = await starting;
     } finally {
       this.#starting.delete(input.runId);
+      this.#continueClaims.delete(input.runId);
     }
     if (this.#shutdown) {
       await handle.interrupt();

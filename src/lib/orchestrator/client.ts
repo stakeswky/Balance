@@ -312,6 +312,7 @@ export function useOrchestratorController(
       await refreshAndContinueOrchestratorRun({
         data: {
           authorization,
+          requestId: crypto.randomUUID(),
           runId: run.id,
           fingerprint: draft.fingerprint,
           trustedRepository: true,

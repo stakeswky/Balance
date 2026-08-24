@@ -166,6 +166,26 @@ test("serializes concurrent updates per run without losing mutations", async () 
   assert.doesNotThrow(() => JSON.parse(readFileSync(join(root, "runs", run.id, "run.json"), "utf8")));
 });
 
+test("claims continuation request ids atomically and persists duplicate suppression", async () => {
+  const root = await temporaryDirectory("continue-idempotency");
+  const store = createRunStore(root);
+  await store.initialize();
+  const run = sampleRun();
+  await store.create(run);
+  const requestId = "00000000-0000-4000-8000-000000000001";
+
+  assert.deepEqual(
+    await Promise.all([
+      store.claimContinueRequest(run.id, requestId),
+      store.claimContinueRequest(run.id, requestId),
+    ]),
+    [true, false],
+  );
+  assert.equal(await store.claimContinueRequest(run.id, requestId), false);
+  assert.deepEqual((await store.get(run.id))?.draft.continueRequestIds, [requestId]);
+  await assert.rejects(() => store.claimContinueRequest(run.id, "not-a-uuid"), /request id/i);
+});
+
 test("appends redacted JSONL events with monotonic sequence and afterSeq reads", async () => {
   const root = await temporaryDirectory("events");
   const store = createRunStore(root);

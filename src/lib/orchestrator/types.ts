@@ -238,6 +238,7 @@ export interface PlanDraft {
   legacyCompatibility?: string;
   quotaSnapshot?: QuotaSnapshot;
   agentProfiles?: AgentRoleSnapshot[];
+  continueRequestIds?: string[];
   fingerprint: string;
   createdAt: number;
 }

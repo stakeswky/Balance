@@ -35,6 +35,7 @@ test("orchestrator controller uses capability, strict confirmations, incremental
   assert.match(client, /draft\.repositoryInode/);
   assert.match(client, /draft\.baseSha/);
   assert.match(client, /TERMINAL_STATUSES/);
+  assert.match(client, /crypto\.randomUUID\(\)/);
 });
 
 test("root boot consumes and removes the desktop capability before onboarding", async () => {

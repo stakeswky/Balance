@@ -128,9 +128,16 @@ test("valid analyze, start and incremental event requests retain their safe fiel
 
   const continuation = orchestratorActionInputSchemas.continueRun.parse({
     ...start,
+    requestId: "00000000-0000-4000-8000-000000000001",
     quotaEvidence: { claude: quotaEvidence, codex: quotaEvidence, grok: quotaEvidence },
   });
   assert.equal(continuation.quotaEvidence.codex.officialRemainingPct, 50);
+  assert.equal(continuation.requestId, "00000000-0000-4000-8000-000000000001");
+  assert.throws(() => orchestratorActionInputSchemas.continueRun.parse({
+    ...start,
+    requestId: "reused-human-label",
+    quotaEvidence: { claude: quotaEvidence, codex: quotaEvidence, grok: quotaEvidence },
+  }));
 
   const get = orchestratorActionInputSchemas.getRun.parse({ authorization, runId, afterSeq: 12 });
   assert.equal(get.afterSeq, 12);
