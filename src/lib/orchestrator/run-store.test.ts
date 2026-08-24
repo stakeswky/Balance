@@ -192,6 +192,56 @@ test("appends redacted JSONL events with monotonic sequence and afterSeq reads",
   assert.equal(fileMode((await lstat(join(root, "runs", run.id, "events.jsonl"))).mode), 0o600);
 });
 
+test("persists redacted role activity and calculates no synthetic history", async () => {
+  const root = await temporaryDirectory("activity");
+  const store = createRunStore(root);
+  await store.initialize();
+  const run = sampleRun();
+  await store.create(run);
+
+  await store.appendActivity({
+    runId: run.id,
+    taskId: null,
+    agent: "codex",
+    role: "planning",
+    startedAt: run.createdAt,
+    finishedAt: run.createdAt + 25,
+    success: true,
+    sessionId: "session-1",
+    usage: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 20 },
+    events: [
+      { type: "session_started", sessionId: "session-1" },
+      { type: "usage", inputTokens: 120, outputTokens: 30, cachedInputTokens: 20 },
+      {
+        type: "diagnostic",
+        stream: "stderr",
+        message: "Authorization: Bearer planning-secret",
+      },
+    ],
+  });
+  await store.appendActivity({
+    runId: run.id,
+    taskId: "task-api",
+    agent: "codex",
+    role: "execution",
+    startedAt: run.createdAt + 30,
+    finishedAt: run.createdAt + 50,
+    success: false,
+    sessionId: null,
+    usage: null,
+    events: [],
+  });
+
+  const records = await store.activities();
+  assert.deepEqual(records.map((record) => record.seq), [1, 2]);
+  assert.equal(records[0]?.role, "planning");
+  assert.equal(records[0]?.usage?.inputTokens, 120);
+  assert.equal(JSON.stringify(records).includes("planning-secret"), false);
+  assert.deepEqual((await store.activities({ agent: "codex", role: "planning", limit: 20 }))
+    .map((record) => record.success), [true]);
+  assert.equal(fileMode((await lstat(join(root, "agent-activity.jsonl"))).mode), 0o600);
+});
+
 test("recovers only nonterminal runs and tasks as interrupted", async () => {
   const root = await temporaryDirectory("recovery");
   const store = createRunStore(root);

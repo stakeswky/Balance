@@ -61,7 +61,7 @@ export interface PlannerDependencies {
     signal: AbortSignal;
     runId: string;
     attempt: number;
-  }): Promise<{ stdoutLines: string[]; events: OrchestratorEvent[] }>;
+  }): Promise<{ exitCode: number; stdoutLines: string[]; events: OrchestratorEvent[] }>;
   createSchemaFile(runId: string, schema: object): Promise<string>;
   recentSuccessRates(): Promise<Record<NativeAgentId, RoleSuccessRates>>;
   refreshQuotaSnapshot(input: {
@@ -133,6 +133,20 @@ function validateSuccessRates(
   return z.object({ claude: roleRates, codex: roleRates, grok: roleRates }).strict().parse(input);
 }
 
+function planningActivity(events: readonly OrchestratorEvent[]) {
+  let sessionId: string | null = null;
+  for (const event of events) {
+    if (event.type === "session_started") sessionId = event.sessionId;
+  }
+  const usageEvents = events.filter((event) => event.type === "usage");
+  const usage = usageEvents.length === 0 ? null : usageEvents.reduce((total, event) => ({
+    inputTokens: total.inputTokens + event.inputTokens,
+    outputTokens: total.outputTokens + event.outputTokens,
+    cachedInputTokens: total.cachedInputTokens + event.cachedInputTokens,
+  }), { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 });
+  return { sessionId, usage };
+}
+
 export async function analyzePlan(
   input: AnalyzeRequest,
   dependencies: PlannerDependencies,
@@ -172,6 +186,7 @@ export async function analyzePlan(
   const inlineSchema = JSON.stringify(orchestratorPlanJsonSchema);
   let parsedPlan = null;
   let issues: unknown[] | null = null;
+  const planningEvents: OrchestratorEvent[] = [];
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const prompt = plannerPrompt(request.prompt, issues);
     const command = buildPlanCommand({
@@ -182,19 +197,70 @@ export async function analyzePlan(
       schemaPath,
       inlineSchema,
     });
-    const result = await dependencies.runPlanCommand({
-      command,
-      agent: coordinator,
-      signal,
-      runId,
-      attempt,
-    });
+    const startedAt = dependencies.now();
+    let result: Awaited<ReturnType<PlannerDependencies["runPlanCommand"]>>;
+    try {
+      result = await dependencies.runPlanCommand({
+        command,
+        agent: coordinator,
+        signal,
+        runId,
+        attempt,
+      });
+    } catch (error) {
+      const finishedAt = Math.max(dependencies.now(), startedAt);
+      await dependencies.store.appendActivity({
+        runId,
+        taskId: null,
+        agent: coordinator,
+        role: "planning",
+        startedAt,
+        finishedAt,
+        success: false,
+        sessionId: null,
+        usage: null,
+        events: [],
+      });
+      throw error;
+    }
+    planningEvents.push(...result.events);
+    if (result.exitCode !== 0) {
+      const { sessionId, usage } = planningActivity(result.events);
+      await dependencies.store.appendActivity({
+        runId,
+        taskId: null,
+        agent: coordinator,
+        role: "planning",
+        startedAt,
+        finishedAt: Math.max(dependencies.now(), startedAt),
+        success: false,
+        sessionId,
+        usage,
+        events: result.events,
+      });
+      throw new Error(`planner exited with code ${result.exitCode}`);
+    }
+    let succeeded = false;
     try {
       parsedPlan = parseOrchestratorPlan(extractStructuredPlan(coordinator, result.stdoutLines));
-      break;
+      succeeded = true;
     } catch (error) {
       issues = validationIssues(error);
     }
+    const { sessionId, usage } = planningActivity(result.events);
+    await dependencies.store.appendActivity({
+      runId,
+      taskId: null,
+      agent: coordinator,
+      role: "planning",
+      startedAt,
+      finishedAt: Math.max(dependencies.now(), startedAt),
+      success: succeeded,
+      sessionId,
+      usage,
+      events: result.events,
+    });
+    if (succeeded) break;
   }
   if (!parsedPlan) throw new Error("native planning output was invalid twice; no run was created");
   const plan = serializeOverlappingTasks(parsedPlan);
@@ -246,5 +312,14 @@ export async function analyzePlan(
     updatedAt: now,
   };
   await dependencies.store.create(run);
+  for (const event of planningEvents) {
+    await dependencies.store.appendEvent({
+      runId,
+      taskId: null,
+      agent: coordinator,
+      at: dependencies.now(),
+      event,
+    });
+  }
   return draft;
 }

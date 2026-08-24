@@ -129,7 +129,19 @@ async function harness(
         args: input.command.args,
       });
       const line = outputs[outputIndex++] ?? outputs.at(-1)!;
-      return { stdoutLines: [line], events: [] };
+      return {
+        exitCode: 0,
+        stdoutLines: [line],
+        events: [
+          { type: "session_started" as const, sessionId: `planning-${outputIndex}` },
+          {
+            type: "usage" as const,
+            inputTokens: 100 * outputIndex,
+            outputTokens: 20 * outputIndex,
+            cachedInputTokens: 10 * outputIndex,
+          },
+        ],
+      };
     },
     async createSchemaFile(runId, schema) {
       schemaCalls.push({ runId, schema });
@@ -208,6 +220,17 @@ test("generates a confirmable draft with server-selected coordinator and preserv
     stored?.tasks.every((task) => task.status === "queued"),
     true,
   );
+  const activities = await h.store.activities({ agent: "claude", role: "planning", limit: 20 });
+  assert.equal(activities.length, 1);
+  assert.equal(activities[0]?.success, true);
+  assert.equal(activities[0]?.sessionId, "planning-1");
+  assert.deepEqual(activities[0]?.usage, {
+    inputTokens: 100,
+    outputTokens: 20,
+    cachedInputTokens: 10,
+  });
+  const planningEvents = await h.store.events(draft.runId);
+  assert.deepEqual(planningEvents.map((record) => record.event.type), ["session_started", "usage"]);
 });
 
 test("honors an eligible manual coordinator and rejects an unavailable one", async () => {
@@ -248,6 +271,11 @@ test("retries one invalid structure with bounded Zod issues and creates no half-
   );
   assert.equal(failed.calls.length, 2);
   assert.deepEqual(await failed.store.list(), []);
+  assert.deepEqual(
+    (await failed.store.activities({ role: "planning", limit: 20 }))
+      .map((record) => record.success),
+    [false, false],
+  );
 });
 
 test("creates a visible capacity_blocked plan without task assignments", async () => {
@@ -282,4 +310,27 @@ test("rejects forged or non-finite quota evidence before running a native planne
     /quota|unrecognized|evidence/i,
   );
   assert.equal(forged.calls.length, 0);
+});
+
+test("persists planning session and usage when the native planner process fails", async () => {
+  const h = await harness([JSON.stringify({ structured_output: validPlan() })]);
+  h.dependencies.runPlanCommand = async () => ({
+    exitCode: 7,
+    stdoutLines: [],
+    events: [
+      { type: "session_started", sessionId: "failed-session" },
+      { type: "usage", inputTokens: 55, outputTokens: 5, cachedInputTokens: 3 },
+    ],
+  });
+
+  await assert.rejects(() => analyzePlan(h.request, h.dependencies), /exited with code 7/i);
+  assert.deepEqual(await h.store.list(), []);
+  const activity = (await h.store.activities({ role: "planning", limit: 20 }))[0];
+  assert.equal(activity?.success, false);
+  assert.equal(activity?.sessionId, "failed-session");
+  assert.deepEqual(activity?.usage, {
+    inputTokens: 55,
+    outputTokens: 5,
+    cachedInputTokens: 3,
+  });
 });

@@ -297,8 +297,7 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
             },
           });
           const result = await process.completion;
-          if (result.exitCode !== 0) throw new Error(`planner exited with code ${result.exitCode}`);
-          return { stdoutLines: result.stdoutLines, events };
+          return { exitCode: result.exitCode, stdoutLines: result.stdoutLines, events };
         } finally {
           try {
             await environment?.cleanup();
@@ -313,7 +312,6 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
         return path;
       },
       recentSuccessRates: async () => {
-        const runs = await this.#store.list();
         const result = Object.fromEntries(([
           "claude", "codex", "grok",
         ] as const).map((agent) => [agent, {
@@ -322,16 +320,15 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
           repairSuccessRate: null,
         }])) as Record<NativeAgentId, import("./types.ts").RoleSuccessRates>;
         for (const agent of ["claude", "codex", "grok"] as const) {
-          const recent = runs
-            .flatMap((run) => run.tasks)
-            .filter(
-              (task) =>
-                task.assignedAgent === agent && ["completed", "failed"].includes(task.status),
-            )
-            .slice(0, 20);
-          result[agent].executionSuccessRate = recent.length
-            ? recent.filter((task) => task.status === "completed").length / recent.length
-            : null;
+          for (const role of ["planning", "execution", "repair"] as const) {
+            const recent = await this.#store.activities({ agent, role, limit: 20 });
+            const rate = recent.length
+              ? recent.filter((activity) => activity.success).length / recent.length
+              : null;
+            if (role === "planning") result[agent].planningSuccessRate = rate;
+            if (role === "execution") result[agent].executionSuccessRate = rate;
+            if (role === "repair") result[agent].repairSuccessRate = rate;
+          }
         }
         return result;
       },

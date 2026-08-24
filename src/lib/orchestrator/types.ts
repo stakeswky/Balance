@@ -207,6 +207,28 @@ export interface RunEventRecord {
   event: OrchestratorEvent;
 }
 
+export type AgentActivityRole = "planning" | "execution" | "repair";
+
+export interface AgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+}
+
+export interface AgentActivityRecord {
+  seq: number;
+  runId: string;
+  taskId: string | null;
+  agent: NativeAgentId;
+  role: AgentActivityRole;
+  startedAt: number;
+  finishedAt: number;
+  success: boolean;
+  sessionId: string | null;
+  usage: AgentTokenUsage | null;
+  events: OrchestratorEvent[];
+}
+
 export interface TaskRunState extends AssignedTask {
   status: TaskStatus;
   worktree: WorktreeRegistration | null;

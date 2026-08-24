@@ -23,6 +23,9 @@ import {
 } from "./paths.server.ts";
 import { VERIFICATION_EXECUTABLES } from "./types.ts";
 import type {
+  AgentActivityRecord,
+  AgentActivityRole,
+  NativeAgentId,
   OrchestratorEvent,
   OrchestratorRun,
   RunEventRecord,
@@ -222,6 +225,32 @@ const eventRecordSchema: z.ZodType<RunEventRecord> = z.object({
   at: timestampSchema,
   event: eventSchema,
 }).strict();
+const usageSchema = z.object({
+  inputTokens: z.number().int().nonnegative().safe(),
+  outputTokens: z.number().int().nonnegative().safe(),
+  cachedInputTokens: z.number().int().nonnegative().safe(),
+}).strict();
+const activityRecordSchema: z.ZodType<AgentActivityRecord> = z.object({
+  seq: z.number().int().positive().safe(),
+  runId: z.string().regex(RUN_ID),
+  taskId: z.string().min(1).max(100).nullable(),
+  agent: agentSchema,
+  role: z.enum(["planning", "execution", "repair"]),
+  startedAt: timestampSchema,
+  finishedAt: timestampSchema,
+  success: z.boolean(),
+  sessionId: z.string().min(1).max(4_096).nullable(),
+  usage: usageSchema.nullable(),
+  events: z.array(eventSchema).max(100_000),
+}).strict().superRefine((record, context) => {
+  if (record.finishedAt < record.startedAt) {
+    context.addIssue({
+      code: "custom",
+      path: ["finishedAt"],
+      message: "activity finishedAt cannot precede startedAt",
+    });
+  }
+});
 
 const RUN_TRANSITIONS: Readonly<Record<RunStatus, ReadonlySet<RunStatus>>> = {
   draft: new Set(["ready", "capacity_blocked", "cancelled", "interrupted"]),
@@ -330,6 +359,12 @@ export interface RunStore {
   update(runId: string, mutate: (run: OrchestratorRun) => OrchestratorRun): Promise<OrchestratorRun>;
   appendEvent(record: Omit<RunEventRecord, "seq">): Promise<RunEventRecord>;
   events(runId: string, afterSeq?: number): Promise<RunEventRecord[]>;
+  appendActivity(record: Omit<AgentActivityRecord, "seq">): Promise<AgentActivityRecord>;
+  activities(filter?: {
+    agent?: NativeAgentId;
+    role?: AgentActivityRole;
+    limit?: number;
+  }): Promise<AgentActivityRecord[]>;
   recoverInterrupted(): Promise<string[]>;
   pruneExpired(now: number): Promise<string[]>;
   acquireInstanceLock(): Promise<() => Promise<void>>;
@@ -511,6 +546,50 @@ class FileRunStore implements RunStore {
       previous = record.seq;
     }
     return records.filter((record) => record.seq > afterSeq);
+  }
+
+  async appendActivity(input: Omit<AgentActivityRecord, "seq">): Promise<AgentActivityRecord> {
+    await this.initialize();
+    return this.#exclusive("agent-activity", async () => {
+      const previous = await this.activities();
+      const record = activityRecordSchema.parse({
+        ...input,
+        seq: (previous.at(-1)?.seq ?? 0) + 1,
+        events: input.events.map(safeEvent),
+      });
+      await appendPrivateLine(join(this.#root, "agent-activity.jsonl"), record);
+      return record;
+    });
+  }
+
+  async activities(filter: {
+    agent?: NativeAgentId;
+    role?: AgentActivityRole;
+    limit?: number;
+  } = {}): Promise<AgentActivityRecord[]> {
+    await this.initialize();
+    const limit = filter.limit ?? 1_000;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new Error("activity limit must be an integer from 1 to 10000");
+    }
+    let raw: string;
+    try {
+      raw = await readFile(join(this.#root, "agent-activity.jsonl"), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const records = raw.split(/\r?\n/).filter(Boolean)
+      .map((line) => activityRecordSchema.parse(JSON.parse(line)));
+    let previous = 0;
+    for (const record of records) {
+      if (record.seq !== previous + 1) throw new Error("invalid agent activity sequence");
+      previous = record.seq;
+    }
+    return records
+      .filter((record) => !filter.agent || record.agent === filter.agent)
+      .filter((record) => !filter.role || record.role === filter.role)
+      .slice(-limit);
   }
 
   async recoverInterrupted(): Promise<string[]> {

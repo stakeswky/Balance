@@ -436,6 +436,9 @@ test("runs dependency waves with per-agent isolation, verifies, commits, integra
     "remove:core,remove:finish,remove:ui",
   );
   assert.equal(h.calls.includes("remove:integration"), false);
+  const executionActivity = await h.store.activities({ role: "execution", limit: 20 });
+  assert.equal(executionActivity.length, 3);
+  assert.equal(executionActivity.every((record) => record.success), true);
 });
 
 test("a nonzero native process fails its task and blocks dependents without commit", async () => {
@@ -456,6 +459,11 @@ test("a nonzero native process fails its task and blocks dependents without comm
   assert.equal(
     h.calls.some((call) => call === "commit:balance(core): Core"),
     false,
+  );
+  assert.equal(
+    (await h.store.activities({ agent: "claude", role: "execution", limit: 20 }))
+      .some((record) => record.taskId === "core" && !record.success),
+    true,
   );
 });
 
@@ -583,6 +591,11 @@ test("aborts a cherry-pick conflict and gives the coordinator one verified repai
     h.calls.some((call) => call.startsWith("verify:integration:git diff --check")),
     true,
   );
+  assert.deepEqual(
+    (await h.store.activities({ role: "repair", limit: 20 }))
+      .map((record) => ({ taskId: record.taskId, success: record.success })),
+    [{ taskId: "ui", success: true }],
+  );
 });
 
 test("does not retry a failed coordinator conflict repair", async () => {
@@ -612,4 +625,9 @@ test("does not retry a failed coordinator conflict repair", async () => {
   const result = await (await scheduleRun(h.request, h.dependencies)).completion;
   assert.equal(result.status, "failed");
   assert.equal(conflictStarts, 1);
+  assert.deepEqual(
+    (await h.store.activities({ role: "repair", limit: 20 }))
+      .map((record) => ({ taskId: record.taskId, success: record.success })),
+    [{ taskId: "core", success: false }],
+  );
 });

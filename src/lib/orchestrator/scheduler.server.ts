@@ -23,6 +23,7 @@ import type { RunStore } from "./run-store.server.ts";
 import type {
   AgentRuntimeProbe,
   NativeAgentId,
+  OrchestratorEvent,
   OrchestratorRun,
   VerificationCommand,
   WorktreeRegistration,
@@ -85,6 +86,20 @@ class CancelledError extends Error {
 
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 20_000);
+}
+
+function summarizeAgentEvents(events: readonly OrchestratorEvent[]) {
+  let sessionId: string | null = null;
+  for (const event of events) {
+    if (event.type === "session_started") sessionId = event.sessionId;
+  }
+  const usageEvents = events.filter((event) => event.type === "usage");
+  const usage = usageEvents.length === 0 ? null : usageEvents.reduce((total, event) => ({
+    inputTokens: total.inputTokens + event.inputTokens,
+    outputTokens: total.outputTokens + event.outputTokens,
+    cachedInputTokens: total.cachedInputTokens + event.cachedInputTokens,
+  }), { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 });
+  return { sessionId, usage };
 }
 
 function assertStartRequest(request: StartRunRequest, run: OrchestratorRun): void {
@@ -203,6 +218,9 @@ export async function resolveIntegrationConflict(
     taskId: `conflict:${input.taskId}`,
   });
   let lease: AgentLease | null = null;
+  const startedAt = dependencies.now();
+  const activityEvents: OrchestratorEvent[] = [];
+  let succeeded = false;
   try {
     lease = await dependencies.acquireAgentLease({
       agent: input.run.coordinator,
@@ -217,6 +235,7 @@ export async function resolveIntegrationConflict(
       signal: input.signal,
       secrets: prepared.secrets,
       async onEvent(event) {
+        activityEvents.push(event);
         await dependencies.store.appendEvent({
           runId: input.run.id,
           taskId: input.taskId,
@@ -238,15 +257,33 @@ export async function resolveIntegrationConflict(
       });
       if (verification.exitCode !== 0) throw new Error(`conflict verification failed for ${task.id}`);
     }
-    return await dependencies.commitTaskWorktree(
+    const commitSha = await dependencies.commitTaskWorktree(
       input.integrationPath,
       `fix(orchestrator): resolve ${task.id} integration conflict`,
     );
+    succeeded = true;
+    return commitSha;
   } finally {
     try {
       await prepared.cleanup();
     } finally {
-      await lease?.release();
+      try {
+        await lease?.release();
+      } finally {
+        const { sessionId, usage } = summarizeAgentEvents(activityEvents);
+        await dependencies.store.appendActivity({
+          runId: input.run.id,
+          taskId: input.taskId,
+          agent: input.run.coordinator,
+          role: "repair",
+          startedAt,
+          finishedAt: Math.max(dependencies.now(), startedAt),
+          success: succeeded,
+          sessionId,
+          usage,
+          events: activityEvents,
+        });
+      }
     }
   }
 }
@@ -306,6 +343,11 @@ export async function scheduleRun(
     integrationWorktree: WorktreeRegistration,
   ): Promise<void> => {
     if (cancelRequested) throw new CancelledError();
+    const activityTask = initial.tasks.find((candidate) => candidate.id === taskId);
+    if (!activityTask) throw new Error(`task disappeared from initial plan: ${taskId}`);
+    const activityStartedAt = dependencies.now();
+    const activityEvents: OrchestratorEvent[] = [];
+    let activitySucceeded = false;
     const controller = new AbortController();
     taskControllers.set(taskId, controller);
     let prepared: Awaited<ReturnType<SchedulerDependencies["prepareAgentCommand"]>> | null = null;
@@ -362,6 +404,7 @@ export async function scheduleRun(
         signal: controller.signal,
         secrets: prepared.secrets,
         async onEvent(event) {
+          activityEvents.push(event);
           await dependencies.store.appendEvent({
             runId: request.runId,
             taskId,
@@ -395,13 +438,30 @@ export async function scheduleRun(
         `balance(${task.id}): ${task.title}`,
       );
       await markTask(taskId, (state) => ({ ...state, status: "integrating", commitSha }));
+      activitySucceeded = true;
     } finally {
       runningProcesses.delete(taskId);
       taskControllers.delete(taskId);
       try {
         await prepared?.cleanup();
       } finally {
-        await lease?.release();
+        try {
+          await lease?.release();
+        } finally {
+          const { sessionId, usage } = summarizeAgentEvents(activityEvents);
+          await dependencies.store.appendActivity({
+            runId: request.runId,
+            taskId,
+            agent: activityTask.assignedAgent,
+            role: "execution",
+            startedAt: activityStartedAt,
+            finishedAt: Math.max(dependencies.now(), activityStartedAt),
+            success: activitySucceeded,
+            sessionId,
+            usage,
+            events: activityEvents,
+          });
+        }
       }
     }
   };
