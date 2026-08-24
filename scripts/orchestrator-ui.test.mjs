@@ -84,6 +84,10 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
     "deferredTasks",
     "officialObservedAt",
     "officialResetsAt",
+    "officialFresh",
+    "officialSource",
+    "admissionSource",
+    "profile.diagnostics",
     "reservedUnitsByOtherRuns",
   ]) {
     assert.match(panel, new RegExp(detail));

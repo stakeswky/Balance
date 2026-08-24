@@ -354,7 +354,14 @@ export function OrchestratorPanel({
                     观测 {timeText(evidence.officialObservedAt)} · 重置 {timeText(evidence.officialResetsAt)}
                   </p>
                   <p className="mt-1 text-xs text-mute">
+                    官方数据 {evidence.officialFresh ? "新鲜" : "过期或未知"}
+                    {evidence.officialSource ? ` · ${evidence.officialSource}` : " · 来源未知"}
+                  </p>
+                  <p className="mt-1 text-xs text-mute">
                     执行容量 {profile?.executionUnits ?? "—"} 单位 · L3 可信度 {evidence.l3Confidence}
+                  </p>
+                  <p className="mt-1 text-xs text-mute">
+                    准入依据 {profile?.admissionSource ?? "尚未计算"}
                   </p>
                   <p className="mt-1 text-xs text-mute">
                     角色：规划 {profile?.canPlan ? "✓" : "—"} · 执行 {profile?.canExecute ? "✓" : "—"} · 修复 {profile?.canRepair ? "✓" : "—"}
@@ -368,6 +375,11 @@ export function OrchestratorPanel({
                     <p className="mt-1 text-xs text-warn">
                       {[profile.planningRisk, profile.repairRisk, ...profile.exclusionReasons]
                         .filter(Boolean).join("；")}
+                    </p>
+                  ) : null}
+                  {profile?.diagnostics.length ? (
+                    <p className="mt-1 text-xs text-mute">
+                      {profile.diagnostics.join("；")}
                     </p>
                   ) : null}
                 </div>
