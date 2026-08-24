@@ -20,6 +20,7 @@ test("orchestrator controller uses capability, strict confirmations, incremental
     "validateRepository",
     "analyzeOrchestratorPlan",
     "startOrchestratorRun",
+    "refreshAndContinueOrchestratorRun",
     "getOrchestratorRun",
     "cancelOrchestratorRun",
     "listOrchestratorRuns",
@@ -61,6 +62,8 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
     "orchestrator-start",
     "orchestrator-run",
     "orchestrator-cancel",
+    "orchestrator-continue",
+    "orchestrator-adjust-goal",
     "orchestrator-events",
     "orchestrator-history",
   ]) {
@@ -76,6 +79,12 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
     "integrationWorktree",
     "capacity_blocked",
     "interrupted",
+    "priority",
+    "splittable",
+    "deferredTasks",
+    "officialObservedAt",
+    "officialResetsAt",
+    "reservedUnitsByOtherRuns",
   ]) {
     assert.match(panel, new RegExp(detail));
   }
@@ -91,6 +100,9 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
   assert.match(panel, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
   assert.match(panel, /toast\.success\(message\)/);
   assert.match(panel, /draft\.plan\.tasks\.length/);
+  assert.match(panel, /draft\.plan\.tasks\.map/);
+  assert.match(panel, /刷新额度并继续/);
+  assert.match(panel, /按当前额度执行/);
   assert.doesNotMatch(panel, /共 \$\{draft\.assignedTasks\.length\} 项任务/);
   assert.match(
     dashboard,
@@ -109,7 +121,8 @@ test("quota evidence chooses a conservative trustworthy dollar window and fresh 
   const client = await source("src/lib/orchestrator/client.ts");
   assert.match(client, /value\.confidence === "medium" \|\| value\.confidence === "high"/);
   assert.match(client, /remainingLowUsd \/ value\.totalHighUsd/);
-  assert.match(client, /Math\.max\(\.\.\.usedPercentages\)/);
+  assert.match(client, /officialCandidates\.sort/);
+  assert.match(client, /selectedOfficial/);
   assert.match(client, /windowStale/);
   assert.match(client, /weekStale/);
   assert.doesNotMatch(client, /enabled|binaryPath|recentSuccessRate/);

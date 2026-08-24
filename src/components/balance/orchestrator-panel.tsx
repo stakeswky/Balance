@@ -6,13 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
 import { useOrchestratorController } from "@/lib/orchestrator/client";
+import { TASK_UNITS } from "@/lib/orchestrator/capacity";
 import { chooseRepositoryDirectory } from "@/lib/orchestrator/folder-picker";
 import type {
   ClientQuotaEvidence,
   NativeAgentId,
   OrchestratorEvent,
   RunStatus,
+  TaskPriority,
   TaskSize,
+  TaskStatus,
 } from "@/lib/orchestrator/types";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +49,25 @@ const SIZE: Record<TaskSize, string> = {
   large: "大",
 };
 
+const PRIORITY: Record<TaskPriority, string> = {
+  critical: "关键",
+  high: "高",
+  normal: "普通",
+};
+
+const TASK_STATUS: Record<TaskStatus, string> = {
+  queued: "排队中",
+  blocked: "延后",
+  preparing: "准备中",
+  running: "执行中",
+  verifying: "验证中",
+  integrating: "整合中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  interrupted: "已中断",
+};
+
 const ACTIVE_STATUSES = new Set<RunStatus>([
   "ready",
   "running",
@@ -61,6 +83,10 @@ function capacityText(evidence: ClientQuotaEvidence): string {
   }
   if (evidence.l3RemainingPct !== null) return `L3 风险 ${evidence.l3RemainingPct.toFixed(0)}%`;
   return "额度未知";
+}
+
+function timeText(value: number | null): string {
+  return value === null ? "未知" : new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
 function eventText(event: OrchestratorEvent): string {
@@ -154,8 +180,17 @@ export function OrchestratorPanel({
     !controller.loading,
   );
   const canStart = Boolean(
-    trusted && controller.draft && controller.run?.status === "draft" && !controller.loading,
+    trusted && controller.draft && controller.run
+      && ["draft", "partial_ready"].includes(controller.run.status)
+      && !controller.loading,
   );
+  const fullPlanUnits = controller.draft?.plan.tasks.reduce(
+    (sum, task) => sum + TASK_UNITS[task.size],
+    0,
+  ) ?? 0;
+  const runnableTasks = controller.draft?.runnableTasks ?? controller.draft?.assignedTasks ?? [];
+  const runnableUnits = runnableTasks.reduce((sum, task) => sum + TASK_UNITS[task.size], 0);
+  const deferredTasks = controller.draft?.deferredTasks ?? [];
 
   return (
     <div className="space-y-5" data-testid="orchestrator-panel">
@@ -296,7 +331,13 @@ export function OrchestratorPanel({
             </label>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {(Object.keys(AGENTS) as NativeAgentId[]).map((agent) => (
+              {(Object.keys(AGENTS) as NativeAgentId[]).map((agent) => {
+                const evidence = controller.draft?.quotaSnapshot?.evidence[agent]
+                  ?? quotaEvidence[agent];
+                const profile = controller.draft?.agentProfiles?.find(
+                  (candidate) => candidate.agent === agent,
+                );
+                return (
                 <div
                   key={agent}
                   className="rounded-xl bg-raised px-3 py-3"
@@ -304,13 +345,33 @@ export function OrchestratorPanel({
                 >
                   <p className={`text-sm font-medium text-${agent}`}>{AGENTS[agent].name}</p>
                   <p className="mt-1 font-mono text-xs text-ink">
-                    {capacityText(quotaEvidence[agent])}
+                    {capacityText(evidence)}
                   </p>
                   <p className="mt-1 text-xs text-mute">
-                    L3 可信度 {quotaEvidence[agent].l3Confidence} · 单任务并发
+                    CLI {profile ? (profile.installed ? `可用 ${profile.version ?? ""}` : "不可用") : "待检测"}
                   </p>
+                  <p className="mt-1 text-xs text-mute">
+                    观测 {timeText(evidence.officialObservedAt)} · 重置 {timeText(evidence.officialResetsAt)}
+                  </p>
+                  <p className="mt-1 text-xs text-mute">
+                    执行容量 {profile?.executionUnits ?? "—"} 单位 · L3 可信度 {evidence.l3Confidence}
+                  </p>
+                  <p className="mt-1 text-xs text-mute">
+                    角色：规划 {profile?.canPlan ? "✓" : "—"} · 执行 {profile?.canExecute ? "✓" : "—"} · 修复 {profile?.canRepair ? "✓" : "—"}
+                  </p>
+                  {profile?.reservedUnitsByOtherRuns ? (
+                    <p className="mt-1 text-xs text-warn">
+                      其他运行已预订 {profile.reservedUnitsByOtherRuns} 单位
+                    </p>
+                  ) : null}
+                  {profile && (profile.exclusionReasons.length || profile.planningRisk || profile.repairRisk) ? (
+                    <p className="mt-1 text-xs text-warn">
+                      {[profile.planningRisk, profile.repairRisk, ...profile.exclusionReasons]
+                        .filter(Boolean).join("；")}
+                    </p>
+                  ) : null}
                 </div>
-              ))}
+              );})}
             </div>
 
             <Button
@@ -348,12 +409,34 @@ export function OrchestratorPanel({
 
               {controller.run?.status === "capacity_blocked" ? (
                 <p className="mt-4 rounded-xl bg-warn/10 px-3 py-3 text-sm text-warn">
-                  capacity_blocked：当前可信额度不足，计划已保留，但不会启动原生 Agent。
+                  这是旧版 capacity_blocked 记录，仅供只读展示；请重新分析以使用 V2 部分调度。
+                </p>
+              ) : null}
+              {controller.draft.legacyCompatibility ? (
+                <p className="mt-4 rounded-xl bg-warn/10 px-3 py-3 text-sm text-warn">
+                  {controller.draft.legacyCompatibility}
                 </p>
               ) : null}
 
+              <div className="mt-4 rounded-xl bg-raised px-3 py-3 text-sm text-ink">
+                完整计划：{controller.draft.plan.tasks.length} 项，{fullPlanUnits} 单位 · 本批执行：
+                {runnableTasks.length} 项，{runnableUnits} 单位 · 延后：{deferredTasks.length} 项
+              </div>
+              {controller.draft.scheduleDiagnostics?.length ? (
+                <ul className="mt-2 space-y-1 text-xs text-mute">
+                  {controller.draft.scheduleDiagnostics.map((diagnostic) => (
+                    <li key={diagnostic}>{diagnostic}</li>
+                  ))}
+                </ul>
+              ) : null}
+
               <div className="mt-4 space-y-3">
-                {controller.draft.assignedTasks.map((task) => (
+                {controller.draft.plan.tasks.map((task) => {
+                  const taskState = controller.run?.tasks.find((candidate) => candidate.id === task.id);
+                  const runnable = runnableTasks.find((candidate) => candidate.id === task.id);
+                  const deferred = deferredTasks.find((candidate) => candidate.taskId === task.id);
+                  const assignedAgent = runnable?.assignedAgent ?? taskState?.assignedAgent ?? null;
+                  return (
                   <article
                     key={task.id}
                     className="rounded-xl bg-raised p-3"
@@ -361,15 +444,28 @@ export function OrchestratorPanel({
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium text-ink">{task.title}</p>
-                      <Badge tone={AGENTS[task.assignedAgent].tone}>
-                        {AGENTS[task.assignedAgent].name}
-                      </Badge>
+                      {assignedAgent ? (
+                        <Badge tone={AGENTS[assignedAgent].tone}>
+                          {AGENTS[assignedAgent].name}
+                        </Badge>
+                      ) : <Badge>未分配</Badge>}
                       <Badge>规模：{SIZE[task.size]}</Badge>
+                      <Badge>优先级：{PRIORITY[task.priority]}</Badge>
+                      <Badge>{task.splittable ? "可安全拆分" : "原子任务"}</Badge>
+                      <Badge>{taskState ? TASK_STATUS[taskState.status] : "计划中"}</Badge>
                     </div>
                     <p className="mt-2 text-sm leading-relaxed text-mute">{task.description}</p>
                     <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-[5rem_1fr]">
                       <dt className="text-faint">依赖</dt>
                       <dd>{task.dependsOn.length ? task.dependsOn.join("、") : "无"}</dd>
+                      <dt className="text-faint">本批调度</dt>
+                      <dd className={deferred ? "text-warn" : "text-ok"}>
+                        {deferred
+                          ? `延后：${deferred.reason}（需要 ${deferred.requiredUnits} 单位${deferred.blockedBy.length ? `，阻塞于 ${deferred.blockedBy.join("、")}` : ""}；预计 ${timeText(deferred.eligibleAfter)} 可继续）`
+                          : taskState?.status === "completed"
+                            ? "已完成并进入结果分支"
+                            : "按当前额度执行"}
+                      </dd>
                       <dt className="text-faint">预计文件</dt>
                       <dd className="break-all font-mono">{task.expectedFiles.join("、")}</dd>
                       <dt className="text-faint">验收标准</dt>
@@ -397,10 +493,10 @@ export function OrchestratorPanel({
                       PATH、无交互凭据提示
                     </p>
                   </article>
-                ))}
+                );})}
               </div>
 
-              {controller.run?.status === "draft" ? (
+              {controller.run && ["draft", "partial_ready"].includes(controller.run.status) ? (
                 <div className="mt-4 rounded-xl border border-line p-3">
                   <label className="flex items-start gap-2 text-sm text-ink">
                     <input
@@ -422,7 +518,7 @@ export function OrchestratorPanel({
                     onClick={() => void controller.start()}
                     disabled={!canStart}
                   >
-                    {controller.loading === "start" ? "正在启动" : "确认并开始执行"}
+                    {controller.loading === "start" ? "正在启动" : "按当前额度执行"}
                   </Button>
                 </div>
               ) : null}
@@ -437,16 +533,40 @@ export function OrchestratorPanel({
                   <CardTitle>运行状态 · {STATUS[controller.run.status]}</CardTitle>
                   <CardHint className="mt-1 font-mono">{controller.run.id}</CardHint>
                 </div>
-                {ACTIVE_STATUSES.has(controller.run.status) ? (
-                  <Button
-                    variant="secondary"
-                    data-testid="orchestrator-cancel"
-                    onClick={() => void controller.cancel()}
-                    disabled={Boolean(controller.loading)}
-                  >
-                    {controller.loading === "cancel" ? "正在取消" : "取消运行"}
-                  </Button>
-                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  {ACTIVE_STATUSES.has(controller.run.status) ? (
+                    <Button
+                      variant="secondary"
+                      data-testid="orchestrator-cancel"
+                      onClick={() => void controller.cancel()}
+                      disabled={Boolean(controller.loading)}
+                    >
+                      {controller.loading === "cancel" ? "正在取消" : "取消运行"}
+                    </Button>
+                  ) : null}
+                  {["waiting_quota", "partial_completed"].includes(controller.run.status) ? (
+                    <Button
+                      data-testid="orchestrator-continue"
+                      onClick={() => void controller.refreshAndContinue()}
+                      disabled={Boolean(controller.loading)}
+                    >
+                      {controller.loading === "continue" ? "正在刷新" : "刷新额度并继续"}
+                    </Button>
+                  ) : null}
+                  {!ACTIVE_STATUSES.has(controller.run.status) ? (
+                    <Button
+                      variant="secondary"
+                      data-testid="orchestrator-adjust-goal"
+                      onClick={() => {
+                        document.querySelector<HTMLElement>("[data-testid='orchestrator-prompt']")
+                          ?.focus();
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                    >
+                      重新分析或调整目标
+                    </Button>
+                  ) : null}
+                </div>
               </div>
 
               {controller.run.status === "interrupted" ? (
@@ -455,11 +575,16 @@ export function OrchestratorPanel({
                 </p>
               ) : null}
               {controller.run.error ? (
-                <p className="mt-3 rounded-xl bg-crit/10 px-3 py-3 text-sm text-crit" role="alert">
+                <p className={cn(
+                  "mt-3 rounded-xl px-3 py-3 text-sm",
+                  ["waiting_quota", "partial_ready", "partial_completed"].includes(controller.run.status)
+                    ? "bg-warn/10 text-warn"
+                    : "bg-crit/10 text-crit",
+                )} role="alert">
                   {controller.run.error}
                 </p>
               ) : null}
-              {controller.run.status === "completed" ? (
+              {["completed", "partial_completed"].includes(controller.run.status) ? (
                 <dl className="mt-3 grid gap-x-4 gap-y-1 rounded-xl bg-ok/10 px-3 py-3 text-xs text-ok sm:grid-cols-[6rem_1fr]">
                   <dt>结果分支</dt>
                   <dd className="break-all font-mono">{controller.run.resultBranch}</dd>
