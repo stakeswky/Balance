@@ -252,5 +252,17 @@ function stableValue(value: unknown): unknown {
 }
 
 export function fingerprintPlan(input: Omit<PlanDraft, "fingerprint" | "createdAt">): string {
-  return createHash("sha256").update(JSON.stringify(stableValue(input))).digest("hex");
+  const immutableScope = {
+    runId: input.runId,
+    repositoryPath: input.repositoryPath,
+    repositoryDevice: input.repositoryDevice,
+    repositoryInode: input.repositoryInode,
+    repositoryDirtyAtAnalysis: input.repositoryDirtyAtAnalysis,
+    baseBranch: input.baseBranch,
+    baseSha: input.baseSha,
+    coordinator: input.coordinator,
+    prompt: input.prompt,
+    plan: input.plan,
+  };
+  return createHash("sha256").update(JSON.stringify(stableValue(immutableScope))).digest("hex");
 }

@@ -94,6 +94,7 @@ function run(status: OrchestratorRun["status"] = "draft"): OrchestratorRun {
     finishedAt: null,
   }));
   return {
+    schemaVersion: 2,
     id: RUN_ID,
     status,
     repositoryPath: "/repo",
@@ -358,14 +359,18 @@ test("serializes the same Agent across two concurrently running schedules", asyn
   const active = { claude: 0, codex: 0, grok: 0 };
   const maximum = { ...active };
   for (const dependencies of [first.dependencies, second.dependencies]) {
-    const start = dependencies.startProcess;
     dependencies.startProcess = (input) => {
       active[input.agent] += 1;
       maximum[input.agent] = Math.max(maximum[input.agent], active[input.agent]);
-      const process = start(input);
       return {
-        ...process,
-        completion: process.completion.finally(() => { active[input.agent] -= 1; }),
+        pid: 500,
+        completion: delay(10).then(() => ({
+          exitCode: 0,
+          signal: null,
+          stdoutLines: [],
+          stderrLines: [],
+        })).finally(() => { active[input.agent] -= 1; }),
+        async cancel() {},
       };
     };
   }
@@ -453,6 +458,42 @@ test("runs dependency waves with per-agent isolation, verifies, commits, integra
   const executionActivity = await h.store.activities({ role: "execution", limit: 20 });
   assert.equal(executionActivity.length, 3);
   assert.equal(executionActivity.every((record) => record.success), true);
+});
+
+test("integrates a partial batch without discarding deferred plan tasks", async () => {
+  const partial = run("partial_ready");
+  const runnable = partial.draft.assignedTasks.filter((task) => task.id === "core");
+  partial.draft.assignedTasks = runnable;
+  partial.draft.runnableTasks = runnable;
+  partial.draft.deferredTasks = [
+    {
+      taskId: "ui", reason: "quota", blockedBy: [], requiredUnits: 1,
+      eligibleAgents: ["codex"], eligibleAfter: partial.createdAt + 60_000,
+    },
+    {
+      taskId: "finish", reason: "dependency", blockedBy: ["core"], requiredUnits: 1,
+      eligibleAgents: ["claude"], eligibleAfter: partial.createdAt + 60_000,
+    },
+  ];
+  partial.draft.scheduleDiagnostics = ["本批 1 项，延后 2 项。"];
+  partial.tasks = partial.tasks.map((task) => task.id === "core"
+    ? task
+    : { ...task, assignedAgent: null, status: "blocked" });
+  const h = await harness(partial);
+  h.dependencies.startProcess = () => ({
+    pid: 700,
+    completion: Promise.resolve({
+      exitCode: 0, signal: null, stdoutLines: [], stderrLines: [],
+    }),
+    async cancel() {},
+  });
+
+  const completed = await (await scheduleRun(h.request, h.dependencies)).completion;
+  assert.equal(completed.status, "partial_completed");
+  assert.equal(completed.tasks.find((task) => task.id === "core")?.status, "completed");
+  assert.equal(completed.tasks.find((task) => task.id === "ui")?.status, "blocked");
+  assert.equal(completed.draft.plan.tasks.length, 3);
+  assert.deepEqual(h.calls.filter((call) => call.startsWith("pick-task:")), ["pick-task:core"]);
 });
 
 test("a nonzero native process fails its task and blocks dependents without commit", async () => {

@@ -30,6 +30,7 @@ import type {
   NativeAgentId,
   OrchestratorEvent,
   OrchestratorRun,
+  TaskRunState,
   VerificationCommand,
   WorktreeRegistration,
 } from "./types.ts";
@@ -93,6 +94,12 @@ class CancelledError extends Error {
 
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 20_000);
+}
+
+function hasAssignedAgent(
+  task: TaskRunState,
+): task is TaskRunState & { assignedAgent: NativeAgentId } {
+  return task.assignedAgent !== null;
 }
 
 function summarizeAgentEvents(events: readonly OrchestratorEvent[]) {
@@ -314,7 +321,9 @@ export async function scheduleRun(
   const initial = await dependencies.store.get(request.runId);
   if (!initial) throw new Error(`orchestrator run not found: ${request.runId}`);
   if (initial.status === "capacity_blocked") throw new Error("capacity_blocked plans cannot start");
-  if (initial.status !== "draft") throw new Error(`run cannot start from ${initial.status}`);
+  if (initial.status !== "draft" && initial.status !== "partial_ready") {
+    throw new Error(`run cannot start from ${initial.status}`);
+  }
   assertStartRequest(request, initial);
   const repository = await dependencies.inspectRepository(initial.repositoryPath, "execute");
   assertCurrentRepository(initial, repository);
@@ -364,7 +373,9 @@ export async function scheduleRun(
   ): Promise<void> => {
     if (cancelRequested) throw new CancelledError();
     const activityTask = initial.tasks.find((candidate) => candidate.id === taskId);
-    if (!activityTask) throw new Error(`task disappeared from initial plan: ${taskId}`);
+    if (!activityTask || !hasAssignedAgent(activityTask)) {
+      throw new Error(`task has no current Agent assignment: ${taskId}`);
+    }
     const activityStartedAt = dependencies.now();
     const activityEvents: OrchestratorEvent[] = [];
     let activitySucceeded = false;
@@ -375,7 +386,9 @@ export async function scheduleRun(
     try {
       const current = await dependencies.store.get(request.runId);
       const task = current?.tasks.find((candidate) => candidate.id === taskId);
-      if (!current || !task) throw new Error(`task disappeared: ${taskId}`);
+      if (!current || !task || !hasAssignedAgent(task)) {
+        throw new Error(`task disappeared or is unassigned: ${taskId}`);
+      }
       await markTask(taskId, (state) => ({
         ...state,
         status: "preparing",
@@ -554,7 +567,7 @@ export async function scheduleRun(
         updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
       }));
       const integrated = new Set<string>();
-      const pending = new Set(initial.tasks.map((task) => task.id));
+      const pending = new Set(initial.tasks.filter(hasAssignedAgent).map((task) => task.id));
       const maxConcurrency = dependencies.maxConcurrency ?? 3;
       let waveNumber = 0;
       while (pending.size > 0) {
@@ -562,6 +575,7 @@ export async function scheduleRun(
         const baseSha = await dependencies.readWorktreeHead(integration.path);
         const usedAgents = new Set<NativeAgentId>();
         const wave = initial.tasks
+          .filter(hasAssignedAgent)
           .filter(
             (task) =>
               pending.has(task.id) &&
@@ -689,7 +703,7 @@ export async function scheduleRun(
       const verifying = await dependencies.store.get(request.runId);
       if (!verifying?.integrationWorktree)
         throw new Error("integration worktree disappeared before final verification");
-      for (const task of verifying.tasks) {
+      for (const task of verifying.tasks.filter((task) => task.status === "completed")) {
         for (const verificationCommand of task.verificationCommands) {
           const result = await dependencies.runVerification({
             command: verificationCommand,
@@ -699,9 +713,10 @@ export async function scheduleRun(
           if (result.exitCode !== 0) throw new Error(`final verification failed for ${task.id}`);
         }
       }
+      const hasDeferredTasks = verifying.tasks.some((task) => task.status === "blocked");
       const completed = await update((run) => ({
         ...run,
-        status: "completed",
+        status: hasDeferredTasks ? "partial_completed" : "completed",
         updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
       }));
       terminal = true;

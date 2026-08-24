@@ -45,6 +45,7 @@ function sampleRun(options: {
     verificationCommands: [{ executable: "npm" as const, args: ["run", "test"] }],
   };
   return {
+    schemaVersion: 2,
     id,
     status: options.status ?? "draft",
     repositoryPath: "/repo/project",
@@ -288,6 +289,35 @@ test("quarantines corrupt run files and emits a private diagnostic", async () =>
   const quarantine = JSON.parse(await readFile(join(corruptRoot, "run.corrupt.json"), "utf8")) as { diagnostic: string };
   assert.match(quarantine.diagnostic, /corrupt|invalid|读取|损坏/i);
   assert.equal(fileMode((await lstat(join(corruptRoot, "run.corrupt.json"))).mode), 0o600);
+});
+
+test("migrates legacy capacity-blocked runs to a read-only V2 representation", async () => {
+  const root = await temporaryDirectory("legacy");
+  const store = createRunStore(root);
+  await store.initialize();
+  const legacy = structuredClone(sampleRun({
+    id: "run_20260824120009_a1b2c3d4e5fd",
+    status: "capacity_blocked",
+  })) as unknown as Record<string, unknown>;
+  delete legacy.schemaVersion;
+  const draft = legacy.draft as Record<string, unknown>;
+  const plan = draft.plan as { tasks: Array<Record<string, unknown>> };
+  for (const task of plan.tasks) {
+    delete task.priority;
+    delete task.splittable;
+  }
+  draft.assignedTasks = [];
+  legacy.tasks = [];
+  const runRoot = join(root, "runs", legacy.id as string);
+  await mkdir(runRoot, { mode: 0o700 });
+  await writeFile(join(runRoot, "run.json"), JSON.stringify(legacy), { mode: 0o600 });
+
+  const migrated = await store.get(legacy.id as string);
+  assert.equal(migrated?.schemaVersion, 2);
+  assert.equal(migrated?.status, "capacity_blocked");
+  assert.equal(migrated?.draft.plan.tasks[0]?.priority, "normal");
+  assert.equal(migrated?.draft.plan.tasks[0]?.splittable, false);
+  assert.match(migrated?.draft.legacyCompatibility ?? "", /旧版|只读|V2/i);
 });
 
 test("refuses a run directory swapped to a symbolic link", async () => {

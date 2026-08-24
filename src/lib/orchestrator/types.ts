@@ -17,7 +17,11 @@ export type RunStatus =
   | "failed"
   | "cancelled"
   | "interrupted"
-  | "capacity_blocked";
+  | "capacity_blocked"
+  | "partial_ready"
+  | "waiting_quota"
+  | "partial_completed"
+  | "unschedulable";
 
 export type TaskStatus =
   | "queued"
@@ -208,6 +212,10 @@ export interface PlanDraft {
   prompt: string;
   plan: OrchestratorPlan;
   assignedTasks: AssignedTask[];
+  runnableTasks?: AssignedTask[];
+  deferredTasks?: DeferredTask[];
+  scheduleDiagnostics?: string[];
+  legacyCompatibility?: string;
   quotaSnapshot?: QuotaSnapshot;
   fingerprint: string;
   createdAt: number;
@@ -255,7 +263,8 @@ export interface AgentActivityRecord {
   events: OrchestratorEvent[];
 }
 
-export interface TaskRunState extends AssignedTask {
+export interface TaskRunState extends OrchestratorTaskPlan {
+  assignedAgent: NativeAgentId | null;
   status: TaskStatus;
   worktree: WorktreeRegistration | null;
   commitSha: string | null;
@@ -265,6 +274,7 @@ export interface TaskRunState extends AssignedTask {
 }
 
 export interface OrchestratorRun {
+  schemaVersion: 2;
   id: string;
   status: RunStatus;
   repositoryPath: string;

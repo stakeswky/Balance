@@ -286,7 +286,7 @@ test("retries one invalid structure with bounded Zod issues and creates no half-
   );
 });
 
-test("creates a visible capacity_blocked plan without task assignments", async () => {
+test("keeps the full plan visible while waiting for quota", async () => {
   const plan = validPlan();
   plan.tasks[0]!.size = "large";
   plan.tasks[1]!.size = "large";
@@ -294,10 +294,13 @@ test("creates a visible capacity_blocked plan without task assignments", async (
     official: { claude: 10, codex: 10, grok: 10 },
   });
   const draft = await analyzePlan(h.request, h.dependencies);
-  assert.deepEqual(draft.assignedTasks, []);
+  assert.deepEqual(draft.runnableTasks, []);
+  assert.equal(draft.plan.tasks.length, 2);
+  assert.equal(draft.deferredTasks?.length, 2);
   const stored = await h.store.get(draft.runId);
-  assert.equal(stored?.status, "capacity_blocked");
-  assert.deepEqual(stored?.tasks, []);
+  assert.equal(stored?.status, "waiting_quota");
+  assert.equal(stored?.tasks.length, 2);
+  assert.equal(stored?.tasks.every((task) => task.status === "blocked"), true);
 });
 
 test("rejects forged or non-finite quota evidence before running a native planner", async () => {
@@ -363,5 +366,5 @@ test("refreshes quota after planning before assigning execution work", async () 
   assert.equal(refreshes, 2);
   assert.deepEqual(draft.assignedTasks, []);
   assert.equal(draft.quotaSnapshot?.evidence.codex.officialRemainingPct, 0);
-  assert.equal((await h.store.get(draft.runId))?.status, "capacity_blocked");
+  assert.equal((await h.store.get(draft.runId))?.status, "waiting_quota");
 });

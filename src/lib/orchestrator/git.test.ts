@@ -251,7 +251,7 @@ function runWithRegistrations(
   };
   const now = Date.now();
   return {
-    id: RUN_ID, status: "running", repositoryPath: repository, baseBranch: snapshot.branch, baseSha: snapshot.head,
+    schemaVersion: 2, id: RUN_ID, status: "running", repositoryPath: repository, baseBranch: snapshot.branch, baseSha: snapshot.head,
     coordinator: "claude", resultBranch: integration.branch, integrationWorktree: integration,
     repositoryTrustedAt: now, error: null,
     draft: {

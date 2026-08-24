@@ -1,7 +1,8 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { buildPlanCommand, extractStructuredPlan, type AgentCommand } from "./adapters.ts";
-import { assignTasks, chooseCoordinator } from "./capacity.ts";
+import { chooseCoordinator } from "./capacity.ts";
+import { selectScheduleBatch } from "./batch-selector.ts";
 import type { RepositorySnapshot } from "./git.server.ts";
 import type { buildTrustedQuotaSnapshot } from "./quota-policy.ts";
 import {
@@ -307,7 +308,12 @@ export async function analyzePlan(
     roleSuccessRates: validateSuccessRates(await dependencies.recentSuccessRates()),
     now: dependencies.now(),
   });
-  const assignment = assignTasks(plan.tasks, executionQuota.profiles);
+  const schedule = selectScheduleBatch({
+    tasks: plan.tasks,
+    profiles: executionQuota.profiles,
+    completedTaskIds: new Set(),
+    globalMaxConcurrency: settings.globalMaxConcurrency,
+  });
   const draftWithoutFingerprint = {
     runId,
     repositoryPath: repository.root,
@@ -319,7 +325,10 @@ export async function analyzePlan(
     coordinator,
     prompt: request.prompt,
     plan,
-    assignedTasks: assignment.tasks,
+    assignedTasks: schedule.runnableTasks,
+    runnableTasks: schedule.runnableTasks,
+    deferredTasks: schedule.deferredTasks,
+    scheduleDiagnostics: schedule.diagnostics,
     quotaSnapshot: executionQuota.snapshot,
   };
   const draft: PlanDraft = {
@@ -328,8 +337,15 @@ export async function analyzePlan(
     createdAt: now,
   };
   const run: OrchestratorRun = {
+    schemaVersion: 2,
     id: runId,
-    status: assignment.status === "ready" ? "draft" : "capacity_blocked",
+    status: schedule.runnableTasks.length === plan.tasks.length
+      ? "draft"
+      : schedule.runnableTasks.length > 0
+        ? "partial_ready"
+        : schedule.deferredTasks.some((task) => task.reason === "task_too_large")
+          ? "unschedulable"
+          : "waiting_quota",
     repositoryPath: repository.root,
     baseBranch: repository.branch,
     baseSha: repository.head,
@@ -338,19 +354,22 @@ export async function analyzePlan(
     integrationWorktree: null,
     repositoryTrustedAt: null,
     error:
-      assignment.status === "capacity_blocked"
-        ? assignment.diagnostics.join("\n").slice(0, 20_000)
+      schedule.deferredTasks.length > 0
+        ? schedule.diagnostics.join("\n").slice(0, 20_000)
         : null,
     draft,
-    tasks: assignment.tasks.map((task) => ({
+    tasks: plan.tasks.map((task) => {
+      const assigned = schedule.runnableTasks.find((candidate) => candidate.id === task.id);
+      return {
       ...task,
-      status: "queued",
+      assignedAgent: assigned?.assignedAgent ?? null,
+      status: assigned ? "queued" : "blocked",
       worktree: null,
       commitSha: null,
       error: null,
       startedAt: null,
       finishedAt: null,
-    })),
+    }}),
     createdAt: now,
     updatedAt: now,
   };

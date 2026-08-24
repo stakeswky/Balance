@@ -41,6 +41,12 @@ const TERMINAL_RUN_STATUSES = new Set<RunStatus>([
   "cancelled",
   "interrupted",
   "capacity_blocked",
+  "unschedulable",
+]);
+const IDLE_RESUMABLE_RUN_STATUSES = new Set<RunStatus>([
+  "partial_ready",
+  "waiting_quota",
+  "partial_completed",
 ]);
 const TERMINAL_TASK_STATUSES = new Set<TaskStatus>([
   "completed",
@@ -76,7 +82,8 @@ const worktreeSchema = z.object({
   inode: z.number().int().nonnegative().safe(),
   branch: z.string().min(1).max(500),
 }).strict();
-const taskRunSchema = assignedTaskSchema.extend({
+const taskRunSchema = taskPlanSchema.extend({
+  assignedAgent: agentSchema.nullable(),
   status: z.enum([
     "queued", "blocked", "preparing", "running", "verifying",
     "integrating", "completed", "failed", "cancelled", "interrupted",
@@ -100,6 +107,17 @@ const quotaSnapshotSchema = z.object({
     grok: quotaCapacityEvidenceSchema,
   }).strict(),
 }).strict();
+const deferredTaskSchema = z.object({
+  taskId: z.string().regex(TASK_ID),
+  reason: z.enum([
+    "quota", "dependency", "agent_unavailable", "task_too_large",
+    "reservation_conflict", "stale_quota",
+  ]),
+  blockedBy: z.array(z.string().regex(TASK_ID)).max(12),
+  requiredUnits: z.number().int().positive().safe(),
+  eligibleAgents: z.array(agentSchema).max(3),
+  eligibleAfter: timestampSchema.nullable(),
+}).strict();
 const planDraftSchema = z.object({
   runId: z.string().regex(RUN_ID),
   repositoryPath: z.string().min(1).max(4_096).refine(isAbsolute),
@@ -112,15 +130,21 @@ const planDraftSchema = z.object({
   prompt: z.string().min(1).max(100_000),
   plan: planSchema,
   assignedTasks: z.array(assignedTaskSchema).max(12),
+  runnableTasks: z.array(assignedTaskSchema).max(12).optional(),
+  deferredTasks: z.array(deferredTaskSchema).max(12).optional(),
+  scheduleDiagnostics: z.array(z.string().min(1).max(4_000)).max(100).optional(),
+  legacyCompatibility: z.string().min(1).max(4_000).optional(),
   quotaSnapshot: quotaSnapshotSchema.optional(),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   createdAt: timestampSchema,
 }).strict();
 const runSchema: z.ZodType<OrchestratorRun> = z.object({
+  schemaVersion: z.literal(2),
   id: z.string().regex(RUN_ID),
   status: z.enum([
     "draft", "ready", "running", "cancelling", "integrating", "verifying",
     "completed", "failed", "cancelled", "interrupted", "capacity_blocked",
+    "partial_ready", "waiting_quota", "partial_completed", "unschedulable",
   ]),
   repositoryPath: z.string().min(1).max(4_096).refine(isAbsolute),
   baseBranch: z.string().min(1).max(500),
@@ -149,21 +173,31 @@ const runSchema: z.ZodType<OrchestratorRun> = z.object({
   }
   const planIds = run.draft.plan.tasks.map((task) => task.id);
   const assignedIds = run.draft.assignedTasks.map((task) => task.id);
+  const runnableIds = (run.draft.runnableTasks ?? run.draft.assignedTasks).map((task) => task.id);
   const stateIds = run.tasks.map((task) => task.id);
+  const isV2 = run.draft.runnableTasks !== undefined || run.draft.deferredTasks !== undefined;
   const capacityBlockedWithoutAssignments =
     run.status === "capacity_blocked" && assignedIds.length === 0 && stateIds.length === 0;
+  if (new Set(planIds).size !== planIds.length) {
+    context.addIssue({ code: "custom", path: ["draft", "plan"], message: "plan task ids must be unique" });
+  }
+  if (JSON.stringify(assignedIds) !== JSON.stringify(runnableIds)) {
+    context.addIssue({ code: "custom", path: ["draft", "runnableTasks"], message: "assigned tasks must match runnable tasks" });
+  }
   if (
-    new Set(planIds).size !== planIds.length ||
-    (!capacityBlockedWithoutAssignments && JSON.stringify(planIds) !== JSON.stringify(assignedIds))
+    (!isV2 && !capacityBlockedWithoutAssignments && JSON.stringify(planIds) !== JSON.stringify(assignedIds))
+    || (isV2 && runnableIds.some((id) => !planIds.includes(id)))
   ) {
-    context.addIssue({ code: "custom", path: ["draft", "assignedTasks"], message: "assigned tasks must match plan tasks" });
+    context.addIssue({ code: "custom", path: ["draft", "assignedTasks"], message: "assigned tasks must be a valid plan subset" });
   }
-  if (JSON.stringify(assignedIds) !== JSON.stringify(stateIds)) {
-    context.addIssue({ code: "custom", path: ["tasks"], message: "task states must match assigned tasks" });
+  const expectedStateIds = isV2 ? planIds : assignedIds;
+  if (!capacityBlockedWithoutAssignments && JSON.stringify(expectedStateIds) !== JSON.stringify(stateIds)) {
+    context.addIssue({ code: "custom", path: ["tasks"], message: "task states must match persisted plan scope" });
   }
+  const planById = new Map(run.draft.plan.tasks.map((task) => [task.id, task]));
   run.draft.assignedTasks.forEach((assigned, index) => {
     const { assignedAgent: _assignedAgent, ...base } = assigned;
-    if (JSON.stringify(base) !== JSON.stringify(run.draft.plan.tasks[index])) {
+    if (JSON.stringify(base) !== JSON.stringify(planById.get(assigned.id))) {
       context.addIssue({
         code: "custom",
         path: ["draft", "assignedTasks", index],
@@ -171,6 +205,7 @@ const runSchema: z.ZodType<OrchestratorRun> = z.object({
       });
     }
   });
+  const assignmentById = new Map(run.draft.assignedTasks.map((task) => [task.id, task.assignedAgent]));
   run.tasks.forEach((state, index) => {
     const {
       status: _status,
@@ -179,9 +214,11 @@ const runSchema: z.ZodType<OrchestratorRun> = z.object({
       error: _error,
       startedAt: _startedAt,
       finishedAt: _finishedAt,
-      ...assigned
+      assignedAgent,
+      ...base
     } = state;
-    if (JSON.stringify(assigned) !== JSON.stringify(run.draft.assignedTasks[index])) {
+    const expectedAssignment = assignmentById.get(state.id) ?? null;
+    if (JSON.stringify(base) !== JSON.stringify(planById.get(state.id)) || assignedAgent !== expectedAssignment) {
       context.addIssue({
         code: "custom",
         path: ["tasks", index],
@@ -255,12 +292,16 @@ const activityRecordSchema: z.ZodType<AgentActivityRecord> = z.object({
 });
 
 const RUN_TRANSITIONS: Readonly<Record<RunStatus, ReadonlySet<RunStatus>>> = {
-  draft: new Set(["ready", "capacity_blocked", "cancelled", "interrupted"]),
+  draft: new Set(["ready", "partial_ready", "waiting_quota", "unschedulable", "capacity_blocked", "cancelled", "interrupted"]),
+  partial_ready: new Set(["ready", "waiting_quota", "unschedulable", "cancelled", "interrupted"]),
+  waiting_quota: new Set(["ready", "partial_ready", "unschedulable", "cancelled"]),
+  partial_completed: new Set(["ready", "partial_ready", "waiting_quota", "unschedulable", "cancelled"]),
+  unschedulable: new Set(),
   ready: new Set(["running", "cancelled", "interrupted"]),
-  running: new Set(["cancelling", "integrating", "verifying", "failed", "interrupted"]),
+  running: new Set(["cancelling", "integrating", "verifying", "partial_completed", "waiting_quota", "failed", "interrupted"]),
   cancelling: new Set(["cancelled", "interrupted"]),
   integrating: new Set(["cancelling", "verifying", "failed", "interrupted"]),
-  verifying: new Set(["cancelling", "completed", "failed", "interrupted"]),
+  verifying: new Set(["cancelling", "completed", "partial_completed", "failed", "interrupted"]),
   completed: new Set(),
   failed: new Set(),
   cancelled: new Set(),
@@ -297,6 +338,39 @@ function safeEvent(event: OrchestratorEvent): OrchestratorEvent {
     return { ...event, message: redactAgentOutput(event.message, []) };
   }
   return event;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function migrateLegacyTask(value: unknown): void {
+  const task = objectRecord(value);
+  if (!task) return;
+  if (!("priority" in task)) task.priority = "normal";
+  if (!("splittable" in task)) task.splittable = false;
+}
+
+export function migrateLegacyRun(input: unknown): unknown {
+  const source = objectRecord(input);
+  if (!source || source.schemaVersion !== undefined) return input;
+  const migrated = structuredClone(source);
+  migrated.schemaVersion = 2;
+  const draft = objectRecord(migrated.draft);
+  if (!draft) return migrated;
+  draft.legacyCompatibility =
+    "此运行记录来自旧版 Scheduler，仅供只读展示；请重新分析后再使用 V2 调度。";
+  const plan = objectRecord(draft.plan);
+  if (Array.isArray(plan?.tasks)) plan.tasks.forEach(migrateLegacyTask);
+  if (Array.isArray(draft.assignedTasks)) draft.assignedTasks.forEach(migrateLegacyTask);
+  if (Array.isArray(migrated.tasks)) migrated.tasks.forEach(migrateLegacyTask);
+  const quotaSnapshot = objectRecord(draft.quotaSnapshot);
+  const evidence = objectRecord(quotaSnapshot?.evidence);
+  const codexEvidence = objectRecord(evidence?.codex);
+  if (quotaSnapshot && !codexEvidence?.admissionSource) delete draft.quotaSnapshot;
+  return migrated;
 }
 
 function assertTransitions(previous: OrchestratorRun, next: OrchestratorRun): void {
@@ -479,7 +553,7 @@ class FileRunStore implements RunStore {
       throw error;
     }
     try {
-      return runSchema.parse(JSON.parse(raw));
+      return runSchema.parse(migrateLegacyRun(JSON.parse(raw)));
     } catch (error) {
       await this.#quarantine(runId, error);
       return null;
@@ -597,7 +671,7 @@ class FileRunStore implements RunStore {
   async recoverInterrupted(): Promise<string[]> {
     const recovered: string[] = [];
     for (const run of await this.list()) {
-      if (TERMINAL_RUN_STATUSES.has(run.status)) continue;
+      if (TERMINAL_RUN_STATUSES.has(run.status) || IDLE_RESUMABLE_RUN_STATUSES.has(run.status)) continue;
       await this.update(run.id, (current) => ({
         ...current,
         status: "interrupted",

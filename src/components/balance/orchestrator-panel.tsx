@@ -34,6 +34,10 @@ const STATUS: Record<RunStatus, string> = {
   cancelled: "已取消",
   interrupted: "意外中断",
   capacity_blocked: "额度不足",
+  partial_ready: "部分任务可执行",
+  waiting_quota: "等待额度",
+  partial_completed: "本批已完成",
+  unschedulable: "无法调度",
 };
 
 const SIZE: Record<TaskSize, string> = {
