@@ -1,7 +1,7 @@
 # Balance 原生 Agent Scheduler V2 规格
 
-日期：2026-08-24  
-状态：实施中  
+日期：2026-08-24（2026-08-25 完成实现与验收）
+状态：已实现并通过 fake CLI、浏览器与真实桌面应用验收
 基线：`feat/balance-orchestrator@be638ef29f4636e9210961b53f023a672270b4a6`
 
 ## 1. 目的
@@ -43,18 +43,19 @@ Scheduler V2 修复四类系统性问题：依赖任务没有继承代码基线�
 ### 2.4 Freshness 与跨 run 软预订
 
 1. 规划前、规划后、用户开始、每波开始、repair 前都重新验证服务器 quota snapshot。
-2. stale 或无法验证的 snapshot 不启动原生进程，而进入 `waiting_quota`；显式 unknown 策略只能来自持久化设置。
+2. snapshot 最大年龄统一为 5 分钟，最多接受 30 秒未来时钟偏差，重置时间最多允许未来 366 天；stale 或无法验证的 snapshot 不启动原生进程，而进入 `waiting_quota`。显式 unknown 策略只能来自持久化设置。
 3. soft reservation 按 Agent、run、wave 记录，只预订当前波，不锁住未来完整计划。
 4. reservation 在 manager 内原子检查其他 run 占用并幂等创建。
 5. reservation 不宣称锁定供应商真实 quota；它只防止 sidecar 内多个 run 重复计算同一容量。
-6. 完成、失败、取消、超时和 shutdown 都释放 reservation；过期项可安全回收。
+6. 当前波 reservation 从 Agent 启动前一直持有到该波所有成功结果完成集成；活动波和 conflict repair 每隔 TTL 的三分之一续租。完成、失败、取消、超时和 shutdown 都停止续租并释放 reservation；默认 TTL 为 15 分钟，无活动 owner 的过期项可安全回收。
+7. `renew` 与 `reserve` 在同一 manager 事件循环内线性化：延迟 heartbeat 只有在原 token 仍是 active owner 时才能续租；若 snapshot 或新 reserve 已先回收过期 token，旧 owner 续租必须失败，不能覆盖新预订。
 
 ### 2.5 完整计划、部分调度与继续
 
 1. 完整计划与当前批次分离；任何容量结果都保留 full plan。
 2. `partial_ready` 表示本批可运行且仍有 deferred；`waiting_quota` 表示暂时没有安全任务；`partial_completed` 表示结果分支已有本批成果但 full plan 未完成；`unschedulable` 表示结构上无法运行。
 3. deferred 原因至少区分 quota、dependency、agent_unavailable、task_too_large、reservation_conflict、stale_quota。
-4. batch selector 对最多 12 项做确定性精确搜索，满足依赖闭合、Agent 容量、每 Agent 1、全局并发和文件冲突依赖。
+4. capacity batch selector 对最多 12 项做确定性精确搜索，满足依赖闭合、Agent 总容量和文件冲突产生的依赖；执行器再把 capacity batch 划分为多个 execution wave，每个 wave 同 Agent 最多 1 项且不超过 `globalMaxConcurrency`。
 5. 原子 large 不能由多个 Agent 拼接；splittable large 最多接受一次局部拆分修复，不重写无关计划。
 6. continue 使用新的服务器 snapshot，不重跑 completed task，并从最新 integration HEAD 创建后续 worktree。
 7. continue 使用持久化 idempotency key；相同 key 重复请求返回原结果，不重复执行或预订。
@@ -64,7 +65,7 @@ Scheduler V2 修复四类系统性问题：依赖任务没有继承代码基线�
 
 ### 3.1 Quota snapshot
 
-每个 Agent 的 quota audit 至少记录官方剩余、观测时间、重置时间、fresh/source、L3 区间与置信度、L3 观测时间、最终 admissionSource 和 diagnostics。所有数字必须 finite；百分比限定 0 至 100；未来时间只允许集中定义的时钟偏差。
+每个 Agent 的 quota audit 至少记录官方剩余、观测时间、重置时间、fresh/source、L3 区间与置信度、L3 观测时间、最终 admissionSource 和 diagnostics。所有数字必须 finite；百分比限定 0 至 100；观测时间最多接受 30 秒未来时钟偏差，snapshot 最长有效 5 分钟，重置时间不得超过未来 366 天。
 
 服务器优先调用现有官方读取和本机 quota/calibration 数据。UI snapshot 仅用于展示与风险对照。服务器无法得到可信 snapshot 时进入 waiting，而不是相信客户端自报额度。
 
@@ -82,10 +83,10 @@ full plan task 增加 `priority: critical | high | normal` 和 `splittable: bool
 2. planning 获取全局 lease，输出 full plan；归一化 planning 事件和 usage 写入审计记录。
 3. 规划结束后刷新 quota，本地 selector 计算当前依赖闭合 batch。
 4. 用户确认 immutable full-plan fingerprint。
-5. start 时刷新 quota、重新选择 batch并原子预订当前 wave。
+5. start 时刷新 quota、重新选择 capacity batch；每个 execution wave 启动前再次刷新，按最新容量确定性重分配任务并原子预订该 wave。
 6. 创建 integration worktree；读取 integration HEAD；从该 SHA 创建 wave task worktree。
 7. task 获取 execution lease，执行、验证、提交并进入 integrating。
-8. 按稳定顺序把成功提交集成；冲突前刷新 quota、选择 repair agent、获取 repair lease。
+8. 按稳定顺序把成功提交集成；冲突前刷新 quota、选择 repair agent，并独立获取 repair reservation 和 lease。
 9. 集成成功才标记 completed；更新 integration HEAD 后释放 wave reservation。
 10. 继续下一 wave，或进入 partial_completed、waiting_quota、unschedulable、failed、cancelled、interrupted、completed。
 11. 最终 completed 只在 full plan 全部完成且最终 integration 验证成功后产生。
@@ -103,13 +104,15 @@ full plan task 增加 `priority: critical | high | normal` 和 `splittable: bool
 
 V2 run 写入 `schemaVersion: 2`。读取时先判版本：
 
-- 无版本：使用冻结 legacy strict schema 解析，再迁移 priority/splittable、quota/schedule/planning 默认值；
+- 无版本：先对未知输入做有界、逐字段迁移，补齐 `priority/splittable`、runnable/deferred、diagnostics、profiles 和 continue idempotency key，再使用最终 V2 strict schema 解析；不会伪造无法追溯的 quota snapshot；
 - 版本 2：V2 strict parse；
 - 未知未来版本：fail closed；
 - malformed：保留现有 quarantine；
 - 合法 legacy 不能被 quarantine。
 
 immutable fingerprint 覆盖仓库 identity、prompt 和 full plan，不覆盖会变化的 quota 或 schedule。continue 不能更改任务 title、description、priority、splittable、dependsOn、expectedFiles、验收条件或命令。
+
+旧 `capacity_blocked` 保持原状态并增加只读兼容说明；它不会被伪装成新的 `waiting_quota`，也不能直接 continue。新 run 的 continue 请求使用客户端 UUID，并把最近 100 个请求键持久化，sidecar 重启后重复请求也不会重复执行或重复预订。
 
 ## 7. 安全边界
 
@@ -173,3 +176,33 @@ Agent 卡显示 CLI、官方剩余和时间、重置、L3 风险、executionUnit
 - Gemini；
 - 背景定时自动续跑；
 - 容器或虚拟机级强隔离。
+
+## 12. 实现后的确定性选择顺序
+
+selector 枚举剩余任务的所有非空子集，先淘汰依赖不闭合或无法按当前 executionUnits 分配的候选，再按以下元组做降序比较：
+
+1. `critical` 任务数量；
+2. `high` 任务数量；
+3. 已利用容量单位；
+4. 在前三项相同时选择任务数更少的方案；
+5. 最后以原计划位置位图和固定 Agent 顺序 `claude → codex → grok` 决胜。
+
+任务分配使用确定性回溯：先处理单位更大、优先级更高、原计划位置更靠前的任务；`preferredAgent` 只在其仍有足够容量时优先。选出的 capacity batch 可以跨多个 execution wave；每个 wave 从最新 integration HEAD 建立 worktree，且同 Agent 不会并发执行两项。
+
+## 13. 最终验证基线
+
+实现分支为 `fix/orchestrator-scheduler-v2`。验收结果如下：
+
+| 验证项 | 最终结果 |
+| --- | --- |
+| Orchestrator 单元、quota/planner/scheduler/supervisor、watchdog、UI/settings、E2E/spec contract | 149 passed，0 failed，0 skipped |
+| Watchdog SIGTERM readiness 重复验证 | 连续 10 轮通过；单轮 4 passed |
+| 默认 `npm test` | 832 passed，0 failed，0 skipped，27 suites |
+| TypeScript typecheck | passed |
+| ESLint | 0 errors；40 个基线 warning |
+| Rust/Tauri tests | 21 passed，0 failed |
+| fake CLI + 浏览器 E2E | success/nonzero/broken-plan/hang-cancel/interrupted-restart 全部通过；真实 CLI smoke 按策略跳过 |
+| 桌面 debug build | `Balance.app` 构建成功 |
+| 真实桌面应用 E2E | 使用隔离 HOME 和 fake CLI，completed/cancelled/interrupted/restart 全部通过；证据目录 `/private/var/folders/kq/q2806hdx1012drj6g39bq6ww0000gn/T/balance-desktop-e2e-bRdy9C` |
+
+真实供应商 CLI smoke 没有执行：最终验收使用同协议 fake CLI，以避免无必要消耗订阅额度。没有后台定时刷新；额度恢复后由用户显式点击“刷新额度并继续”。soft reservation 只协调当前 sidecar，无法锁定供应商侧真实 quota。
