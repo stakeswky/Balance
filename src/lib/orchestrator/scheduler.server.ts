@@ -737,101 +737,100 @@ export async function scheduleRun(
           terminal = true;
           return waiting;
         }
-        let results: PromiseSettledResult<void>[];
+        const results = await Promise.allSettled(
+          wave.map((task) => executeTask(task.id, baseSha, integration)),
+        );
         try {
-          results = await Promise.allSettled(
-            wave.map((task) => executeTask(task.id, baseSha, integration)),
-          );
+          let failure: unknown = null;
+          for (let index = 0; index < wave.length; index += 1) {
+            const task = wave[index]!;
+            const result = results[index]!;
+            pending.delete(task.id);
+            if (result.status === "rejected") {
+              failure ??= result.reason;
+              await failTask(task.id, result.reason);
+              continue;
+            }
+            if (cancelRequested) throw new CancelledError();
+            const current = await dependencies.store.get(request.runId);
+            const state = current?.tasks.find((candidate) => candidate.id === task.id);
+            if (!state?.commitSha || !current?.integrationWorktree) {
+              const error = new Error(`task ${task.id} has no commit to integrate`);
+              failure ??= error;
+              await failTask(task.id, error);
+              continue;
+            }
+            try {
+              await dependencies.assertOriginalHeadUnchanged(repository);
+              try {
+                await dependencies.cherryPickTask(current.integrationWorktree.path, state.commitSha);
+              } catch (error) {
+                const conflicts = await (dependencies.conflictedFiles ?? defaultConflictedFiles)(
+                  current.integrationWorktree.path,
+                );
+                await dependencies.abortCherryPick(current.integrationWorktree.path);
+                if (conflicts.length === 0) throw error;
+                if (cancelRequested) throw new CancelledError();
+                const conflictController = new AbortController();
+                taskControllers.set(`conflict:${task.id}`, conflictController);
+                try {
+                  const repairAgent = await dependencies.repairAgentFor(current);
+                  await resolveIntegrationConflict(
+                    {
+                      run: current,
+                      taskId: task.id,
+                      commitSha: state.commitSha,
+                      integrationPath: current.integrationWorktree.path,
+                      conflictFiles: conflicts,
+                      repairAgent,
+                      signal: conflictController.signal,
+                    },
+                    dependencies,
+                  );
+                } finally {
+                  taskControllers.delete(`conflict:${task.id}`);
+                }
+              }
+              await markTask(task.id, (taskState) => ({
+                ...taskState,
+                status: "completed",
+                finishedAt: dependencies.now(),
+              }));
+              integrated.add(task.id);
+              await cleanupTask(task.id);
+            } catch (error) {
+              failure ??= error;
+              await failTask(task.id, error);
+              break;
+            }
+          }
+          if (failure) {
+            if (failure instanceof CancelledError || cancelRequested) throw new CancelledError();
+            await update((run) => ({
+              ...run,
+              status: integrated.size > 0 ? "partial_completed" : "failed",
+              error: errorMessage(failure),
+              tasks: run.tasks.map((task) => {
+                if (pending.has(task.id) && ["queued", "blocked"].includes(task.status)) {
+                  return { ...task, status: "blocked" };
+                }
+                if (task.status === "integrating") {
+                  return {
+                    ...task,
+                    status: "failed",
+                    error: "run failed before integration",
+                    finishedAt: dependencies.now(),
+                  };
+                }
+                return task;
+              }),
+              updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
+            }));
+            for (const task of initial.tasks) await cleanupTask(task.id).catch(() => undefined);
+            return (await dependencies.store.get(request.runId))!;
+          }
         } finally {
           await reservation.release();
-        }
-        let failure: unknown = null;
-        for (let index = 0; index < wave.length; index += 1) {
-          const task = wave[index]!;
-          const result = results[index]!;
-          pending.delete(task.id);
-          if (result.status === "rejected") {
-            failure ??= result.reason;
-            await failTask(task.id, result.reason);
-            continue;
-          }
-          if (cancelRequested) throw new CancelledError();
-          const current = await dependencies.store.get(request.runId);
-          const state = current?.tasks.find((candidate) => candidate.id === task.id);
-          if (!state?.commitSha || !current?.integrationWorktree) {
-            const error = new Error(`task ${task.id} has no commit to integrate`);
-            failure ??= error;
-            await failTask(task.id, error);
-            continue;
-          }
-          try {
-            await dependencies.assertOriginalHeadUnchanged(repository);
-            try {
-              await dependencies.cherryPickTask(current.integrationWorktree.path, state.commitSha);
-            } catch (error) {
-              const conflicts = await (dependencies.conflictedFiles ?? defaultConflictedFiles)(
-                current.integrationWorktree.path,
-              );
-              await dependencies.abortCherryPick(current.integrationWorktree.path);
-              if (conflicts.length === 0) throw error;
-              if (cancelRequested) throw new CancelledError();
-              const conflictController = new AbortController();
-              taskControllers.set(`conflict:${task.id}`, conflictController);
-              try {
-                const repairAgent = await dependencies.repairAgentFor(current);
-                await resolveIntegrationConflict(
-                  {
-                    run: current,
-                    taskId: task.id,
-                    commitSha: state.commitSha,
-                    integrationPath: current.integrationWorktree.path,
-                    conflictFiles: conflicts,
-                    repairAgent,
-                    signal: conflictController.signal,
-                  },
-                  dependencies,
-                );
-              } finally {
-                taskControllers.delete(`conflict:${task.id}`);
-              }
-            }
-            await markTask(task.id, (taskState) => ({
-              ...taskState,
-              status: "completed",
-              finishedAt: dependencies.now(),
-            }));
-            integrated.add(task.id);
-            await cleanupTask(task.id);
-          } catch (error) {
-            failure ??= error;
-            await failTask(task.id, error);
-            break;
-          }
-        }
-        if (failure) {
-          if (failure instanceof CancelledError || cancelRequested) throw new CancelledError();
-          await update((run) => ({
-            ...run,
-            status: integrated.size > 0 ? "partial_completed" : "failed",
-            error: errorMessage(failure),
-            tasks: run.tasks.map((task) => {
-              if (pending.has(task.id) && ["queued", "blocked"].includes(task.status)) {
-                return { ...task, status: "blocked" };
-              }
-              if (task.status === "integrating") {
-                return {
-                  ...task,
-                  status: "failed",
-                  error: "run failed before integration",
-                  finishedAt: dependencies.now(),
-                };
-              }
-              return task;
-            }),
-            updatedAt: Math.max(dependencies.now(), run.updatedAt + 1),
-          }));
-          for (const task of initial.tasks) await cleanupTask(task.id).catch(() => undefined);
-          return (await dependencies.store.get(request.runId))!;
         }
       }
       await dependencies.assertOriginalHeadUnchanged(repository);

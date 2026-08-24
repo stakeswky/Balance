@@ -669,6 +669,20 @@ test("rechecks quota before every dependency wave and preserves prior integratio
   assert.equal(h.calls.some((call) => call === "start:finish:claude"), false);
 });
 
+test("holds the wave capacity reservation until every successful commit is integrated", async () => {
+  const h = await harness();
+  const cherryPickTask = h.dependencies.cherryPickTask;
+  h.dependencies.cherryPickTask = async (...args) => {
+    assert.equal(h.reservationManager.snapshot().active, 1);
+    await cherryPickTask(...args);
+  };
+
+  const result = await (await scheduleRun(h.request, h.dependencies)).completion;
+
+  assert.equal(result.status, "completed");
+  assert.equal(h.reservationManager.snapshot().active, 0);
+});
+
 test("a nonzero native process preserves independently integrated work as partial success", async () => {
   const h = await harness();
   h.dependencies.startProcess = (input) => {
