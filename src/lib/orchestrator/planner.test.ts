@@ -334,3 +334,26 @@ test("persists planning session and usage when the native planner process fails"
     cachedInputTokens: 3,
   });
 });
+
+test("refreshes quota after planning before assigning execution work", async () => {
+  const h = await harness([JSON.stringify({ structured_output: validPlan() })]);
+  let refreshes = 0;
+  h.dependencies.refreshQuotaSnapshot = async (input) => {
+    refreshes += 1;
+    const remaining = refreshes === 1 ? 80 : 0;
+    return buildTrustedQuotaSnapshot({
+      ...input,
+      officialQuota: {
+        claude: officialSlice("claude", remaining),
+        codex: officialSlice("codex", remaining),
+        grok: officialSlice("grok", remaining),
+      },
+    });
+  };
+
+  const draft = await analyzePlan(h.request, h.dependencies);
+  assert.equal(refreshes, 2);
+  assert.deepEqual(draft.assignedTasks, []);
+  assert.equal(draft.quotaSnapshot?.evidence.codex.officialRemainingPct, 0);
+  assert.equal((await h.store.get(draft.runId))?.status, "capacity_blocked");
+});

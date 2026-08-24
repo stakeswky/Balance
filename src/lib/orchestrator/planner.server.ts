@@ -166,14 +166,14 @@ export async function analyzePlan(
   const settings = await dependencies.loadSettings();
   const runtimes = await dependencies.detectRuntimes(settings);
   const successRates = validateSuccessRates(await dependencies.recentSuccessRates());
-  const quota = await dependencies.refreshQuotaSnapshot({
+  const planningQuota = await dependencies.refreshQuotaSnapshot({
     clientEvidence: request.quotaEvidence,
     runtimes,
     settings,
     roleSuccessRates: successRates,
     now,
   });
-  const coordinator = chooseCoordinator(quota.profiles, request.coordinator);
+  const coordinator = chooseCoordinator(planningQuota.profiles, request.coordinator);
   const coordinatorRuntime = await dependencies.runtimeFor(coordinator);
   if (!coordinatorRuntime.ok || !coordinatorRuntime.path) {
     throw new Error(`selected coordinator ${coordinator} is not available`);
@@ -264,7 +264,14 @@ export async function analyzePlan(
   }
   if (!parsedPlan) throw new Error("native planning output was invalid twice; no run was created");
   const plan = serializeOverlappingTasks(parsedPlan);
-  const assignment = assignTasks(plan.tasks, quota.profiles);
+  const executionQuota = await dependencies.refreshQuotaSnapshot({
+    clientEvidence: request.quotaEvidence,
+    runtimes,
+    settings,
+    roleSuccessRates: validateSuccessRates(await dependencies.recentSuccessRates()),
+    now: dependencies.now(),
+  });
+  const assignment = assignTasks(plan.tasks, executionQuota.profiles);
   const draftWithoutFingerprint = {
     runId,
     repositoryPath: repository.root,
@@ -277,7 +284,7 @@ export async function analyzePlan(
     prompt: request.prompt,
     plan,
     assignedTasks: assignment.tasks,
-    quotaSnapshot: quota.snapshot,
+    quotaSnapshot: executionQuota.snapshot,
   };
   const draft: PlanDraft = {
     ...draftWithoutFingerprint,
