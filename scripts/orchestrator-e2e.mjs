@@ -338,6 +338,60 @@ async function verifyNavigationPreservesAnalysis(page, repository) {
   rmSync(planStartedPath, { force: true });
 }
 
+async function verifyFastAnalysisHasVisibleFeedback(context, page, repository, token) {
+  await page.setViewportSize({ width: 900, height: 600 });
+  try {
+    await openView(page, "调度");
+    await page.getByTestId("orchestrator-repository-input").fill(repository.path);
+    await page.getByTestId("orchestrator-validate").click();
+    await page.getByText("干净，可分析", { exact: true }).waitFor();
+    await page
+      .getByTestId("orchestrator-prompt")
+      .fill("Return a fast plan and make the completed result visible.");
+    await page.getByTestId("orchestrator-coordinator").selectOption("auto");
+    await page.getByTestId("orchestrator-analyze").click();
+
+    const status = page.getByTestId("orchestrator-analysis-status");
+    await status.getByText("计划已生成，共 2 项任务", { exact: true }).waitFor();
+    await page
+      .locator("[data-sonner-toast]")
+      .filter({ hasText: "计划已生成，共 2 项任务" })
+      .first()
+      .waitFor({ state: "visible" });
+    await page.getByTestId("orchestrator-plan").waitFor({ state: "visible" });
+    await page.waitForFunction(() => {
+      const plan = document.querySelector('[data-testid="orchestrator-plan"]');
+      if (!(plan instanceof HTMLElement)) return false;
+      const bounds = plan.getBoundingClientRect();
+      return bounds.top < window.innerHeight && bounds.bottom > 0;
+    });
+  } finally {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  }
+
+  const restoredPage = await openDashboard(context, token);
+  try {
+    await openView(restoredPage, "调度");
+    await restoredPage.getByTestId("orchestrator-plan").waitFor({ state: "visible" });
+    await restoredPage.waitForTimeout(500);
+    assert.equal(
+      await restoredPage.locator("[data-sonner-toast]:visible").count(),
+      0,
+      "restoring a historical draft must not announce a new analysis",
+    );
+    assert.deepEqual(
+      await restoredPage.evaluate(() => ({
+        windowY: window.scrollY,
+        mainY: document.querySelector("main")?.scrollTop ?? -1,
+      })),
+      { windowY: 0, mainY: 0 },
+      "restoring a historical draft must not scroll as if analysis just completed",
+    );
+  } finally {
+    await restoredPage.close();
+  }
+}
+
 async function preparePlan(
   page,
   repository,
@@ -658,6 +712,7 @@ try {
     "navigation-repository",
     "slow-plan",
   );
+  const feedbackRepository = createRepository(temporaryRoot, "feedback-repository");
   const successRepository = createRepository(temporaryRoot, "success-repository");
   const nonzeroRepository = createRepository(temporaryRoot, "nonzero-repository", "nonzero");
   const brokenRepository = createRepository(temporaryRoot, "broken-repository", "broken-plan");
@@ -679,6 +734,7 @@ try {
       codex: fakeAgentPath,
       grok: fakeAgentPath,
     });
+    await verifyFastAnalysisHasVisibleFeedback(context, page, feedbackRepository, token);
     await verifyNavigationPreservesAnalysis(page, navigationRepository);
     const completed = await runSuccessfulFakeWorkflow(page, stateDirectory, successRepository);
     await runNonzeroWorkflow(page, stateDirectory, nonzeroRepository);
@@ -698,6 +754,7 @@ try {
       completedRunId: completed.id,
       resultBranch: completed.resultBranch,
       scenarios: [
+        "fast-analysis-visible-feedback",
         "navigation-state-preserved",
         "success",
         "nonzero",

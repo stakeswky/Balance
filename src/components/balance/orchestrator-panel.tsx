@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FolderOpen } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHint, CardTitle } from "@/components/ui/card";
@@ -95,6 +96,11 @@ export function OrchestratorPanel({
   const [trusted, setTrusted] = useState(false);
   const [choosingRepository, setChoosingRepository] = useState(false);
   const [folderPickerError, setFolderPickerError] = useState<string | null>(null);
+  const [analysisFeedback, setAnalysisFeedback] = useState<string | null>(null);
+  const [completedDraftRunId, setCompletedDraftRunId] = useState<string | null>(null);
+  const analysisRequestRef = useRef<{ previousRunId: string | null } | null>(null);
+  const planRef = useRef<HTMLDivElement>(null);
+  const scrolledDraftRunIdRef = useRef<string | null>(null);
 
   const chooseRepository = () =>
     chooseRepositoryDirectory({
@@ -103,9 +109,42 @@ export function OrchestratorPanel({
       onError: setFolderPickerError,
     });
 
+  const analyze = () => {
+    analysisRequestRef.current = {
+      previousRunId: controller.draft?.runId ?? null,
+    };
+    setAnalysisFeedback("正在分析目标并生成分配计划…");
+    void controller.analyze();
+  };
+
   useEffect(() => {
     setTrusted(false);
   }, [controller.draft?.runId]);
+
+  useEffect(() => {
+    const request = analysisRequestRef.current;
+    if (!request || controller.loading === "analyze") return;
+    if (controller.error) {
+      analysisRequestRef.current = null;
+      setAnalysisFeedback("分析失败，请查看错误提示");
+      return;
+    }
+    const draft = controller.draft;
+    if (!draft || draft.runId === request.previousRunId) return;
+
+    analysisRequestRef.current = null;
+    const message = `计划已生成，共 ${draft.plan.tasks.length} 项任务`;
+    setAnalysisFeedback(message);
+    setCompletedDraftRunId(draft.runId);
+    toast.success(message);
+  }, [controller.draft, controller.error, controller.loading]);
+
+  useEffect(() => {
+    if (!completedDraftRunId || controller.draft?.runId !== completedDraftRunId) return;
+    if (scrolledDraftRunIdRef.current === completedDraftRunId) return;
+    scrolledDraftRunIdRef.current = completedDraftRunId;
+    planRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [completedDraftRunId, controller.draft?.runId]);
 
   const validation = controller.repositoryValidation;
   const canAnalyze = Boolean(
@@ -278,15 +317,26 @@ export function OrchestratorPanel({
             <Button
               className="mt-4"
               data-testid="orchestrator-analyze"
-              onClick={() => void controller.analyze()}
+              onClick={analyze}
               disabled={!canAnalyze}
             >
               {controller.loading === "analyze" ? "正在拆解计划" : "分析并自动分配"}
             </Button>
+            <p
+              className="mt-2 min-h-5 text-xs text-mute"
+              data-testid="orchestrator-analysis-status"
+              aria-live="polite"
+              aria-busy={controller.loading === "analyze"}
+            >
+              {controller.loading === "analyze"
+                ? "正在分析目标并生成分配计划…"
+                : analysisFeedback}
+            </p>
           </Card>
 
           {controller.draft ? (
-            <Card data-testid="orchestrator-plan">
+            <div ref={planRef}>
+              <Card data-testid="orchestrator-plan">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <CardTitle>{controller.draft.plan.title}</CardTitle>
@@ -377,7 +427,8 @@ export function OrchestratorPanel({
                   </Button>
                 </div>
               ) : null}
-            </Card>
+              </Card>
+            </div>
           ) : null}
 
           {controller.run ? (

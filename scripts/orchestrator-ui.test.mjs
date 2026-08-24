@@ -55,6 +55,7 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
     "orchestrator-prompt",
     "orchestrator-coordinator",
     "orchestrator-analyze",
+    "orchestrator-analysis-status",
     "orchestrator-plan",
     "orchestrator-trust",
     "orchestrator-start",
@@ -85,6 +86,12 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
   assert.match(panel, /选择文件夹/);
   assert.match(panel, /role="alert"/);
   assert.match(panel, /choosingRepository/);
+  assert.match(panel, /aria-live="polite"/);
+  assert.match(panel, /aria-busy=\{controller\.loading === "analyze"\}/);
+  assert.match(panel, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
+  assert.match(panel, /toast\.success\(message\)/);
+  assert.match(panel, /draft\.plan\.tasks\.length/);
+  assert.doesNotMatch(panel, /共 \$\{draft\.assignedTasks\.length\} 项任务/);
   assert.match(
     dashboard,
     /const \[orchestratorMounted, setOrchestratorMounted\] = useState\(false\)/,
