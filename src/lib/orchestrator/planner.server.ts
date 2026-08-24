@@ -3,28 +3,29 @@ import { z } from "zod";
 import { buildPlanCommand, extractStructuredPlan, type AgentCommand } from "./adapters.ts";
 import { assignTasks, chooseCoordinator } from "./capacity.ts";
 import type { RepositorySnapshot } from "./git.server.ts";
+import type { buildTrustedQuotaSnapshot } from "./quota-policy.ts";
 import {
   fingerprintPlan,
   orchestratorPlanJsonSchema,
   parseOrchestratorPlan,
   serializeOverlappingTasks,
 } from "./plan.ts";
-import { quotaCapacityEvidenceSchema } from "./schemas.ts";
+import { clientQuotaEvidenceSchema } from "./schemas.ts";
 import type { RunStore } from "./run-store.server.ts";
 import type {
-  AgentCapacity,
   AgentRuntimeProbe,
+  ClientQuotaEvidence,
   CoordinatorChoice,
   NativeAgentId,
   OrchestratorEvent,
   OrchestratorRun,
   OrchestratorSettings,
   PlanDraft,
-  QuotaCapacityEvidence,
+  RoleSuccessRates,
 } from "./types.ts";
 
 const agentSchema = z.enum(["claude", "codex", "grok"]);
-export { quotaCapacityEvidenceSchema } from "./schemas.ts";
+export { clientQuotaEvidenceSchema } from "./schemas.ts";
 export const analyzeRequestSchema = z
   .object({
     repositoryPath: z
@@ -36,9 +37,9 @@ export const analyzeRequestSchema = z
     coordinator: z.union([z.literal("auto"), agentSchema]),
     quotaEvidence: z
       .object({
-        claude: quotaCapacityEvidenceSchema,
-        codex: quotaCapacityEvidenceSchema,
-        grok: quotaCapacityEvidenceSchema,
+        claude: clientQuotaEvidenceSchema,
+        codex: clientQuotaEvidenceSchema,
+        grok: clientQuotaEvidenceSchema,
       })
       .strict(),
   })
@@ -48,7 +49,7 @@ export interface AnalyzeRequest {
   repositoryPath: string;
   prompt: string;
   coordinator: CoordinatorChoice;
-  quotaEvidence: Record<NativeAgentId, QuotaCapacityEvidence>;
+  quotaEvidence: Record<NativeAgentId, ClientQuotaEvidence>;
 }
 
 export interface PlannerDependencies {
@@ -62,7 +63,14 @@ export interface PlannerDependencies {
     attempt: number;
   }): Promise<{ stdoutLines: string[]; events: OrchestratorEvent[] }>;
   createSchemaFile(runId: string, schema: object): Promise<string>;
-  recentSuccessRates(): Promise<Record<NativeAgentId, number | null>>;
+  recentSuccessRates(): Promise<Record<NativeAgentId, RoleSuccessRates>>;
+  refreshQuotaSnapshot(input: {
+    clientEvidence: Record<NativeAgentId, ClientQuotaEvidence>;
+    runtimes: Record<NativeAgentId, AgentRuntimeProbe>;
+    settings: OrchestratorSettings;
+    roleSuccessRates: Record<NativeAgentId, RoleSuccessRates>;
+    now: number;
+  }): Promise<ReturnType<typeof buildTrustedQuotaSnapshot>>;
   loadSettings(): Promise<OrchestratorSettings>;
   detectRuntimes(settings: OrchestratorSettings): Promise<Record<NativeAgentId, AgentRuntimeProbe>>;
   store: RunStore;
@@ -114,41 +122,15 @@ function validationIssues(error: unknown): unknown[] {
 }
 
 function validateSuccessRates(
-  input: Record<NativeAgentId, number | null>,
-): Record<NativeAgentId, number | null> {
-  const schema = z
-    .object({
-      claude: z.number().finite().min(0).max(1).nullable(),
-      codex: z.number().finite().min(0).max(1).nullable(),
-      grok: z.number().finite().min(0).max(1).nullable(),
-    })
-    .strict();
-  return schema.parse(input);
-}
-
-function capacitiesFromServer(
-  settings: OrchestratorSettings,
-  runtimes: Record<NativeAgentId, AgentRuntimeProbe>,
-  quotaEvidence: Record<NativeAgentId, QuotaCapacityEvidence>,
-  successRates: Record<NativeAgentId, number | null>,
-): AgentCapacity[] {
-  return (["claude", "codex", "grok"] as const).map((agent) => {
-    const runtime = runtimes[agent];
-    const evidence = quotaEvidence[agent];
-    return {
-      agent,
-      enabled: settings.agents[agent].enabled,
-      installed: runtime.ok && Boolean(runtime.path),
-      version: runtime.version,
-      binaryPath: runtime.ok ? runtime.path : null,
-      remainingLowUsd: evidence.remainingLowUsd,
-      totalHighUsd: evidence.totalHighUsd,
-      valueConfidence: evidence.valueConfidence,
-      officialRemainingPct: evidence.officialRemainingPct,
-      recentSuccessRate: successRates[agent],
-      allowUnknownQuota: settings.agents[agent].allowUnknownQuota,
-    };
-  });
+  input: Record<NativeAgentId, RoleSuccessRates>,
+): Record<NativeAgentId, RoleSuccessRates> {
+  const rate = z.number().finite().min(0).max(1).nullable();
+  const roleRates = z.object({
+    planningSuccessRate: rate,
+    executionSuccessRate: rate,
+    repairSuccessRate: rate,
+  }).strict();
+  return z.object({ claude: roleRates, codex: roleRates, grok: roleRates }).strict().parse(input);
 }
 
 export async function analyzePlan(
@@ -170,8 +152,14 @@ export async function analyzePlan(
   const settings = await dependencies.loadSettings();
   const runtimes = await dependencies.detectRuntimes(settings);
   const successRates = validateSuccessRates(await dependencies.recentSuccessRates());
-  const capacities = capacitiesFromServer(settings, runtimes, request.quotaEvidence, successRates);
-  const coordinator = chooseCoordinator(capacities, request.coordinator);
+  const quota = await dependencies.refreshQuotaSnapshot({
+    clientEvidence: request.quotaEvidence,
+    runtimes,
+    settings,
+    roleSuccessRates: successRates,
+    now,
+  });
+  const coordinator = chooseCoordinator(quota.profiles, request.coordinator);
   const coordinatorRuntime = await dependencies.runtimeFor(coordinator);
   if (!coordinatorRuntime.ok || !coordinatorRuntime.path) {
     throw new Error(`selected coordinator ${coordinator} is not available`);
@@ -210,7 +198,7 @@ export async function analyzePlan(
   }
   if (!parsedPlan) throw new Error("native planning output was invalid twice; no run was created");
   const plan = serializeOverlappingTasks(parsedPlan);
-  const assignment = assignTasks(plan.tasks, capacities, coordinator);
+  const assignment = assignTasks(plan.tasks, quota.profiles);
   const draftWithoutFingerprint = {
     runId,
     repositoryPath: repository.root,
@@ -223,6 +211,7 @@ export async function analyzePlan(
     prompt: request.prompt,
     plan,
     assignedTasks: assignment.tasks,
+    quotaSnapshot: quota.snapshot,
   };
   const draft: PlanDraft = {
     ...draftWithoutFingerprint,

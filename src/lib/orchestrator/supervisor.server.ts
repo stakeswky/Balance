@@ -8,6 +8,7 @@ import {
   type AgentCommand,
 } from "./adapters.ts";
 import { createAgentLeaseManager } from "./agent-lease.server.ts";
+import { readOfficialQuota } from "../quota/official.server.ts";
 import {
   abortCherryPick,
   assertOriginalHeadUnchanged,
@@ -25,6 +26,7 @@ import {
   orchestratorStateDir,
 } from "./paths.server.ts";
 import { analyzePlan, type AnalyzeRequest } from "./planner.server.ts";
+import { buildTrustedQuotaSnapshot } from "./quota-policy.ts";
 import { startAgentProcess, type ProcessRunResult } from "./process-runner.server.ts";
 import { createRunStore, type RunStore } from "./run-store.server.ts";
 import { scheduleRun, type ScheduleHandle, type StartRunRequest } from "./scheduler.server.ts";
@@ -312,10 +314,13 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
       },
       recentSuccessRates: async () => {
         const runs = await this.#store.list();
-        const result = { claude: null, codex: null, grok: null } as Record<
-          NativeAgentId,
-          number | null
-        >;
+        const result = Object.fromEntries(([
+          "claude", "codex", "grok",
+        ] as const).map((agent) => [agent, {
+          planningSuccessRate: null,
+          executionSuccessRate: null as number | null,
+          repairSuccessRate: null,
+        }])) as Record<NativeAgentId, import("./types.ts").RoleSuccessRates>;
         for (const agent of ["claude", "codex", "grok"] as const) {
           const recent = runs
             .flatMap((run) => run.tasks)
@@ -324,12 +329,21 @@ class LocalOrchestratorSupervisor implements OrchestratorSupervisor {
                 task.assignedAgent === agent && ["completed", "failed"].includes(task.status),
             )
             .slice(0, 20);
-          result[agent] = recent.length
+          result[agent].executionSuccessRate = recent.length
             ? recent.filter((task) => task.status === "completed").length / recent.length
             : null;
         }
         return result;
       },
+      refreshQuotaSnapshot: async ({ clientEvidence, runtimes: currentRuntimes, settings: currentSettings, roleSuccessRates, now }) =>
+        buildTrustedQuotaSnapshot({
+          clientEvidence,
+          officialQuota: await readOfficialQuota({ now }),
+          runtimes: currentRuntimes,
+          settings: currentSettings,
+          roleSuccessRates,
+          now,
+        }),
       loadSettings: () => Promise.resolve(settings),
       detectRuntimes: () => Promise.resolve(runtimes),
       store: this.#store,

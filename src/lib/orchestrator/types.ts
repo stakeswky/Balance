@@ -65,11 +65,27 @@ export interface AgentRuntimeProbe {
   error: string | null;
 }
 
-export interface QuotaCapacityEvidence {
-  remainingLowUsd: number | null;
-  totalHighUsd: number | null;
-  valueConfidence: ValueConfidence;
+export interface ClientQuotaEvidence {
   officialRemainingPct: number | null;
+  officialObservedAt: number | null;
+  officialResetsAt: number | null;
+  officialFresh: boolean;
+  officialSource: string | null;
+  l3RemainingPct: number | null;
+  l3Confidence: ValueConfidence;
+  l3ObservedAt: number | null;
+}
+
+export interface QuotaCapacityEvidence extends ClientQuotaEvidence {
+  l3Trusted: boolean;
+  computedExecutionUnits: number;
+  admissionSource: AgentAdmissionSource;
+  diagnostics: string[];
+}
+
+export interface QuotaSnapshot {
+  capturedAt: number;
+  evidence: Record<NativeAgentId, QuotaCapacityEvidence>;
 }
 
 export interface RepositoryValidation {
@@ -96,12 +112,40 @@ export interface AgentCapacity {
   installed: boolean;
   version: string | null;
   binaryPath: string | null;
-  remainingLowUsd: number | null;
-  totalHighUsd: number | null;
-  valueConfidence: ValueConfidence;
   officialRemainingPct: number | null;
-  recentSuccessRate: number | null;
+  officialObservedAt: number | null;
+  officialResetsAt: number | null;
+  officialFresh: boolean;
+  officialSource: string | null;
+  l3RemainingPct: number | null;
+  l3Confidence: ValueConfidence;
+  l3ObservedAt: number | null;
+  l3Trusted: boolean;
+  planningSuccessRate: number | null;
+  executionSuccessRate: number | null;
+  repairSuccessRate: number | null;
   allowUnknownQuota: boolean;
+}
+
+export type AgentAdmissionSource = "official" | "l3-fallback" | "unknown-allowed" | "excluded";
+
+export interface RoleSuccessRates {
+  planningSuccessRate: number | null;
+  executionSuccessRate: number | null;
+  repairSuccessRate: number | null;
+}
+
+export interface AgentSchedulingProfile extends AgentCapacity {
+  canPlan: boolean;
+  canExecute: boolean;
+  canRepair: boolean;
+  executionUnits: number;
+  admissionSource: AgentAdmissionSource;
+  admissionRemainingPct: number | null;
+  planningRisk: string | null;
+  repairRisk: string | null;
+  exclusionReasons: string[];
+  diagnostics: string[];
 }
 
 export interface OrchestratorTaskPlan {
@@ -138,6 +182,7 @@ export interface PlanDraft {
   prompt: string;
   plan: OrchestratorPlan;
   assignedTasks: AssignedTask[];
+  quotaSnapshot?: QuotaSnapshot;
   fingerprint: string;
   createdAt: number;
 }

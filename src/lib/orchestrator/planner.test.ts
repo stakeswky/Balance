@@ -5,20 +5,38 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createRunStore } from "./run-store.server.ts";
 import { analyzePlan, type AnalyzeRequest, type PlannerDependencies } from "./planner.server.ts";
+import { buildTrustedQuotaSnapshot } from "./quota-policy.ts";
 import { defaultOrchestratorSettings } from "./settings.server.ts";
+import type { OfficialSlice } from "../quota/official.ts";
 import type {
   AgentRuntimeProbe,
+  ClientQuotaEvidence,
   NativeAgentId,
   OrchestratorPlan,
-  QuotaCapacityEvidence,
 } from "./types.ts";
 
-function evidence(officialRemainingPct: number): QuotaCapacityEvidence {
+const NOW = Date.UTC(2026, 7, 24, 13, 14, 15);
+
+function evidence(officialRemainingPct: number): ClientQuotaEvidence {
   return {
-    remainingLowUsd: null,
-    totalHighUsd: null,
-    valueConfidence: "none",
     officialRemainingPct,
+    officialObservedAt: NOW,
+    officialResetsAt: NOW + 60_000,
+    officialFresh: true,
+    officialSource: "client-display",
+    l3RemainingPct: null,
+    l3Confidence: "none",
+    l3ObservedAt: null,
+  };
+}
+
+function officialSlice(agent: NativeAgentId, remainingPct: number): OfficialSlice {
+  return {
+    agent, windowPct: 100 - remainingPct, weekPct: null,
+    windowResetsAt: NOW + 60_000, weekResetsAt: null, weekStartedAt: null,
+    windowDurationMs: 5 * 60 * 60 * 1_000, weekDurationMs: null, burnPctPerHour: 0,
+    planLabel: null, products: [], prepaidBalance: null, onDemandUsed: null, onDemandCap: null,
+    source: "test", fetchedAt: NOW, windowKind: "five_hour",
   };
 }
 
@@ -118,7 +136,21 @@ async function harness(
       return join(root, "runs", runId, "plan-schema.json");
     },
     async recentSuccessRates() {
-      return { claude: 0.8, codex: 0.9, grok: null };
+      return {
+        claude: { planningSuccessRate: 0.8, executionSuccessRate: 0.8, repairSuccessRate: null },
+        codex: { planningSuccessRate: 0.9, executionSuccessRate: 0.9, repairSuccessRate: null },
+        grok: { planningSuccessRate: null, executionSuccessRate: null, repairSuccessRate: null },
+      };
+    },
+    async refreshQuotaSnapshot(input) {
+      return buildTrustedQuotaSnapshot({
+        ...input,
+        officialQuota: {
+          claude: officialSlice("claude", options.official?.claude ?? 80),
+          codex: officialSlice("codex", options.official?.codex ?? 60),
+          grok: officialSlice("grok", options.official?.grok ?? 40),
+        },
+      });
     },
     async loadSettings() {
       return settings;
@@ -127,7 +159,7 @@ async function harness(
       return runtimes;
     },
     store,
-    now: () => Date.UTC(2026, 7, 24, 13, 14, 15),
+    now: () => NOW,
     randomHex: (bytes) => {
       assert.equal(bytes, 6);
       return "a1b2c3d4e5f6";
@@ -243,7 +275,7 @@ test("rejects forged or non-finite quota evidence before running a native planne
   assert.deepEqual(await h.store.list(), []);
 
   const forged = await harness([JSON.stringify({ structured_output: validPlan() })]);
-  (forged.request.quotaEvidence.claude as QuotaCapacityEvidence & { enabled: boolean }).enabled =
+  (forged.request.quotaEvidence.claude as ClientQuotaEvidence & { enabled: boolean }).enabled =
     true;
   await assert.rejects(
     () => analyzePlan(forged.request, forged.dependencies),

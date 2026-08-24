@@ -8,9 +8,9 @@ import { Input, Textarea } from "@/components/ui/input";
 import { useOrchestratorController } from "@/lib/orchestrator/client";
 import { chooseRepositoryDirectory } from "@/lib/orchestrator/folder-picker";
 import type {
+  ClientQuotaEvidence,
   NativeAgentId,
   OrchestratorEvent,
-  QuotaCapacityEvidence,
   RunStatus,
   TaskSize,
 } from "@/lib/orchestrator/types";
@@ -50,17 +50,12 @@ const ACTIVE_STATUSES = new Set<RunStatus>([
   "verifying",
 ]);
 
-function capacityText(evidence: QuotaCapacityEvidence): string {
-  if (
-    evidence.remainingLowUsd !== null &&
-    evidence.totalHighUsd !== null &&
-    ["medium", "high"].includes(evidence.valueConfidence)
-  ) {
-    return `$${evidence.remainingLowUsd.toFixed(2)}+ / $${evidence.totalHighUsd.toFixed(2)}`;
-  }
+function capacityText(evidence: ClientQuotaEvidence): string {
   if (evidence.officialRemainingPct !== null) {
-    return `官方剩余 ${evidence.officialRemainingPct.toFixed(0)}%`;
+    const l3 = evidence.l3RemainingPct === null ? "" : ` · L3 风险 ${evidence.l3RemainingPct.toFixed(0)}%`;
+    return `官方剩余 ${evidence.officialRemainingPct.toFixed(0)}%${l3}`;
   }
+  if (evidence.l3RemainingPct !== null) return `L3 风险 ${evidence.l3RemainingPct.toFixed(0)}%`;
   return "额度未知";
 }
 
@@ -90,7 +85,7 @@ function eventText(event: OrchestratorEvent): string {
 export function OrchestratorPanel({
   quotaEvidence,
 }: {
-  quotaEvidence: Record<NativeAgentId, QuotaCapacityEvidence>;
+  quotaEvidence: Record<NativeAgentId, ClientQuotaEvidence>;
 }) {
   const controller = useOrchestratorController(quotaEvidence);
   const [trusted, setTrusted] = useState(false);
@@ -308,7 +303,7 @@ export function OrchestratorPanel({
                     {capacityText(quotaEvidence[agent])}
                   </p>
                   <p className="mt-1 text-xs text-mute">
-                    可信度 {quotaEvidence[agent].valueConfidence} · 单任务并发
+                    L3 可信度 {quotaEvidence[agent].l3Confidence} · 单任务并发
                   </p>
                 </div>
               ))}

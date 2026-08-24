@@ -11,9 +11,9 @@ import { getOrchestratorAuthorization } from "./capability.ts";
 import type { RunSnapshot, RunSummary } from "./supervisor.server.ts";
 import type {
   CoordinatorChoice,
+  ClientQuotaEvidence,
   OrchestratorRun,
   PlanDraft,
-  QuotaCapacityEvidence,
   RepositoryValidation,
   RunEventRecord,
   RunStatus,
@@ -65,23 +65,33 @@ export function buildQuotaCapacityEvidence(
   weekly: QuotaValue,
   fiveHour: QuotaValue,
   official: OfficialSlice | null,
-): QuotaCapacityEvidence {
+  now = Date.now(),
+): ClientQuotaEvidence {
   const value = trustedDollarValue([weekly, fiveHour]);
-  const usedPercentages = official
+  const officialCandidates = official
     ? [
-        official.windowPct !== null && !official.windowStale ? official.windowPct : null,
-        official.weekPct !== null && !official.weekStale ? official.weekPct : null,
-      ].filter((percentage): percentage is number => percentage !== null)
+        official.windowPct !== null && !official.windowStale
+          ? { used: official.windowPct, observedAt: official.windowFetchedAt ?? official.fetchedAt, resetsAt: official.windowResetsAt }
+          : null,
+        official.weekPct !== null && !official.weekStale
+          ? { used: official.weekPct, observedAt: official.weekFetchedAt ?? official.fetchedAt, resetsAt: official.weekResetsAt }
+          : null,
+      ].filter((candidate): candidate is { used: number; observedAt: number; resetsAt: number | null } => candidate !== null)
     : [];
-  const officialRemainingPct =
-    usedPercentages.length > 0
-      ? Math.max(0, Math.min(100, 100 - Math.max(...usedPercentages)))
-      : null;
+  officialCandidates.sort((left, right) => right.used - left.used);
+  const selectedOfficial = officialCandidates[0] ?? null;
+  const l3RemainingPct = value
+    ? Math.max(0, Math.min(100, (value.remainingLowUsd! / value.totalHighUsd!) * 100))
+    : null;
   return {
-    remainingLowUsd: value?.remainingLowUsd ?? null,
-    totalHighUsd: value?.totalHighUsd ?? null,
-    valueConfidence: value?.confidence ?? "none",
-    officialRemainingPct,
+    officialRemainingPct: selectedOfficial ? Math.max(0, Math.min(100, 100 - selectedOfficial.used)) : null,
+    officialObservedAt: selectedOfficial?.observedAt ?? null,
+    officialResetsAt: selectedOfficial?.resetsAt ?? null,
+    officialFresh: selectedOfficial !== null && now - selectedOfficial.observedAt <= 5 * 60 * 1_000,
+    officialSource: selectedOfficial ? official?.source ?? "official" : null,
+    l3RemainingPct,
+    l3Confidence: value?.confidence ?? "none",
+    l3ObservedAt: value ? now : null,
   };
 }
 
@@ -93,7 +103,7 @@ function mergeEvents(current: RunEventRecord[], incoming: RunEventRecord[]): Run
 }
 
 export function useOrchestratorController(
-  quotaEvidence: Record<"claude" | "codex" | "grok", QuotaCapacityEvidence>,
+  quotaEvidence: Record<"claude" | "codex" | "grok", ClientQuotaEvidence>,
 ) {
   const [authorization] = useState(() => getOrchestratorAuthorization());
   const [repositoryPath, setRepositoryPathState] = useState("");

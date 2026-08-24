@@ -15,6 +15,7 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { redactAgentOutput } from "./adapters.ts";
 import { parseOrchestratorPlan } from "./plan.ts";
+import { quotaCapacityEvidenceSchema } from "./schemas.ts";
 import {
   atomicWritePrivateJson,
   ensurePrivateDirectory,
@@ -86,6 +87,14 @@ const planSchema = z.object({
   summary: z.string().min(1).max(4_000),
   tasks: z.array(taskPlanSchema).min(1).max(12),
 }).strict();
+const quotaSnapshotSchema = z.object({
+  capturedAt: timestampSchema,
+  evidence: z.object({
+    claude: quotaCapacityEvidenceSchema,
+    codex: quotaCapacityEvidenceSchema,
+    grok: quotaCapacityEvidenceSchema,
+  }).strict(),
+}).strict();
 const planDraftSchema = z.object({
   runId: z.string().regex(RUN_ID),
   repositoryPath: z.string().min(1).max(4_096).refine(isAbsolute),
@@ -98,6 +107,7 @@ const planDraftSchema = z.object({
   prompt: z.string().min(1).max(100_000),
   plan: planSchema,
   assignedTasks: z.array(assignedTaskSchema).max(12),
+  quotaSnapshot: quotaSnapshotSchema.optional(),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   createdAt: timestampSchema,
 }).strict();

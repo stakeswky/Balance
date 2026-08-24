@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { assertOrchestratorRequestAllowed } from "./request-guard.server.ts";
-import { orchestratorSettingsSchema, quotaCapacityEvidenceSchema } from "./schemas.ts";
+import { clientQuotaEvidenceSchema, orchestratorSettingsSchema } from "./schemas.ts";
 import { getOrchestratorSupervisor } from "./supervisor.server.ts";
 
 const authorizationSchema = z.string().min(1).max(128);
@@ -37,9 +37,9 @@ const validateRepositoryInputSchema = z
 
 const quotaEvidenceByAgentSchema = z
   .object({
-    claude: quotaCapacityEvidenceSchema,
-    codex: quotaCapacityEvidenceSchema,
-    grok: quotaCapacityEvidenceSchema,
+    claude: clientQuotaEvidenceSchema,
+    codex: clientQuotaEvidenceSchema,
+    grok: clientQuotaEvidenceSchema,
   })
   .strict();
 

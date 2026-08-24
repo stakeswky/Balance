@@ -9,10 +9,14 @@ const runId = "run_20260824123045_a1b2c3d4e5f6";
 const repositoryPath = "/tmp/balance-orchestrator-repository";
 const baseSha = "a".repeat(40);
 const quotaEvidence = {
-  remainingLowUsd: 10,
-  totalHighUsd: 20,
-  valueConfidence: "high" as const,
   officialRemainingPct: 50,
+  officialObservedAt: Date.now(),
+  officialResetsAt: Date.now() + 60_000,
+  officialFresh: true,
+  officialSource: "test-official",
+  l3RemainingPct: 40,
+  l3Confidence: "high" as const,
+  l3ObservedAt: Date.now(),
 };
 
 test("desktop capability comparison fails closed and accepts only an exact token", () => {
@@ -72,6 +76,34 @@ test("action schemas are strict and reject unsafe repository and plan input", ()
       quotaEvidence: { claude: quotaEvidence, codex: quotaEvidence, grok: quotaEvidence },
       enabled: true,
     }),
+  );
+  assert.throws(() =>
+    orchestratorActionInputSchemas.analyzePlan.parse({
+      authorization,
+      repositoryPath,
+      prompt: "implement the plan",
+      coordinator: "auto",
+      quotaEvidence: {
+        claude: { ...quotaEvidence, officialObservedAt: Date.now() + 60_000 },
+        codex: quotaEvidence,
+        grok: quotaEvidence,
+      },
+    }),
+    /future/i,
+  );
+  assert.throws(() =>
+    orchestratorActionInputSchemas.analyzePlan.parse({
+      authorization,
+      repositoryPath,
+      prompt: "implement the plan",
+      coordinator: "auto",
+      quotaEvidence: {
+        claude: { ...quotaEvidence, enabled: true },
+        codex: quotaEvidence,
+        grok: quotaEvidence,
+      },
+    }),
+    /unrecognized|unknown/i,
   );
 });
 
