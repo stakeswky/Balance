@@ -66,10 +66,16 @@ export function Dashboard() {
   const [view, setView] = useState<ViewId>(
     import.meta.env.VITE_DESKTOP_UPDATER_E2E === "true" ? "settings" : "monitor",
   );
+  const [orchestratorMounted, setOrchestratorMounted] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [officialLoadState, setOfficialLoadState] = useState<OfficialLoadState>("loading");
   const historyLoaded = useRef(false);
+
+  const selectView = (next: ViewId) => {
+    if (next === "orchestrator") setOrchestratorMounted(true);
+    setView(next);
+  };
 
   const events = useQuota((s) => s.events);
   const realEvents = useQuota((s) => s.realEvents);
@@ -598,7 +604,7 @@ export function Dashboard() {
       />
       <Header
         view={view}
-        onView={setView}
+        onView={selectView}
         live={live}
         watchText={watchText}
         agents={visibleAgents}
@@ -851,8 +857,10 @@ export function Dashboard() {
           </div>
         ) : null}
 
-        {view === "orchestrator" ? (
-          <OrchestratorPanel quotaEvidence={orchestratorQuotaEvidence} />
+        {orchestratorMounted ? (
+          <div hidden={view !== "orchestrator"}>
+            <OrchestratorPanel quotaEvidence={orchestratorQuotaEvidence} />
+          </div>
         ) : null}
 
         {view === "settings" ? <SettingsPanel agents={visibleAgents} /> : null}

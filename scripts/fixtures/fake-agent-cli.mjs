@@ -31,6 +31,26 @@ function emit(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function delay(milliseconds) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+async function waitForPlanRelease() {
+  const startedPath = resolve(process.cwd(), ".balance-plan-started");
+  const releasePath = resolve(process.cwd(), ".balance-plan-release");
+  await writeFile(startedPath, "started\n");
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
+    try {
+      await readFile(releasePath, "utf8");
+      return;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    await delay(50);
+  }
+  throw new Error("slow-plan release timed out");
+}
+
 const plan = {
   title: "Fake CLI E2E",
   summary: "Create two files in isolated native Agent worktrees.",
@@ -164,6 +184,7 @@ if (args.includes("--version") || args.includes("-V")) {
   const mode = await fixtureMode();
   const agent = agentKind();
   if (planningRequest()) {
+    if (mode === "slow-plan") await waitForPlanRelease();
     if (mode === "broken-plan") process.stdout.write("{broken-plan\n");
     else emitPlanning(agent);
   } else if (mode === "nonzero") {

@@ -53,6 +53,15 @@ function sleep(milliseconds) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 }
 
+async function waitForFile(path, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return;
+    await sleep(50);
+  }
+  throw new Error(`timed out waiting for file ${path}`);
+}
+
 function randomToken() {
   return Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
 }
@@ -292,6 +301,41 @@ async function configureAgentPaths(page, paths) {
     const diagnostics = await page.getByTestId("native-agent-settings").innerText();
     throw new Error(`native Agent settings were not detected:\n${diagnostics}`);
   }
+}
+
+async function verifyNavigationPreservesAnalysis(page, repository) {
+  const prompt = "Keep this slow analysis alive while navigating.";
+  await openView(page, "调度");
+  await page.getByTestId("orchestrator-repository-input").fill(repository.path);
+  await page.getByTestId("orchestrator-validate").click();
+  await page.getByText("干净，可分析", { exact: true }).waitFor();
+  await page.getByTestId("orchestrator-prompt").fill(prompt);
+  await page.getByTestId("orchestrator-coordinator").selectOption("auto");
+  await page.getByTestId("orchestrator-analyze").click();
+  await page
+    .getByRole("button", { name: "正在拆解计划", exact: true })
+    .waitFor({ state: "visible" });
+  const planStartedPath = join(repository.path, ".balance-plan-started");
+  const planReleasePath = join(repository.path, ".balance-plan-release");
+  await waitForFile(planStartedPath);
+
+  await openView(page, "设置");
+  await page.getByTestId("native-agent-settings").waitFor({ state: "visible" });
+  await openView(page, "调度");
+
+  await page
+    .getByRole("button", { name: "正在拆解计划", exact: true })
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await page.getByTestId("orchestrator-repository-input").inputValue(),
+    repository.path,
+  );
+  assert.equal(await page.getByTestId("orchestrator-prompt").inputValue(), prompt);
+  writeFileSync(planReleasePath, "release\n", { mode: 0o600 });
+  await page.getByTestId("orchestrator-plan").waitFor({ state: "visible", timeout: 60_000 });
+  await page.getByText("Fake CLI E2E", { exact: true }).waitFor({ state: "visible" });
+  rmSync(planReleasePath, { force: true });
+  rmSync(planStartedPath, { force: true });
 }
 
 async function preparePlan(
@@ -609,6 +653,11 @@ let context;
 let succeeded = false;
 
 try {
+  const navigationRepository = createRepository(
+    temporaryRoot,
+    "navigation-repository",
+    "slow-plan",
+  );
   const successRepository = createRepository(temporaryRoot, "success-repository");
   const nonzeroRepository = createRepository(temporaryRoot, "nonzero-repository", "nonzero");
   const brokenRepository = createRepository(temporaryRoot, "broken-repository", "broken-plan");
@@ -630,6 +679,7 @@ try {
       codex: fakeAgentPath,
       grok: fakeAgentPath,
     });
+    await verifyNavigationPreservesAnalysis(page, navigationRepository);
     const completed = await runSuccessfulFakeWorkflow(page, stateDirectory, successRepository);
     await runNonzeroWorkflow(page, stateDirectory, nonzeroRepository);
     await runBrokenPlanWorkflow(page, stateDirectory, brokenRepository);
@@ -647,7 +697,14 @@ try {
       skipped: false,
       completedRunId: completed.id,
       resultBranch: completed.resultBranch,
-      scenarios: ["success", "nonzero", "broken-plan", "hang-cancel", "interrupted-restart"],
+      scenarios: [
+        "navigation-state-preserved",
+        "success",
+        "nonzero",
+        "broken-plan",
+        "hang-cancel",
+        "interrupted-restart",
+      ],
     };
   }
 

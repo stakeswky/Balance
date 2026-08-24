@@ -43,7 +43,10 @@ test("root boot consumes and removes the desktop capability before onboarding", 
 });
 
 test("workspace renders repository trust, capacity, full plan, execution and recovery details", async () => {
-  const panel = await source("src/components/balance/orchestrator-panel.tsx");
+  const [panel, dashboard] = await Promise.all([
+    source("src/components/balance/orchestrator-panel.tsx"),
+    source("src/components/balance/dashboard.tsx"),
+  ]);
   for (const testId of [
     "orchestrator-panel",
     "orchestrator-repository-input",
@@ -82,6 +85,17 @@ test("workspace renders repository trust, capacity, full plan, execution and rec
   assert.match(panel, /选择文件夹/);
   assert.match(panel, /role="alert"/);
   assert.match(panel, /choosingRepository/);
+  assert.match(
+    dashboard,
+    /const \[orchestratorMounted, setOrchestratorMounted\] = useState\(false\)/,
+  );
+  assert.match(dashboard, /if \(next === "orchestrator"\) setOrchestratorMounted\(true\)/);
+  assert.match(dashboard, /onView=\{selectView\}/);
+  assert.match(dashboard, /hidden=\{view !== "orchestrator"\}/);
+  assert.doesNotMatch(
+    dashboard,
+    /view === "orchestrator"\s*\?\s*\(\s*<OrchestratorPanel/,
+  );
 });
 
 test("quota evidence chooses a conservative trustworthy dollar window and fresh official fallback", async () => {
