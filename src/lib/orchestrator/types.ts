@@ -173,6 +173,29 @@ export interface AssignedTask extends OrchestratorTaskPlan {
   assignedAgent: NativeAgentId;
 }
 
+export type DeferredReason =
+  | "quota"
+  | "dependency"
+  | "agent_unavailable"
+  | "task_too_large"
+  | "reservation_conflict"
+  | "stale_quota";
+
+export interface DeferredTask {
+  taskId: string;
+  reason: DeferredReason;
+  blockedBy: string[];
+  requiredUnits: number;
+  eligibleAgents: NativeAgentId[];
+  eligibleAfter: number | null;
+}
+
+export interface ScheduleSelection {
+  runnableTasks: AssignedTask[];
+  deferredTasks: DeferredTask[];
+  diagnostics: string[];
+}
+
 export interface PlanDraft {
   runId: string;
   repositoryPath: string;
