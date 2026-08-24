@@ -86,6 +86,7 @@ const publicPersistedState = {
       },
       grok: publicSlice("grok", 37, 37, "SuperGrok", "billing-api", "weekly"),
       codex: publicSlice("codex", 32, 32, "ChatGPT Plus", "wham-usage", "weekly"),
+      antigravity: null,
     },
   },
   version: 0,

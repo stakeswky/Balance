@@ -199,7 +199,7 @@ function persistedState(extra = {}) {
     liveClaude: false,
     liveGrok: false,
     liveCodex: false,
-    official: { claude: null, grok: null, codex: null },
+    official: { claude: null, grok: null, codex: null, antigravity: null },
     quotaSamples: [],
     calibrationTruncatedBeforeMs: null,
     cacheHistoryTruncated: false,
@@ -221,7 +221,7 @@ const SCENARIOS = {
     absent: ["5 小时窗（官方）", "本周额度（官方）"],
   },
   full: {
-    official: { claude: officialSlice(), grok: null, codex: null },
+    official: { claude: officialSlice(), grok: null, codex: null, antigravity: null },
     present: [
       "官方窗口剩余",
       "5 小时窗（官方）",
@@ -238,6 +238,7 @@ const SCENARIOS = {
       claude: officialSlice({ windowPct: null, modelWeekLimits: undefined }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     present: [
       "部分官方额度暂未返回；缺失项显示本地估算。",
@@ -264,6 +265,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     present: [
       "官方接口暂不可用；标为“官方快照”的值来自上次成功读取。",
@@ -304,6 +306,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     state: {
       minimalMode: true,
@@ -327,6 +330,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     state: { minimalMode: true, alertWindowPct: 80, alertWeekPct: 85 },
     present: ["本周额度", "90%"],
@@ -341,6 +345,7 @@ const SCENARIOS = {
         claude: officialSlice({ windowPct: 90, weekPct: 34, quotaPools: [] }),
         grok: null,
         codex: null,
+        antigravity: null,
       },
       {
         claude: officialSlice({
@@ -351,11 +356,13 @@ const SCENARIOS = {
         }),
         grok: null,
         codex: null,
+        antigravity: null,
       },
       {
         claude: officialSlice({ windowPct: 90, weekPct: 34, quotaPools: [] }),
         grok: null,
         codex: null,
+        antigravity: null,
       },
     ],
     state: { minimalMode: true, alertWindowPct: 80, alertWeekPct: 85 },
@@ -377,6 +384,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     state: {
       minimalMode: false,
@@ -398,7 +406,7 @@ const SCENARIOS = {
     expectedPreservedAlertCount: 0,
   },
   "demo-latch-reload": {
-    official: { claude: null, grok: null, codex: null },
+    official: { claude: null, grok: null, codex: null, antigravity: null },
     state: {
       demoMode: true,
       alertWindowPct: 99,
@@ -492,6 +500,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     history: [],
     present: [
@@ -515,6 +524,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     history: PRIOR.history,
     present: ["· 检测到本机日志之外的额度消耗", "无可用校准"],
@@ -533,6 +543,7 @@ const SCENARIOS = {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     history: [],
     present: ["· 本地校准历史已截断，区间已关闭", "样本不足"],
@@ -679,7 +690,7 @@ async function runScenario(browser, scenarioName, viewportName) {
       const officialSequence = scenario.officialSequence;
       const officialFixture = officialSequence?.length
         ? officialSequence[Math.min(officialStage, officialSequence.length - 1)]
-        : (scenario.official ?? { claude: null, grok: null, codex: null });
+        : (scenario.official ?? { claude: null, grok: null, codex: null, antigravity: null });
       await route.fulfill({
         status: 200,
         contentType: "application/json",

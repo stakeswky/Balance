@@ -56,7 +56,7 @@ test("expired stale slices cannot create phantom samples", () => {
   };
   assert.equal(windowBounds(slice, "five_hour", now).rolling, true);
   assert.deepEqual(
-    samplesFromOfficial([], { claude: null, grok: null, codex: slice }, now, []),
+    samplesFromOfficial([], { claude: null, grok: null, codex: slice, antigravity: null }, now, []),
     [],
   );
 });

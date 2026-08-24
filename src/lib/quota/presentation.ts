@@ -8,7 +8,8 @@ export interface QuotaPoolView {
   valuation: ProductQuotaValue;
 }
 
-export function quotaPoolLabel(pool: Pick<OfficialQuotaPool, "id" | "kind">): string {
+export function quotaPoolLabel(pool: Pick<OfficialQuotaPool, "id" | "kind" | "label">): string {
+  if (pool.label) return pool.label;
   if (pool.id === "seven_day_fable") return "Fable 5 周池";
   if (pool.id === "seven_day_sonnet") return "Sonnet 周池";
   if (pool.id === "seven_day_opus") return "Opus 周池";

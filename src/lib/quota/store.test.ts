@@ -202,6 +202,7 @@ test("official plan changes clear matching latches while same plans preserve the
     claude: null,
     grok: { ...base, agent: "grok" as const, planLabel: "Heavy" },
     codex: { ...base, agent: "codex" as const, planLabel: "ChatGPT Pro 20×" },
+    antigravity: null,
   };
   useQuota.setState({
     demoMode: false,
@@ -367,7 +368,7 @@ test("official samples are calibrated from realEvents instead of demo events", (
   useQuota.setState({
     realEvents: [real],
     events: [synthetic],
-    official: { claude: officialClaude(now), grok: null, codex: null },
+    official: { claude: officialClaude(now), grok: null, codex: null, antigravity: null },
     quotaSamples: [],
     demoMode: true,
   });

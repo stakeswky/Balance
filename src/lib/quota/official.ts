@@ -1,4 +1,4 @@
-import type { ModelId } from "./types.ts";
+import type { ModelId, OfficialAgentId } from "./types.ts";
 
 export interface OfficialProductShare {
   product: string;
@@ -14,7 +14,8 @@ export type OfficialModelWeekLimits = Partial<Record<ModelId, OfficialModelWeekL
 
 export interface OfficialQuotaPool {
   id: string;
-  kind: "model-week" | "extra-usage" | "product-share";
+  label?: string;
+  kind: "model-week" | "extra-usage" | "product-share" | "quota-window";
   usagePercent: number | null;
   startsAt: number | null;
   resetsAt: number | null;
@@ -27,7 +28,7 @@ export interface OfficialQuotaPool {
 }
 
 export interface OfficialSlice {
-  agent: "claude" | "grok" | "codex";
+  agent: OfficialAgentId;
   windowPct: number | null;
   weekPct: number | null;
   windowResetsAt: number | null;
@@ -58,6 +59,7 @@ export interface OfficialQuota {
   claude: OfficialSlice | null;
   grok: OfficialSlice | null;
   codex: OfficialSlice | null;
+  antigravity: OfficialSlice | null;
 }
 
 function num(v: unknown): number {
@@ -115,6 +117,129 @@ function nullableNumber(raw: unknown): number | null {
   if (raw == null || raw === "") return null;
   const value = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(value) ? value : null;
+}
+
+const ANTIGRAVITY_FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
+const ANTIGRAVITY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+type AntigravityWindowKind = "five_hour" | "weekly";
+
+interface ParsedAntigravityBucket {
+  kind: AntigravityWindowKind;
+  pool: OfficialQuotaPool;
+}
+
+function antigravityGroupName(raw: unknown): "Gemini Models" | "Claude and GPT models" | null {
+  if (typeof raw !== "string") return null;
+  const name = raw.trim().toLowerCase();
+  if (name === "gemini models") return "Gemini Models";
+  if (name === "claude and gpt models") return "Claude and GPT models";
+  return null;
+}
+
+function antigravityWindowKind(raw: Record<string, unknown>): AntigravityWindowKind | null {
+  const label = [raw.window, raw.bucketId, raw.displayName]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+  if (label.includes("weekly") || label.includes("week") || label.includes("7d")) {
+    return "weekly";
+  }
+  if (label.includes("5h") || label.includes("five hour") || label.includes("5 hour")) {
+    return "five_hour";
+  }
+  return null;
+}
+
+function antigravityPool(
+  raw: unknown,
+  groupName: string,
+  fetchedAt: number,
+): ParsedAntigravityBucket | null {
+  const bucket = record(raw);
+  if (!bucket) return null;
+  const kind = antigravityWindowKind(bucket);
+  const remaining = nullableNumber(bucket.remainingFraction);
+  if (!kind || remaining == null) return null;
+  const durationMs = kind === "weekly" ? ANTIGRAVITY_WEEK_MS : ANTIGRAVITY_FIVE_HOUR_MS;
+  const resetsAt = timestampMs(bucket.resetTime);
+  const fallbackId = `${groupName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${kind}`;
+  const id = typeof bucket.bucketId === "string" && bucket.bucketId.trim()
+    ? bucket.bucketId.trim()
+    : fallbackId;
+  const usagePercent = Math.round(
+    clampPct((1 - Math.max(0, Math.min(1, remaining))) * 100) * 1000,
+  ) / 1000;
+  return {
+    kind,
+    pool: {
+      id,
+      label: `${groupName} · ${kind === "weekly" ? "每周" : "5 小时"}`,
+      kind: "quota-window",
+      usagePercent,
+      startsAt: resetsAt == null ? null : resetsAt - durationMs,
+      resetsAt,
+      durationMs,
+      models: [],
+      exactUsedUsd: null,
+      exactLimitUsd: null,
+      fetchedAt,
+      stale: false,
+    },
+  };
+}
+
+export function parseAntigravityQuotaSummary(
+  raw: unknown,
+  opts?: { fetchedAt?: number; source?: string },
+): OfficialSlice | null {
+  const root = record(raw);
+  const groups = Array.isArray(root?.groups) ? root.groups : [];
+  const fetchedAt = opts?.fetchedAt ?? Date.now();
+  const parsed: ParsedAntigravityBucket[] = [];
+  for (const groupRaw of groups) {
+    const group = record(groupRaw);
+    if (!group || !Array.isArray(group.buckets)) continue;
+    const groupName = antigravityGroupName(group.displayName);
+    if (!groupName) continue;
+    for (const bucket of group.buckets) {
+      const value = antigravityPool(bucket, groupName, fetchedAt);
+      if (value) parsed.push(value);
+    }
+  }
+  if (!parsed.length) return null;
+  const tightest = (kind: AntigravityWindowKind): OfficialQuotaPool | null => {
+    const matches = parsed
+      .filter((entry) => entry.kind === kind)
+      .map((entry) => entry.pool)
+      .filter((pool): pool is OfficialQuotaPool & { usagePercent: number } => pool.usagePercent != null)
+      .sort((left, right) => right.usagePercent - left.usagePercent);
+    return matches[0] ?? null;
+  };
+  const fiveHour = tightest("five_hour");
+  const weekly = tightest("weekly");
+  return {
+    agent: "antigravity",
+    windowPct: fiveHour?.usagePercent ?? null,
+    weekPct: weekly?.usagePercent ?? null,
+    windowResetsAt: fiveHour?.resetsAt ?? null,
+    weekResetsAt: weekly?.resetsAt ?? null,
+    weekStartedAt: weekly?.startsAt ?? null,
+    windowDurationMs: fiveHour ? ANTIGRAVITY_FIVE_HOUR_MS : null,
+    weekDurationMs: weekly ? ANTIGRAVITY_WEEK_MS : null,
+    burnPctPerHour: 0,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    quotaPools: parsed.map((entry) => entry.pool),
+    source: opts?.source ?? "antigravity-quota-summary",
+    fetchedAt,
+    windowFetchedAt: fiveHour ? fetchedAt : undefined,
+    weekFetchedAt: weekly ? fetchedAt : undefined,
+    windowKind: fiveHour ? "five_hour" : "weekly",
+  };
 }
 
 function claudeModelPool(

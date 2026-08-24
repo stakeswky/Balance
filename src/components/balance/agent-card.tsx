@@ -139,6 +139,7 @@ export function AgentCard({
   const freshPoolPcts = (quotaPools ?? []).flatMap(({ valuation }) => {
     if (valuation.kind === "stale") return [];
     if (valuation.kind === "exact") return [valuation.value.usedPercent];
+    if (valuation.kind === "official") return [valuation.value.usedPercent];
     return [valuation.value.usedPct];
   });
   const hasFreshPool = freshPoolPcts.length > 0;
@@ -652,6 +653,17 @@ function QuotaPoolRows({ rows, tone }: { rows: QuotaPoolView[]; tone: AgentId })
                 已用 {formatUsd(valuation.value.usedUsd)} / 上限 {formatUsd(valuation.value.limitUsd)}
                 {` · 精确剩余 ${formatUsd(valuation.value.remainingUsd)}`}
               </p>
+            </div>
+          );
+        }
+        if (valuation.kind === "official") {
+          return (
+            <div key={pool.id} className="space-y-1.5">
+              <MeterBar
+                value={valuation.value.usedPercent}
+                tone={tone}
+                label={`${label}${suffix}`}
+              />
             </div>
           );
         }

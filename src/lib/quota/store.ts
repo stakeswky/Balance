@@ -374,7 +374,7 @@ export const useQuota = create<QuotaState>()(
       claudeSession: null,
       grokSession: null,
       codexSession: null,
-      official: { claude: null, grok: null, codex: null },
+      official: { claude: null, grok: null, codex: null, antigravity: null },
       quotaSamples: [],
       calibrationTruncatedBeforeMs: null,
       calibrationEventIndex: new Map<string, UsageEvent>(),

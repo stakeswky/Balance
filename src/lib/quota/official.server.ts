@@ -807,6 +807,7 @@ export async function readOfficialQuota(opts?: {
       ),
       grok: mergeGrokOfficial(grokHit?.slice ?? null, log),
       codex: codexHit?.slice ?? codexLog,
+      antigravity: null,
     };
   }
 
@@ -925,6 +926,7 @@ export async function readOfficialQuota(opts?: {
     claude: mergeClaudeSources(claudeLive),
     grok: mergeGrokOfficial(grokLive, log),
     codex: codexLive ?? codexLog,
+    antigravity: null,
   };
 }
 

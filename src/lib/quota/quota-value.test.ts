@@ -104,6 +104,26 @@ test("unsplit Claude cache writes lower priced token coverage", () => {
   assert.equal(observed.pricedTokenCoverage, 0.1);
 });
 
+test("official quota-window pool stays a raw official percent without API valuation", () => {
+  const pool: OfficialQuotaPool = {
+    id: "gemini-weekly",
+    label: "Gemini Models · 每周",
+    kind: "quota-window",
+    usagePercent: 28,
+    startsAt: 100,
+    resetsAt: 200,
+    durationMs: 100,
+    models: [],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt: 150,
+  };
+  assert.deepEqual(
+    quotaValueForPool([], slice({ agent: "antigravity" }), pool, 150, []),
+    { kind: "official", value: { usedPercent: 28 } },
+  );
+});
+
 test("anomalous token events remain observable and are not priced", () => {
   const event = ev({
     ts: 1,
@@ -653,6 +673,7 @@ test("samplesFromOfficial skips rolling windows", () => {
       }),
       grok: null,
       codex: null,
+      antigravity: null,
     },
     now,
     [],
@@ -871,7 +892,7 @@ test("official samples align cumulative cost to fetchedAt", () => {
   });
   const rows = samplesFromOfficial(
     [before, after],
-    { claude: official, grok: null, codex: null },
+    { claude: official, grok: null, codex: null, antigravity: null },
     fetchedAt + 30_000,
     [],
   );
@@ -892,7 +913,7 @@ test("stale fields cannot create quota samples", () => {
   });
   const rows = samplesFromOfficial(
     [],
-    { claude: official, grok: null, codex: null },
+    { claude: official, grok: null, codex: null, antigravity: null },
     now,
     [],
   );
@@ -910,7 +931,7 @@ test("future official timestamps cannot pull future events into a sample", () =>
   assert.deepEqual(
     samplesFromOfficial(
       [],
-      { claude: official, grok: null, codex: null },
+      { claude: official, grok: null, codex: null, antigravity: null },
       now,
       [],
     ),
@@ -1341,7 +1362,7 @@ test("samplesFromOfficial rejects every invalid pool metadata branch", async (t)
     });
     assert.deepEqual(samplesFromOfficial(
       [],
-      { claude, grok: null, codex: null },
+      { claude, grok: null, codex: null, antigravity: null },
         invalid.callNow,
       [],
       ), []);
@@ -1377,7 +1398,7 @@ test("samplesFromOfficial samples a fresh model pool with scoped events", () => 
   });
   const samples = samplesFromOfficial(
     [sonnetEvent, opusEvent],
-    { claude, grok: null, codex: null },
+    { claude, grok: null, codex: null, antigravity: null },
     now,
     [],
   );
@@ -1460,7 +1481,7 @@ test("valid stale model pool returns a finite snapshot and never emits a sample"
   });
   assert.deepEqual(samplesFromOfficial(
     [],
-    { claude, grok: null, codex: null },
+    { claude, grok: null, codex: null, antigravity: null },
     now,
     [],
   ), []);

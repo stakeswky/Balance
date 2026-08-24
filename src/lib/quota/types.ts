@@ -23,7 +23,13 @@ export interface ProviderReportedCost {
   semantics: "unverified" | "api-equivalent" | "provider-internal";
 }
 
-export type AgentId = "claude" | "codex" | "grok";
+export type UsageAgentId = "claude" | "codex" | "grok";
+export type OfficialAgentId = UsageAgentId | "antigravity";
+export type AgentId = UsageAgentId;
+
+export function isUsageAgentId(agent: OfficialAgentId): agent is UsageAgentId {
+  return agent !== "antigravity";
+}
 
 export type ClaudeModelId = "fable" | "opus" | "sonnet" | "haiku";
 export type CodexModelId =
@@ -41,7 +47,7 @@ export type ActorKind = "subagent" | "workflow-subagent";
 
 export interface UsageEvent {
   id: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   model: ModelId;
   /** Original model id from the client log; used for price lookup. */
   modelRaw?: string;
@@ -127,7 +133,7 @@ export function latestActivities(candidates: AgentLiveInfo[]): { live: AgentLive
 
 export interface PlanDef {
   id: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   name: string;
   priceUsd: number;
   blurb: string;

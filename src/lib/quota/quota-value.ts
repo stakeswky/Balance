@@ -1,8 +1,8 @@
 import { costBreakdown, eventRawTokens } from "./cost.ts";
 import { OPENAI_CREDITS_PER_USD, PRICING_VERSION } from "./pricing.ts";
-import type { OfficialQuotaPool, OfficialSlice } from "./official.ts";
-import type { AgentId, UsageEvent } from "./types.ts";
-import { CALIBRATION_RETENTION_MS, WEEK_MS, WINDOW_MS } from "./types.ts";
+import type { OfficialQuota, OfficialQuotaPool, OfficialSlice } from "./official.ts";
+import type { AgentId, UsageAgentId, UsageEvent } from "./types.ts";
+import { CALIBRATION_RETENTION_MS, isUsageAgentId, WEEK_MS, WINDOW_MS } from "./types.ts";
 import {
   buildUsageCostIndex,
   deduplicateUsageEvents,
@@ -16,7 +16,7 @@ export type CalibrationSource = "none" | "current-window" | "historical-prior";
 
 export interface QuotaSample {
   windowId: string;
-  agent: AgentId;
+  agent: UsageAgentId;
   product: string | null;
   timestampMs: number;
   usedPercent: number;
@@ -67,6 +67,7 @@ export interface ExactQuotaValue {
 export type ProductQuotaValue =
   | { kind: "estimated"; value: QuotaValue }
   | { kind: "exact"; value: ExactQuotaValue }
+  | { kind: "official"; value: { usedPercent: number } }
   | { kind: "stale"; value: { usedPercent: number | null } };
 
 const FIVE_H = WINDOW_MS;
@@ -168,6 +169,13 @@ export function quotaValueForPool(
   }
   const exact = exactQuotaValue(pool, now);
   if (exact) return { kind: "exact", value: exact };
+  if (pool.kind === "quota-window" && pool.usagePercent != null) {
+    return {
+      kind: "official",
+      value: { usedPercent: clampPercent(pool.usagePercent) },
+    };
+  }
+  if (slice.agent === "antigravity") return null;
   if (
     pool.kind !== "model-week"
     || pool.usagePercent == null
@@ -853,6 +861,7 @@ export function samplesFromOfficialHistory(
         claude: slice.agent === "claude" ? slice : null,
         grok: slice.agent === "grok" ? slice : null,
         codex: slice.agent === "codex" ? slice : null,
+        antigravity: null,
       },
       slice.fetchedAt,
       samples,
@@ -864,14 +873,14 @@ export function samplesFromOfficialHistory(
 
 export function samplesFromOfficial(
   events: UsageEvent[],
-  official: { claude: OfficialSlice | null; grok: OfficialSlice | null; codex: OfficialSlice | null },
+  official: OfficialQuota,
   now: number,
   existing: QuotaSample[],
   costIndex?: UsageCostIndex,
 ): QuotaSample[] {
   let samples = existing;
   const consider = (slice: OfficialSlice | null, kind: "five_hour" | "weekly") => {
-    if (!slice) return;
+    if (!slice || !isUsageAgentId(slice.agent)) return;
     const used = kind === "weekly" ? slice.weekPct : slice.windowPct;
     const stale = kind === "weekly" ? slice.weekStale : slice.windowStale;
     if (used == null || stale) return;
@@ -905,7 +914,7 @@ export function samplesFromOfficial(
   consider(official.codex, "five_hour");
   consider(official.codex, "weekly");
   for (const slice of [official.claude, official.grok, official.codex]) {
-    if (!slice) continue;
+    if (!slice || !isUsageAgentId(slice.agent)) continue;
     for (const pool of slice.quotaPools ?? []) {
       if (
         !validPoolMetadata(pool, now)

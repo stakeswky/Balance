@@ -10,6 +10,7 @@ import {
   parseClaudePlanHistory,
   parseClaudeStatuslinePayload,
   parseClaudeUsagePayload,
+  parseAntigravityQuotaSummary,
   quotaPoolsWithStale,
   slicesFromClaudeHistory,
   parseCodexRateLimitLog,
@@ -20,6 +21,7 @@ import {
   parseGrokBillingPayload,
   codexPlanIdFromLabel,
 } from "./official.ts";
+import { ANTIGRAVITY_SUMMARY_FIXTURE } from "./antigravity.test-fixture.ts";
 import { windowBounds } from "./quota-value.ts";
 
 function grokLine(percent: number, timestamp: string): string {
@@ -559,5 +561,56 @@ test("Claude statusline ignores windows without a valid reset", () => {
   assert.equal(partial.weekPct, 34.25);
   assert.equal(parseClaudeStatuslinePayload({
     rate_limits: { five_hour: { used_percentage: 12.5 } },
+  }), null);
+});
+
+test("Antigravity quota summary keeps four official pools and selects the tightest windows", () => {
+  const fetchedAt = Date.parse("2026-08-25T10:00:00Z");
+  const parsed = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt });
+  assert.ok(parsed);
+  assert.equal(parsed.agent, "antigravity");
+  assert.equal(parsed.windowPct, 55);
+  assert.equal(parsed.windowResetsAt, Date.parse("2026-08-25T13:00:00Z"));
+  assert.equal(parsed.weekPct, 62);
+  assert.equal(parsed.weekResetsAt, Date.parse("2026-08-30T08:00:00Z"));
+  assert.deepEqual(
+    parsed.quotaPools?.map((pool) => [pool.id, pool.label, pool.usagePercent]),
+    [
+      ["gemini-weekly", "Gemini Models · 每周", 28],
+      ["gemini-5h", "Gemini Models · 5 小时", 55],
+      ["3p-weekly", "Claude and GPT models · 每周", 62],
+      ["3p-5h", "Claude and GPT models · 5 小时", 20],
+    ],
+  );
+});
+
+test("Antigravity quota parser clamps remaining fractions and ignores malformed buckets", () => {
+  const parsed = parseAntigravityQuotaSummary({
+    groups: [
+      {
+        displayName: "Gemini Models",
+        buckets: [
+          { bucketId: "over", window: "weekly", remainingFraction: 2, resetTime: "bad" },
+          { bucketId: "under", window: "5h", remainingFraction: -1 },
+          { bucketId: "missing", window: "weekly" },
+          { bucketId: "daily", window: "daily", remainingFraction: 0.5 },
+        ],
+      },
+    ],
+  }, { fetchedAt: 100 });
+  assert.ok(parsed);
+  assert.deepEqual(parsed.quotaPools?.map((pool) => [pool.id, pool.usagePercent, pool.resetsAt]), [
+    ["over", 0, null],
+    ["under", 100, null],
+  ]);
+});
+
+test("Antigravity quota parser rejects unknown groups, windows, and empty payloads", () => {
+  assert.equal(parseAntigravityQuotaSummary({ groups: [] }), null);
+  assert.equal(parseAntigravityQuotaSummary({
+    groups: [{ displayName: "Unknown", buckets: [{ window: "weekly", remainingFraction: 0.5 }] }],
+  }), null);
+  assert.equal(parseAntigravityQuotaSummary({
+    groups: [{ displayName: "Gemini Models", buckets: [{ window: "daily", remainingFraction: 0.5 }] }],
   }), null);
 });
