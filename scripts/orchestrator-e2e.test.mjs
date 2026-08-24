@@ -60,3 +60,14 @@ test("package scripts expose orchestrator E2E and a debug native app build", asy
     'tauri build --debug --target aarch64-apple-darwin --bundles app --config \'{"bundle":{"createUpdaterArtifacts":false}}\'',
   );
 });
+
+test("desktop lifecycle waits for one live task process tree", async () => {
+  const source = await readFile(
+    new URL("./orchestrator-desktop-e2e.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /function taskEventPids\(events\)/);
+  assert.match(source, /taskEventPids\(events\)\.length >= 2/);
+  assert.match(source, /taskEventPids\(closeRun\.events\)/);
+  assert.match(source, /taskEventPids\(interruptedRun\.events\)/);
+});

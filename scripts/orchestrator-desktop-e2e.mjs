@@ -161,6 +161,10 @@ function eventPids(events) {
   return [...pids];
 }
 
+function taskEventPids(events) {
+  return eventPids(events.filter((record) => record.taskId !== null));
+}
+
 function pidAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
   try {
@@ -280,12 +284,19 @@ async function configureFakeAgents(page, fakeAgentPath) {
   for (const label of ["Claude Code", "Codex CLI", "Grok CLI"]) {
     const input = page.getByRole("textbox", { name: `${label} 可执行文件路径` });
     await input.fill(fakeAgentPath);
+    assert.equal(await input.inputValue(), fakeAgentPath);
     const unknown = page.getByRole("switch", { name: `${label} 额度未知时允许分配` });
     if ((await unknown.getAttribute("data-state")) !== "checked") await unknown.click();
+    assert.equal(await unknown.getAttribute("data-state"), "checked");
   }
   await page.getByRole("button", { name: "保存并检测", exact: true }).click();
-  await page.getByRole("button", { name: "保存并检测", exact: true }).waitFor({ state: "visible" });
-  await page.getByText("balance-fake-agent 1.0.0", { exact: false }).first().waitFor();
+  const version = page.getByText("balance-fake-agent 1.0.0", { exact: false }).first();
+  const alert = page.getByRole("alert").last();
+  const outcome = await Promise.race([
+    version.waitFor({ timeout: 60_000 }).then(() => "ready"),
+    alert.waitFor({ timeout: 60_000 }).then(() => "error"),
+  ]);
+  if (outcome === "error") throw new Error(`native Agent settings failed: ${await alert.innerText()}`);
   await page.waitForFunction(() => window.location.hash === "");
 }
 
@@ -298,7 +309,13 @@ async function preparePlan(page, repository, coordinator, prompt) {
   await page.getByTestId("orchestrator-prompt").fill(prompt);
   await page.getByTestId("orchestrator-coordinator").selectOption(coordinator);
   await page.getByTestId("orchestrator-analyze").click();
-  await page.getByTestId("orchestrator-plan").waitFor({ timeout: 60_000 });
+  const plan = page.getByTestId("orchestrator-plan");
+  const error = page.getByTestId("orchestrator-error");
+  const outcome = await Promise.race([
+    plan.waitFor({ timeout: 60_000 }).then(() => "ready"),
+    error.waitFor({ timeout: 60_000 }).then(() => "error"),
+  ]);
+  if (outcome === "error") throw new Error(`desktop analysis failed: ${await error.innerText()}`);
 }
 
 async function startPreparedPlan(page) {
@@ -325,7 +342,7 @@ async function startHangingRun(page, stateDirectory, repository, coordinator) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const events = readEvents(stateDirectory, persisted.value.id);
-    if (eventPids(events).length >= 4) return { run: persisted.value, events };
+    if (taskEventPids(events).length >= 2) return { run: persisted.value, events };
     await sleep(100);
   }
   throw new Error("hanging desktop run did not expose leaders and descendants");
@@ -424,7 +441,7 @@ try {
   });
 
   const closeRun = await startHangingRun(page, stateDirectory, cancelRepository, "codex");
-  const closePids = eventPids(closeRun.events);
+  const closePids = taskEventPids(closeRun.events);
   writeFileSync(
     join(evidenceRoot, "02-close-process-tree.txt"),
     `${processSnapshot([app.pid, ...closePids])}\n`,
@@ -448,8 +465,8 @@ try {
     fullPage: true,
   });
 
-  const interruptedRun = await startHangingRun(page, stateDirectory, interruptedRepository, "grok");
-  const interruptedPids = eventPids(interruptedRun.events);
+  const interruptedRun = await startHangingRun(page, stateDirectory, interruptedRepository, "codex");
+  const interruptedPids = taskEventPids(interruptedRun.events);
   const processStartsBefore = interruptedRun.events.filter(
     (record) => record.event.type === "process_started",
   ).length;
