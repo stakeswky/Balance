@@ -16,6 +16,9 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
   const updaterCapability = JSON.parse(
     read("src-tauri/capabilities/updater-loopback.json"),
   );
+  const orchestratorDialogCapability = JSON.parse(
+    read("src-tauri/capabilities/orchestrator-dialog.json"),
+  );
   const packageJson = JSON.parse(read("package.json"));
 
   assert.match(cargo, /serde_json = "=1\.0\.149"/);
@@ -26,7 +29,11 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
   assert.deepEqual(config.plugins.updater.endpoints, [
     "https://github.com/stakeswky/Balance/releases/latest/download/latest.json",
   ]);
-  assert.deepEqual(config.app.security.capabilities, ["default", "updater-loopback"]);
+  assert.deepEqual(config.app.security.capabilities, [
+    "default",
+    "updater-loopback",
+    "orchestrator-dialog",
+  ]);
   const publicKey = config.plugins.updater.pubkey;
   assert.deepEqual(defaultCapability.permissions, ["core:default"]);
   assert.equal(updaterCapability.local, false);
@@ -35,9 +42,15 @@ test("desktop shell registers the signed Tauri updater with minimal capability",
     urls: ["http://127.0.0.1:4780/*"],
   });
   assert.deepEqual(updaterCapability.permissions, ["updater:default"]);
+  assert.equal(orchestratorDialogCapability.local, false);
+  assert.deepEqual(orchestratorDialogCapability.windows, ["main"]);
+  assert.deepEqual(orchestratorDialogCapability.remote, {
+    urls: ["http://127.0.0.1:4780/*"],
+  });
+  assert.deepEqual(orchestratorDialogCapability.permissions, ["dialog:allow-open"]);
   assert.doesNotMatch(
-    JSON.stringify([defaultCapability, updaterCapability]),
-    /shell:allow|fs:allow|http:\/\/\*|:\*/,
+    JSON.stringify([defaultCapability, updaterCapability, orchestratorDialogCapability]),
+    /dialog:allow-save|shell:allow|fs:allow|http:\/\/\*|:\*/,
   );
   assert.match(publicKey.trim(), /^[A-Za-z0-9+/]+={0,2}$/);
   assert.match(

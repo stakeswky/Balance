@@ -10,7 +10,7 @@
   "app": {
     "windows": [],
     "security": {
-      "capabilities": ["default", "updater-loopback"]
+      "capabilities": ["default", "updater-loopback", "orchestrator-dialog"]
     }
   },
   "bundle": {

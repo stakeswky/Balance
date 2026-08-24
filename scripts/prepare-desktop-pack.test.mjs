@@ -36,6 +36,7 @@ test("desktop pack stays on semver and keeps native compatibility stamps", () =>
 test("native fingerprint matches the committed lock after the 0.3.0 bump", () => {
   const lock = JSON.parse(read("desktop-native.lock"));
   assert.ok(NATIVE_SURFACE_FILES.includes("src-tauri/capabilities/updater-loopback.json"));
+  assert.ok(NATIVE_SURFACE_FILES.includes("src-tauri/capabilities/orchestrator-dialog.json"));
   assert.equal(nativeFingerprint(root), lock.fingerprint);
   assert.match(lock.fingerprint, /^[0-9a-f]{64}$/);
 });

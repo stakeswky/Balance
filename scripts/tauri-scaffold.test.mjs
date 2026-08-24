@@ -15,6 +15,12 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
       "utf8",
     ),
   );
+  const orchestratorDialogCapability = JSON.parse(
+    await readFile(
+      new URL("../src-tauri/capabilities/orchestrator-dialog.json", import.meta.url),
+      "utf8",
+    ),
+  );
   const rust = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
   const infoPlist = await readFile(new URL("../src-tauri/Info.plist", import.meta.url), "utf8");
   const watchdog = await readFile(
@@ -29,7 +35,11 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
   assert.equal(config.bundle.macOS.signingIdentity, "-");
   assert.equal(config.bundle.macOS.infoPlist, "Info.plist");
   assert.equal(config.bundle.resources["resources/sidecar-watchdog.cjs"], "sidecar-watchdog.cjs");
-  assert.deepEqual(config.app.security.capabilities, ["default", "updater-loopback"]);
+  assert.deepEqual(config.app.security.capabilities, [
+    "default",
+    "updater-loopback",
+    "orchestrator-dialog",
+  ]);
   assert.deepEqual(defaultCapability.permissions, ["core:default"]);
   assert.equal(updaterCapability.local, false);
   assert.deepEqual(updaterCapability.windows, ["main"]);
@@ -37,9 +47,16 @@ test("Tauri scaffold has a delayed loopback window and minimal capability", asyn
     urls: ["http://127.0.0.1:4780/*"],
   });
   assert.deepEqual(updaterCapability.permissions, ["updater:default"]);
+  assert.equal(orchestratorDialogCapability.local, false);
+  assert.deepEqual(orchestratorDialogCapability.windows, ["main"]);
+  assert.deepEqual(orchestratorDialogCapability.remote, {
+    urls: ["http://127.0.0.1:4780/*"],
+  });
+  assert.deepEqual(orchestratorDialogCapability.permissions, ["dialog:allow-open"]);
+  assert.match(rust, /tauri_plugin_dialog::init\(\)/);
   assert.doesNotMatch(
-    JSON.stringify([defaultCapability, updaterCapability]),
-    /shell:allow|fs:allow|http:\/\/\*|:\*/,
+    JSON.stringify([defaultCapability, updaterCapability, orchestratorDialogCapability]),
+    /dialog:allow-save|shell:allow|fs:allow|http:\/\/\*|:\*/,
   );
   assert.match(infoPlist, /<key>NSAppTransportSecurity<\/key>/);
   assert.match(infoPlist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/);
