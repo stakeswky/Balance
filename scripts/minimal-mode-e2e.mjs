@@ -170,9 +170,9 @@ async function assertMinimalAgentCardDetails(page) {
     );
     assert.equal(await card.getByText("本周 token", { exact: true }).count(), 0);
     assert.equal(await card.getByText("本周 API 等价", { exact: true }).count(), 0);
-    assert.equal(await card.getByText("本周额度", { exact: true }).count(), 0);
+    assert.equal(await card.getByText("本周额度", { exact: true }).count(), 1);
     assert.equal(await card.getByText("本周剩余", { exact: true }).count(), 1);
-    assert.equal(await card.getByText("已用", { exact: true }).count(), 1);
+    assert.equal(await card.getByText("已用", { exact: true }).count(), 0);
     for (const status of ["充足", "留意", "将尽"])
       assert.equal(await card.getByText(status, { exact: true }).count(), 0);
     assert.equal(await card.getByLabel(/^套餐：.+ · 配置路径：~\//).count(), 1);
@@ -406,7 +406,7 @@ try {
     const raw = localStorage.getItem("balance-quota-v8");
     if (!raw) return false;
     const parsed = JSON.parse(raw);
-    return parsed.version === 2 && parsed.state?.minimalMode === true;
+    return parsed.version === 3 && parsed.state?.minimalMode === true;
   });
   await assertMinimalMode(page);
   await assertAdvicePlanOneLine(page);
