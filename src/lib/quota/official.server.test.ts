@@ -120,7 +120,13 @@ test("readOfficialQuota falls back to the billing log when the API fails", async
   clearOfficialCache();
   const { home, grokHome } = fixtureHome();
   const fetchImpl: typeof fetch = async () => new Response("nope", { status: 401 });
-  const q = await readOfficialQuota({ home, grokHome, fetchImpl, skipCache: true });
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    now: Date.parse("2026-08-19T17:20:00Z"),
+    fetchImpl,
+    skipCache: true,
+  });
   assert.equal(q.grok?.weekPct, 8);
   assert.equal(q.grok?.source, "unified-billing-log");
   assert.equal(q.grok?.planLabel, "X Premium+");
@@ -184,7 +190,14 @@ test("readOfficialQuota prefers live Codex usage over session jsonl", async () =
     }
     return new Response("nope", { status: 401 });
   };
-  const q = await readOfficialQuota({ home, grokHome, codexHome, fetchImpl, skipCache: true });
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    codexHome,
+    now: Date.parse("2026-08-19T17:20:00Z"),
+    fetchImpl,
+    skipCache: true,
+  });
   assert.equal(q.codex?.weekPct, 57);
   assert.equal(q.codex?.source, "wham-usage");
   assert.equal(q.codex?.planLabel, "ChatGPT Pro");
@@ -215,7 +228,14 @@ test("readOfficialQuota falls back to Codex session rate_limits when the API fai
     })}\n`,
   );
   const fetchImpl: typeof fetch = async () => new Response("nope", { status: 401 });
-  const q = await readOfficialQuota({ home, grokHome, codexHome, fetchImpl, skipCache: true });
+  const q = await readOfficialQuota({
+    home,
+    grokHome,
+    codexHome,
+    now: Date.parse("2026-08-19T17:20:00Z"),
+    fetchImpl,
+    skipCache: true,
+  });
   assert.equal(q.codex?.weekPct, 57);
   assert.equal(q.codex?.source, "session-rate-limits");
 });
@@ -249,6 +269,7 @@ test("readOfficialQuota reads the official Fable percent from Claude OAuth usage
   const q = await readOfficialQuota({
     home,
     grokHome,
+    now: Date.parse("2026-08-20T12:00:00Z"),
     fetchImpl,
     skipCache: true,
     readClaudeAuth: async () => ({ accessToken: "claude-token" }),
@@ -1299,7 +1320,7 @@ test("readOfficialQuota refreshes all four providers in parallel", async () => {
       return new Response(JSON.stringify({
         plan_type: "pro",
         rate_limit: {
-          primary_window: { used_percent: 57, limit_window_seconds: 604800, reset_at: 1787209839 },
+          primary_window: { used_percent: 57, limit_window_seconds: 604800, reset_at: 1787900000 },
           secondary_window: null,
         },
       }), { status: 200 });
@@ -1333,4 +1354,37 @@ test("readOfficialQuota refreshes all four providers in parallel", async () => {
   assert.equal(result.grok?.weekPct, 15);
   assert.equal(result.codex?.weekPct, 57);
   assert.deepEqual(result.antigravity, antigravity);
+});
+
+test("readOfficialQuota rolls an antigravity window whose reset already passed", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-official-reset-"));
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const base = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, {
+    fetchedAt: now - 3 * 60 * 60 * 1000,
+  });
+  assert.ok(base);
+  const exhausted = {
+    ...base,
+    windowPct: 100,
+    windowResetsAt: now - 2 * 60 * 60 * 1000,
+  };
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    snapshotPath: join(home, "state", "official-quota.json"),
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-a",
+    readAntigravity: async () => ({ slice: exhausted, identity: "agy-session-a" }),
+  });
+
+  const first = await readAt(now - 10_000);
+  assert.equal(first.antigravity?.windowPct, 0);
+  assert.equal(first.antigravity?.windowStale, true);
+
+  const cached = await readAt(now - 5_000);
+  assert.equal(cached.antigravity?.windowPct, 0);
+  assert.equal(cached.antigravity?.windowStale, true);
 });

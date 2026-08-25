@@ -42,6 +42,7 @@ import {
   parseGrokBillingLogLine,
   parseGrokBillingPayload,
   quotaPoolsWithStale,
+  expireOfficialQuota,
   slicesFromClaudeHistory,
   type OfficialQuota,
   type OfficialSlice,
@@ -848,7 +849,7 @@ export async function readOfficialQuota(opts?: {
     !opts?.skipCache && antigravityHit && now - antigravityHit.checkedAt < cacheMs,
   );
   if (claudeFresh && grokFresh && codexFresh && antigravityFresh) {
-    return {
+    return expireOfficialQuota({
       claude: mergeClaudeSources(
         claudeHit?.lastAttemptFailed
           ? staleOfficial(usableClaudeSlice(claudeHit, now))
@@ -859,7 +860,7 @@ export async function readOfficialQuota(opts?: {
       antigravity: antigravityHit?.lastAttemptFailed
         ? staleOfficial(antigravityHit.slice)
         : antigravityHit?.slice ?? null,
-    };
+    }, now);
   }
 
   const [claudeLive, grokLive, codexLive, antigravityLive] = await Promise.all([
@@ -1061,12 +1062,12 @@ export async function readOfficialQuota(opts?: {
     })(),
   ]);
 
-  return {
+  return expireOfficialQuota({
     claude: mergeClaudeSources(claudeLive),
     grok: mergeGrokOfficial(grokLive, log),
     codex: codexLive ?? codexLog,
     antigravity: antigravityLive,
-  };
+  }, now);
 }
 
 export function officialFilesMtime(home = homedir(), grokHome?: string, codexHome?: string): number {
