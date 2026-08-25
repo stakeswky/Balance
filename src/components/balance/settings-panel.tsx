@@ -147,6 +147,7 @@ export function SettingsPanel() {
 
       <PlansPanel
         agents={visibleUsageAgents}
+        antigravityAvailable={visibleAgents.includes("antigravity")}
         claudePlanId={claudePlanId}
         grokPlanId={grokPlanId}
         codexPlanId={codexPlanId}

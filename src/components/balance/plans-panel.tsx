@@ -54,8 +54,31 @@ function PlanList({
   );
 }
 
+function AntigravityOfficialPlan() {
+  return (
+    <div>
+      <h3 className="mb-3 text-sm font-medium">Antigravity 套餐</h3>
+      <div
+        role="status"
+        aria-label="Antigravity 官方额度，自动读取，无需选择套餐"
+        className="rounded-2xl bg-raised p-4 shadow-[var(--shadow-border-hover)]"
+      >
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-sm font-medium">官方额度（自动读取）</span>
+          <span className="font-mono text-xs text-mute">无需选择</span>
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-mute">
+          额度由 agy 官方接口直接返回；当前接口不提供套餐名称或切换能力。
+        </p>
+        <p className="mt-2 font-mono text-[11px] text-faint">5 小时 · 每周 · 4 个额度池</p>
+      </div>
+    </div>
+  );
+}
+
 export function PlansPanel({
   agents,
+  antigravityAvailable,
   claudePlanId,
   grokPlanId,
   codexPlanId,
@@ -70,6 +93,7 @@ export function PlansPanel({
   onAlertWeek,
 }: {
   agents: readonly UsageAgentId[];
+  antigravityAvailable: boolean;
   claudePlanId: string;
   grokPlanId: string;
   codexPlanId: string;
@@ -83,16 +107,17 @@ export function PlansPanel({
   onAlertWindow: (n: number) => void;
   onAlertWeek: (n: number) => void;
 }) {
+  const planCount = agents.length + Number(antigravityAvailable);
   const planGrid =
-    agents.length >= 3
+    planCount >= 3
       ? "lg:grid-cols-3"
-      : agents.length === 2
+      : planCount === 2
         ? "lg:grid-cols-2"
         : "lg:grid-cols-1";
 
   return (
     <div className="space-y-5">
-      {agents.length ? (
+      {planCount > 0 ? (
         <div className={cn("grid gap-5", planGrid)}>
           {agents.includes("claude") ? (
             <PlanList
@@ -118,6 +143,7 @@ export function PlansPanel({
               onSelect={onCodex}
             />
           ) : null}
+          {antigravityAvailable ? <AntigravityOfficialPlan /> : null}
         </div>
       ) : null}
 

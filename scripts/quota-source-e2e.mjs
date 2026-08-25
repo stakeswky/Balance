@@ -899,6 +899,11 @@ async function runScenario(browser, scenarioName, viewportName) {
       );
       assert.equal(await card.getByRole("button", { name: /采集|暂停/ }).count(), 0);
       await page.getByRole("button", { name: "设置" }).click();
+      const officialPlan = page.getByRole("status", {
+        name: "Antigravity 官方额度，自动读取，无需选择套餐",
+      });
+      await officialPlan.waitFor();
+      assert.equal(await officialPlan.getByRole("button").count(), 0);
       await page.getByRole("switch", { name: "极客模式" }).click();
       await page.getByRole("button", { name: "监控" }).click();
       assert.equal(

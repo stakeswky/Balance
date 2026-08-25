@@ -80,10 +80,19 @@ test("monitor cards and dashboard use compact spacing", () => {
 test("Antigravity uses an official-only card with its own visual tone", () => {
   const dashboard = read("src/components/balance/dashboard.tsx");
   const agentCard = read("src/components/balance/agent-card.tsx");
+  const settings = read("src/components/balance/settings-panel.tsx");
+  const plans = read("src/components/balance/plans-panel.tsx");
   const styles = read("src/styles.css");
   assert.match(dashboard, /name="Antigravity"/);
   assert.match(dashboard, /officialOnly/);
   assert.match(agentCard, /!officialOnly && onToggle/);
+  assert.match(settings, /antigravityAvailable=\{visibleAgents\.includes\("antigravity"\)\}/);
+  assert.match(plans, /const planCount = agents\.length \+ Number\(antigravityAvailable\)/);
+  assert.match(plans, /planCount > 0/);
+  assert.match(plans, /Antigravity 套餐/);
+  assert.match(plans, /官方额度（自动读取）/);
+  assert.match(plans, /无需选择/);
+  assert.doesNotMatch(plans, /ANTIGRAVITY_PLANS/);
   assert.match(styles, /--color-antigravity:/);
   assert.match(styles, /--antigravity:/);
 });
