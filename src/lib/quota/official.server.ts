@@ -52,6 +52,8 @@ import {
 export const GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const GROK_BILLING_CACHE_MS = 30_000;
+export const ANTIGRAVITY_QUOTA_CACHE_MS = 120_000;
+export const ANTIGRAVITY_IDENTITY_TTL_MS = 30_000;
 export const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const CLAUDE_USAGE_STALE_MS = 60 * 60 * 1000;
 export const CLAUDE_BACKOFF_BASE_MS = 30_000;
@@ -130,6 +132,7 @@ const claudeCache = new Map<string, ClaudeCacheEntry>();
 const grokCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 const codexCache = new Map<string, { at: number; slice: OfficialSlice | null }>();
 const antigravityCache = new Map<string, AntigravityCacheEntry>();
+const antigravityIdentityCache = new Map<string, { at: number; key: string | null }>();
 const antigravityCacheKeyByHome = new Map<string, string>();
 
 // File-level caches for local official data files.
@@ -859,6 +862,8 @@ export async function readOfficialQuota(opts?: {
   statuslineSnapshotPath?: string;
   readAntigravityIdentity?: ReadAntigravityIdentity;
   readAntigravity?: ReadAntigravity;
+  antigravityCacheMs?: number;
+  antigravityIdentityTtlMs?: number;
 }): Promise<OfficialQuota> {
   const home = opts?.home ?? homedir();
   const now = opts?.now ?? Date.now();
@@ -893,10 +898,16 @@ export async function readOfficialQuota(opts?: {
   const codexHit = !opts?.skipCache ? codexCache.get(codexHome) : undefined;
   const identifyAntigravity = opts?.readAntigravityIdentity ?? antigravitySessionIdentity;
   const readAntigravity = opts?.readAntigravity ?? readAntigravityQuota;
+  const antigravityCacheMs = opts?.antigravityCacheMs ?? ANTIGRAVITY_QUOTA_CACHE_MS;
+  const identityTtlMs = opts?.antigravityIdentityTtlMs ?? ANTIGRAVITY_IDENTITY_TTL_MS;
   const currentAntigravityKey = async (): Promise<string | null> => {
+    const memo = antigravityIdentityCache.get(home);
+    if (memo && now - memo.at < identityTtlMs) return memo.key;
     try {
       const identity = await identifyAntigravity({ home });
-      return identity ? `${home}\0${identity}` : null;
+      const key = identity ? `${home}\0${identity}` : null;
+      antigravityIdentityCache.set(home, { at: now, key });
+      return key;
     } catch {
       return null;
     }
@@ -926,7 +937,7 @@ export async function readOfficialQuota(opts?: {
   const grokFresh = Boolean(grokHit && now - grokHit.at < cacheMs);
   const codexFresh = Boolean(codexHit && now - codexHit.at < cacheMs);
   const antigravityFresh = Boolean(
-    !opts?.skipCache && antigravityHit && now - antigravityHit.checkedAt < cacheMs,
+    !opts?.skipCache && antigravityHit && now - antigravityHit.checkedAt < antigravityCacheMs,
   );
   if (claudeFresh && grokFresh && codexFresh && antigravityFresh) {
     return expireOfficialQuota({
@@ -1105,6 +1116,7 @@ export async function readOfficialQuota(opts?: {
             }
           }
           antigravityCacheKeyByHome.set(home, returnedKey);
+          antigravityIdentityCache.set(home, { at: now, key: returnedKey });
           antigravityKey = returnedKey;
         }
 
@@ -1190,6 +1202,7 @@ export function clearOfficialCache(): void {
   codexCache.clear();
   antigravityCache.clear();
   antigravityCacheKeyByHome.clear();
+  antigravityIdentityCache.clear();
   claudeHistoryFileCache = null;
   claudeHistorySlicesCache = null;
   grokLogFileCache = null;

@@ -15,6 +15,7 @@ import {
   claudeStatuslineSnapshotPath,
   clearOfficialCache,
   CODEX_USAGE_URL,
+  GROK_BILLING_CACHE_MS,
   GROK_BILLING_URL,
   legacyClaudeSnapshotPath,
   officialFilesMtime,
@@ -29,6 +30,8 @@ const readOfficialQuota: typeof readOfficialQuotaImpl = (options) => readOfficia
   ...options,
   readAntigravityIdentity: options?.readAntigravityIdentity ?? (async () => null),
   readAntigravity: options?.readAntigravity ?? (async () => ({ slice: null, identity: null })),
+  antigravityIdentityTtlMs: options?.antigravityIdentityTtlMs ?? 0,
+  antigravityCacheMs: options?.antigravityCacheMs ?? GROK_BILLING_CACHE_MS,
 });
 
 function fixtureHome() {
@@ -1454,6 +1457,57 @@ test("readOfficialQuota persists Antigravity official snapshot without identity 
     readAntigravity: async () => ({ slice: null, identity: "agy-session-b" }),
   });
   assert.equal(other.antigravity, null);
+});
+
+test("readOfficialQuota memos Antigravity identity within the identity TTL", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-agy-id-ttl-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  let identities = 0;
+  const readAt = () => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now,
+    antigravityIdentityTtlMs: 30_000,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => {
+      identities += 1;
+      return "agy-session-a";
+    },
+    readAntigravity: async () => ({ slice: antigravity, identity: "agy-session-a" }),
+  });
+  await readAt();
+  await readAt();
+  assert.equal(identities, 1);
+});
+
+test("readOfficialQuota uses a two-minute Antigravity quota cache by default", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-agy-quota-ttl-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  let reads = 0;
+  const readAt = (at: number) => readOfficialQuotaImpl({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-a",
+    readAntigravity: async () => {
+      reads += 1;
+      return { slice: antigravity, identity: "agy-session-a" };
+    },
+  });
+  assert.equal((await readAt(now)).antigravity?.windowPct, antigravity.windowPct);
+  assert.equal((await readAt(now + 60_000)).antigravity?.windowPct, antigravity.windowPct);
+  assert.equal(reads, 1);
+  assert.equal((await readAt(now + 121_000)).antigravity?.windowPct, antigravity.windowPct);
+  assert.equal(reads, 2);
 });
 
 test("readOfficialQuota rolls an antigravity window whose reset already passed", async () => {
