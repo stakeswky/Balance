@@ -1,7 +1,8 @@
 # Antigravity CLI 余量接入规格
 
 日期：2026-08-25
-状态：已实现
+状态：已实现（官方额度部分）  
+扩展规格：`docs/specs/2026-08-25-antigravity-token-usage.md`
 
 ## 目标
 
@@ -15,7 +16,7 @@
 
 ## 真实数据源
 
-- CLI：`agy`，本机已核验版本 `1.1.19`，默认路径 `~/.local/bin/agy`。
+- CLI：`agy`，本机已核验版本 `1.1.20`，默认路径 `~/.local/bin/agy`。
 - 官方 RPC：
 
   ```text
@@ -63,10 +64,10 @@
 - 名称：`Antigravity`。
 - 配置提示：`agy · ~/.gemini`。
 - 颜色：独立的 Antigravity 蓝紫色主题变量。
-- Antigravity 是“官方余量型”卡片：简约模式分别显示“Gemini 模型”与“Claude / GPT 模型”两类官方额度，没有日志采集开关、可手选套餐、token 图表、模型占比和 API 等价金额。
+- Antigravity 的账户总余量继续来自官方接口；本机逐模型 token、调用次数和公开 API 价格等价金额按扩展规格读取会话数据库。它仍没有日志采集开关、可手选套餐或通用 token 图表。
 - 设置页的套餐区域必须显示 Antigravity，但只能明确展示“官方额度自动读取、无需选择套餐”；官方 RPC 或 `agy` 未返回套餐层级时，不得伪造 Free、Pro、Ultra 等选项。
 - 初始设置与适配器页显示 `agy` 的检测结果和官方余量说明。
-- 日志采集、手工导入、套餐对比、token 时间线与 token 报告继续只接受 Claude、Grok、Codex。
+- 手工导入、套餐对比、token 时间线与通用 token 报告继续只接受 Claude、Grok、Codex；Antigravity 在自己的卡片内显示本机逐模型明细。
 - 演示模式继续只生成三类有本地 token 协议的 Agent，不虚构 Antigravity 用量。
 
 ## 失败与兼容
@@ -78,9 +79,9 @@
 
 ## 非目标
 
-- 不解析 Antigravity 会话 SQLite/protobuf 来猜 token 数。
+- 不根据 Prompt 字符数或会话文本猜 token；只读取官方 CLI 已落盘的 `ModelUsageStats` 数值。
 - 不把 `/usage` TUI 文本当稳定协议。
-- 不估算 Antigravity 的 API 等价金额或套餐月费。
+- 不根据额度百分比反推套餐月费或订阅总金额；本机真实 token 只按扩展规格换算公开 API 等价金额。
 - 本次不新增 Windows Credential Manager 的 P/Invoke 读取；Windows 调试模式先使用兼容凭据文件，后续桌面打包再补原生凭据读取。
 
 ## 验收
@@ -90,4 +91,4 @@
 3. availability 测试证明 `agy` 存在时检测为 true，只有配置目录时为 false。
 4. 浏览器 E2E 在 Antigravity-only fixture 下验证简约模式分别显示 Gemini 与 Claude/GPT 两类剩余百分比，顶部摘要和极客模式主数字使用两类四池的全局最紧值，极客模式显示四个额度池，不显示采集按钮和 API 等价金额。
 5. 设置页在检测到 Antigravity 时显示“官方额度（自动读取）”和“无需选择”说明，不出现伪造的可选套餐。
-6. 真实应用使用本机 `agy 1.1.19` 启动后，页面数值与同一时刻脱敏直连 RPC 的结果一致。
+6. 真实应用使用本机 `agy 1.1.20` 启动后，页面数值与同一时刻脱敏直连 RPC 的结果一致。
