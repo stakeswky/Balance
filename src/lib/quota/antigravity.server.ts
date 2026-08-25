@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -10,7 +10,6 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { promisify } from "node:util";
 import { parseAntigravityQuotaSummary, type OfficialSlice } from "./official.ts";
 
 export const ANTIGRAVITY_QUOTA_URL =
@@ -34,11 +33,64 @@ export type ExecFileText = (
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 type ReadCredential = () => Promise<AntigravityCredential | null>;
 
-const execFileAsync = promisify(execFile);
-const defaultExecFile: ExecFileText = async (file, args, options) => {
-  const result = await execFileAsync(file, args, options);
-  return { stdout: String(result.stdout) };
-};
+export const defaultSpawnExecFile: ExecFileText = (file, args, options) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let killed = false;
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill();
+      reject(new Error(`spawn timeout: ${file} ${args.join(" ")}`));
+    }, options.timeout);
+
+    child.stdout.setEncoding(options.encoding);
+    child.stderr.setEncoding(options.encoding);
+
+    child.stdout.on("data", (chunk: string) => {
+      stdoutBytes += Buffer.byteLength(chunk, options.encoding);
+      if (stdoutBytes > options.maxBuffer) {
+        killed = true;
+        child.kill();
+        clearTimeout(timer);
+        reject(new Error(`stdout maxBuffer exceeded: ${file}`));
+        return;
+      }
+      stdout += chunk;
+    });
+
+    child.stderr.on("data", (chunk: string) => {
+      stderrBytes += Buffer.byteLength(chunk, options.encoding);
+      if (stderrBytes > options.maxBuffer) {
+        killed = true;
+        child.kill();
+        clearTimeout(timer);
+        reject(new Error(`stderr maxBuffer exceeded: ${file}`));
+      }
+    });
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      if (!killed) reject(error);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (killed) return;
+      if (code !== 0) {
+        reject(new Error(`${file} exited with code ${code}`));
+        return;
+      }
+      resolve({ stdout });
+    });
+  });
+
+const defaultExecFile: ExecFileText = defaultSpawnExecFile;
 
 function credentialFromUnknown(raw: unknown): AntigravityCredential | null {
   if (!raw || typeof raw !== "object") return null;
@@ -276,6 +328,13 @@ async function safelyReadCredential(readCredential: ReadCredential): Promise<Ant
   }
 }
 
+const CLI_REFRESH_COOLDOWN_MS = 5 * 60_000;
+const cliRefreshBackoff = new Map<string, number>();
+
+export function resetAntigravityCliRefreshBackoffForTests(): void {
+  cliRefreshBackoff.clear();
+}
+
 export async function readAntigravityQuota(options: {
   home?: string;
   platform?: NodeJS.Platform;
@@ -292,6 +351,12 @@ export async function readAntigravityQuota(options: {
   const execFileImpl = options.execFileImpl ?? defaultExecFile;
   const agyPath = options.agyPath ?? findAgyExecutable({ home, platform, env: options.env });
   if (!agyPath) return null;
+  let canonicalAgyPath: string;
+  try {
+    canonicalAgyPath = realpathSync(agyPath);
+  } catch {
+    canonicalAgyPath = agyPath;
+  }
   const readCredential = options.readCredential ?? (() =>
     readAntigravityCredential({ home, platform, execFileImpl }));
   let version: string;
@@ -310,6 +375,8 @@ export async function readAntigravityQuota(options: {
   let cliRefreshCount = 0;
   const refreshByCli = async (): Promise<boolean> => {
     if (cliRefreshCount >= 1) return false;
+    const lastFailure = cliRefreshBackoff.get(canonicalAgyPath);
+    if (lastFailure != null && now - lastFailure < CLI_REFRESH_COOLDOWN_MS) return false;
     cliRefreshCount += 1;
     try {
       await execFileImpl(agyPath, ["models"], {
@@ -319,6 +386,7 @@ export async function readAntigravityQuota(options: {
       });
       return true;
     } catch {
+      cliRefreshBackoff.set(canonicalAgyPath, now);
       return false;
     }
   };

@@ -14,10 +14,12 @@ import {
   ANTIGRAVITY_QUOTA_URL,
   antigravitySessionIdentity,
   antigravityUserAgent,
+  defaultSpawnExecFile,
   fetchAntigravityQuota,
   findAgyExecutable,
   readAntigravityCredential,
   readAntigravityQuota,
+  resetAntigravityCliRefreshBackoffForTests,
   type ExecFileText,
 } from "./antigravity.server.ts";
 
@@ -190,7 +192,9 @@ test("quota timeout covers both request headers and response body", async () => 
   assert.ok(Date.now() - started < 250);
 });
 
-test("401 invokes agy models once, rereads credentials, and retries once", async () => {
+test("401 invokes agy models once, rereads credentials, and retries once", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
   const calls: Array<{ file: string; args: string[]; options: unknown }> = [];
   const execFileImpl: ExecFileText = async (file, args, options) => {
     calls.push({ file, args, options });
@@ -227,7 +231,9 @@ test("401 invokes agy models once, rereads credentials, and retries once", async
   }]);
 });
 
-test("expired pre-refresh plus a 401 still executes models only once", async () => {
+test("expired pre-refresh plus a 401 still executes models only once", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
   let modelCalls = 0;
   let reads = 0;
   let fetches = 0;
@@ -260,7 +266,9 @@ test("expired pre-refresh plus a 401 still executes models only once", async () 
   assert.equal(fetches, 2);
 });
 
-test("403 and invalid versions fail closed without refreshing or leaking tokens", async () => {
+test("403 and invalid versions fail closed without refreshing or leaking tokens", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
   let modelCalls = 0;
   let fetchCalls = 0;
   const execFileImpl: ExecFileText = async (_file, args) => {
@@ -293,7 +301,9 @@ test("403 and invalid versions fail closed without refreshing or leaking tokens"
   assert.equal(JSON.stringify({ result, invalid }).includes(marker), false);
 });
 
-test("429 and 5xx never invoke the CLI refresh path", async () => {
+test("429 and 5xx never invoke the CLI refresh path", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
   for (const status of [429, 500, 503]) {
     let modelCalls = 0;
     const result = await readAntigravityQuota({
@@ -311,7 +321,9 @@ test("429 and 5xx never invoke the CLI refresh path", async () => {
   }
 });
 
-test("a failed agy models refresh stops without a second request", async () => {
+test("a failed agy models refresh stops without a second request", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
   let fetchCalls = 0;
   let models = 0;
   const result = await readAntigravityQuota({
@@ -330,6 +342,79 @@ test("a failed agy models refresh stops without a second request", async () => {
   assert.equal(result, null);
   assert.equal(models, 1);
   assert.equal(fetchCalls, 1);
+});
+
+test("spawn-based exec does not hang when the child reads stdin", async (t) => {
+  const home = tempHome(t, "balance-antigravity-stdin-");
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  const script = join(bin, "stdin-reader");
+  writeFileSync(script, [
+    "#!/usr/bin/env node",
+    "let buf = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { buf += chunk; });",
+    "process.stdin.on('end', () => { process.stdout.write('ok:' + buf.length); });",
+  ].join("\n"));
+  chmodSync(script, 0o755);
+
+  const result = await defaultSpawnExecFile(script, ["ignored"], {
+    encoding: "utf8",
+    timeout: 2000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.match(result.stdout, /^ok:0$/);
+});
+
+test("CLI refresh cooldown prevents repeated agy models calls for 5 minutes", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
+  let modelCalls = 0;
+  const execFileImpl: ExecFileText = async (_file, args) => {
+    if (args[0] === "--version") return { stdout: "agy 1.1.19" };
+    if (args[0] === "models") {
+      modelCalls += 1;
+      throw new Error("refresh failed");
+    }
+    throw new Error("unexpected command");
+  };
+  const agyPath = "/tmp/agy-cooldown";
+  const readCredential = async () => ({
+    accessToken: "cooldown-unit-token",
+    expiresAt: 5_000,
+  });
+  const fetchImpl: typeof fetch = async () =>
+    new Response("", { status: 401 });
+
+  // First call at now=10_000: credential expired, models fails.
+  await readAntigravityQuota({
+    agyPath,
+    now: 10_000,
+    execFileImpl,
+    readCredential,
+    fetchImpl,
+  });
+  assert.equal(modelCalls, 1);
+
+  // Second call 4 minutes later: still within 5-minute cooldown.
+  await readAntigravityQuota({
+    agyPath,
+    now: 10_000 + 4 * 60_000,
+    execFileImpl,
+    readCredential,
+    fetchImpl,
+  });
+  assert.equal(modelCalls, 1);
+
+  // Third call 5 minutes later: cooldown expired, retries.
+  await readAntigravityQuota({
+    agyPath,
+    now: 10_000 + 5 * 60_000,
+    execFileImpl,
+    readCredential,
+    fetchImpl,
+  });
+  assert.equal(modelCalls, 2);
 });
 
 test("session identity changes with the canonical executable or credential", async (t) => {
