@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { formatTokens, formatUsd } from "@/components/balance/format";
 import {
   aggregateAntigravityUsage,
@@ -71,8 +72,14 @@ export function AntigravityUsageDetails({
   now: number;
   truncated: boolean;
 }) {
-  const windowUsage = aggregateAntigravityUsage(events, now - WINDOW_MS);
-  const weekUsage = aggregateAntigravityUsage(events, now - WEEK_MS);
+  const windowUsage = useMemo(
+    () => aggregateAntigravityUsage(events, now - WINDOW_MS),
+    [events, now],
+  );
+  const weekUsage = useMemo(
+    () => aggregateAntigravityUsage(events, now - WEEK_MS),
+    [events, now],
+  );
   return (
     <section className="mt-4" aria-label="Antigravity 本机逐模型用量">
       <div className="flex items-center justify-between gap-3">
@@ -85,10 +92,10 @@ export function AntigravityUsageDetails({
         </p>
       ) : null}
       <dl className="mt-2 grid grid-cols-2 gap-3 text-xs">
-        <UsageStat label="本机 5h token" value={formatTokens(windowUsage.totalTokens)} />
-        <UsageStat label="本周 token" value={formatTokens(weekUsage.totalTokens)} />
-        <UsageStat label="本周调用" value={`${weekUsage.calls} 次`} />
-        <UsageStat label="本周 API 等价" value={costText(weekUsage)} />
+        <UsageStat label="本机 5h token" value={formatTokens(windowUsage.totalTokens)} testId="quota-antigravity-usage-window-tokens" />
+        <UsageStat label="本周 token" value={formatTokens(weekUsage.totalTokens)} testId="quota-antigravity-usage-week-tokens" />
+        <UsageStat label="本周调用" value={`${weekUsage.calls} 次`} testId="quota-antigravity-usage-week-calls" />
+        <UsageStat label="本周 API 等价" value={costText(weekUsage)} testId="quota-antigravity-usage-week-cost" />
       </dl>
       <div className="mt-3 space-y-2">
         {weekUsage.models.length === 0 ? (

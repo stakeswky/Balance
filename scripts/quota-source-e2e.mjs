@@ -1008,6 +1008,22 @@ async function runScenario(browser, scenarioName, viewportName) {
         );
       }
       await page.getByRole("region", { name: "Antigravity 本机逐模型用量" }).waitFor();
+      assert.equal(
+        await card.getByTestId("quota-antigravity-usage-window-tokens").locator("dd").textContent(),
+        "6.2M",
+      );
+      assert.equal(
+        await card.getByTestId("quota-antigravity-usage-week-tokens").locator("dd").textContent(),
+        "6.2M",
+      );
+      assert.equal(
+        await card.getByTestId("quota-antigravity-usage-week-calls").locator("dd").textContent(),
+        "3 次",
+      );
+      assert.equal(
+        await card.getByTestId("quota-antigravity-usage-week-cost").locator("dd").textContent(),
+        "≥ $22.5",
+      );
       await card.getByText("Gemini 3.7 Flash · High", { exact: true }).waitFor();
       await card.getByText("Claude Sonnet 4.6 · Thinking", { exact: true }).waitFor();
       await card.getByText("GPT-OSS 120B · Medium", { exact: true }).waitFor();

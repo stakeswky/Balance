@@ -9,7 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { parseAntigravityQuotaSummary, type OfficialSlice } from "./official.ts";
 
 export const ANTIGRAVITY_QUOTA_URL =
@@ -46,19 +46,20 @@ export const defaultSpawnExecFile: ExecFileText = (file, args, options) =>
     const timer = setTimeout(() => {
       killed = true;
       child.kill();
-      reject(new Error(`spawn timeout: ${file} ${args.join(" ")}`));
+      reject(new Error(`spawn timeout: ${basename(file)} ${args.join(" ")}`));
     }, options.timeout);
 
     child.stdout.setEncoding(options.encoding);
     child.stderr.setEncoding(options.encoding);
 
     child.stdout.on("data", (chunk: string) => {
+      if (killed) return;
       stdoutBytes += Buffer.byteLength(chunk, options.encoding);
       if (stdoutBytes > options.maxBuffer) {
         killed = true;
         child.kill();
         clearTimeout(timer);
-        reject(new Error(`stdout maxBuffer exceeded: ${file}`));
+        reject(new Error(`stdout maxBuffer exceeded: ${basename(file)}`));
         return;
       }
       stdout += chunk;
@@ -70,7 +71,8 @@ export const defaultSpawnExecFile: ExecFileText = (file, args, options) =>
         killed = true;
         child.kill();
         clearTimeout(timer);
-        reject(new Error(`stderr maxBuffer exceeded: ${file}`));
+        reject(new Error(`stderr maxBuffer exceeded: ${basename(file)}`));
+        return;
       }
     });
 
@@ -83,7 +85,7 @@ export const defaultSpawnExecFile: ExecFileText = (file, args, options) =>
       clearTimeout(timer);
       if (killed) return;
       if (code !== 0) {
-        reject(new Error(`${file} exited with code ${code}`));
+        reject(new Error(`${basename(file)} exited with code ${code}`));
         return;
       }
       resolve({ stdout });

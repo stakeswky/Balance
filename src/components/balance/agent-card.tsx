@@ -60,6 +60,7 @@ import type {
   UsageEvent,
 } from "@/lib/quota/types";
 import { isUsageAgentId, WEEK_MS, WINDOW_MS } from "@/lib/quota/types";
+import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 
 const CONFIDENCE_LABEL: Record<QuotaValue["confidence"], string> = {
@@ -139,9 +140,13 @@ export function AgentCard({
     ? antigravityQuotaGroupSummaries((quotaPools ?? []).map(({ pool }) => pool))
     : [];
   const splitAntigravityMinimal = minimalMode && officialOnly && antigravityGroups.length > 0;
-  const antigravityWeekUsage = officialOnly
-    ? aggregateAntigravityUsage(antigravityUsageEvents ?? [], now - WEEK_MS)
-    : null;
+  const antigravityWeekUsage = useMemo(
+    () =>
+      officialOnly
+        ? aggregateAntigravityUsage(antigravityUsageEvents ?? [], now - WEEK_MS)
+        : null,
+    [officialOnly, antigravityUsageEvents, now],
+  );
   const primaryKind = officialOnly
     ? officialPrimary?.kind ?? "weekly"
     : minimalMode || windowLabel === "本周额度"

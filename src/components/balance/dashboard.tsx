@@ -318,8 +318,8 @@ export function Dashboard() {
           pull: pullAntigravityUsage,
         });
         lastAntigravityUsagePull.current = antigravityPoll.lastPulledAt;
-        if (cancelled) return;
         antigravityUsageSnapshot.current = antigravityPoll.snapshot;
+        if (cancelled) return;
         setAntigravityUsage(antigravityPoll.snapshot);
         let added = 0;
         if (state.liveClaude) {
