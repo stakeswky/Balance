@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   copyFileSync,
@@ -83,9 +84,15 @@ interface AntigravityCacheEntry {
   lastAttemptFailed: boolean;
 }
 
-interface ClaudeSnapshotFile {
+interface AntigravitySnapshotEntry extends AntigravityCacheEntry {
+  identityTag: string;
+  updatedAt: number;
+}
+
+interface OfficialSnapshotFile {
   version: 1;
-  claude: ClaudeCacheEntry;
+  claude?: ClaudeCacheEntry;
+  antigravity?: AntigravitySnapshotEntry;
 }
 
 type ClaudeLockResult<T> =
@@ -200,7 +207,15 @@ function nullableFiniteNumber(value: unknown): boolean {
 
 function officialSliceFromSnapshot(raw: unknown): OfficialSlice | null {
   const slice = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
-  if (!slice || slice.agent !== "claude") return null;
+  if (
+    !slice
+    || (
+      slice.agent !== "claude"
+      && slice.agent !== "grok"
+      && slice.agent !== "codex"
+      && slice.agent !== "antigravity"
+    )
+  ) return null;
   if (slice.windowKind !== "five_hour" && slice.windowKind !== "weekly") return null;
   if (typeof slice.source !== "string" || typeof slice.fetchedAt !== "number") return null;
   if (!Number.isFinite(slice.fetchedAt) || !Number.isFinite(slice.burnPctPerHour)) return null;
@@ -223,31 +238,65 @@ function officialSliceFromSnapshot(raw: unknown): OfficialSlice | null {
   return slice as unknown as OfficialSlice;
 }
 
-function readClaudeSnapshot(path: string): ClaudeCacheEntry | null {
+function identityTagFor(cacheKey: string): string {
+  return createHash("sha256")
+    .update("balance-agy-snapshot\0")
+    .update(cacheKey)
+    .digest("hex");
+}
+
+function readSnapshotFile(path: string): Partial<OfficialSnapshotFile> | null {
   const raw = readText(path);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<ClaudeSnapshotFile>;
-    const entry = parsed.version === 1 && parsed.claude && typeof parsed.claude === "object"
-      ? parsed.claude as ClaudeCacheEntry
-      : null;
-    if (!entry) return null;
-    for (const value of [
-      entry.checkedAt,
-      entry.loadedAt,
-      entry.nextAllowedAt,
-      entry.updatedAt,
-    ]) {
-      if (!Number.isFinite(value) || value < 0) return null;
-    }
-    if (!Number.isSafeInteger(entry.failureCount) || entry.failureCount < 0) return null;
-    if (typeof entry.lastAttemptFailed !== "boolean") return null;
-    const slice = entry.slice == null ? null : officialSliceFromSnapshot(entry.slice);
-    if (entry.slice != null && !slice) return null;
-    return { ...entry, slice };
+    const parsed = JSON.parse(raw) as Partial<OfficialSnapshotFile>;
+    return parsed.version === 1 ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function writeSnapshotSection(
+  path: string,
+  section: Partial<Omit<OfficialSnapshotFile, "version">>,
+): void {
+  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const existing = readSnapshotFile(path);
+    const payload: OfficialSnapshotFile = {
+      version: 1,
+      ...(existing?.claude ? { claude: existing.claude } : {}),
+      ...(existing?.antigravity ? { antigravity: existing.antigravity } : {}),
+      ...section,
+    };
+    writeFileSync(temp, `${JSON.stringify(payload)}\n`, { encoding: "utf8", mode: 0o600 });
+    renameSync(temp, path);
+  } catch {
+    try {
+      unlinkSync(temp);
+    } catch {
+      return;
+    }
+  }
+}
+
+function readClaudeSnapshot(path: string): ClaudeCacheEntry | null {
+  const entry = readSnapshotFile(path)?.claude;
+  if (!entry || typeof entry !== "object") return null;
+  for (const value of [
+    entry.checkedAt,
+    entry.loadedAt,
+    entry.nextAllowedAt,
+    entry.updatedAt,
+  ]) {
+    if (!Number.isFinite(value) || value < 0) return null;
+  }
+  if (!Number.isSafeInteger(entry.failureCount) || entry.failureCount < 0) return null;
+  if (typeof entry.lastAttemptFailed !== "boolean") return null;
+  const slice = entry.slice == null ? null : officialSliceFromSnapshot(entry.slice);
+  if (entry.slice != null && !slice) return null;
+  return { ...entry, slice };
 }
 
 function withoutStaleFlags(slice: OfficialSlice | null): OfficialSlice | null {
@@ -262,21 +311,40 @@ function withoutStaleFlags(slice: OfficialSlice | null): OfficialSlice | null {
 }
 
 function writeClaudeSnapshot(path: string, entry: ClaudeCacheEntry): void {
-  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    const payload: ClaudeSnapshotFile = {
-      version: 1,
-      claude: { ...entry, slice: withoutStaleFlags(entry.slice) },
-    };
-    writeFileSync(temp, `${JSON.stringify(payload)}\n`, { encoding: "utf8", mode: 0o600 });
-    renameSync(temp, path);
-  } catch {
-    try {
-      unlinkSync(temp);
-    } catch {
-      return;
-    }
+  writeSnapshotSection(path, {
+    claude: { ...entry, slice: withoutStaleFlags(entry.slice) },
+  });
+}
+
+async function writeAntigravitySnapshot(
+  path: string,
+  cacheKey: string,
+  entry: AntigravityCacheEntry,
+  updatedAt: number,
+): Promise<void> {
+  await withClaudeSnapshotLock(path, async () => {
+    writeSnapshotSection(path, {
+      antigravity: {
+        ...entry,
+        slice: withoutStaleFlags(entry.slice),
+        identityTag: identityTagFor(cacheKey),
+        updatedAt,
+      },
+    });
+  });
+}
+
+function readAntigravitySnapshot(path: string): AntigravitySnapshotEntry | null {
+  const entry = readSnapshotFile(path)?.antigravity;
+  if (!entry || typeof entry !== "object") return null;
+  for (const value of [entry.checkedAt, entry.loadedAt, entry.updatedAt]) {
+    if (!Number.isFinite(value) || value < 0) return null;
   }
+  if (typeof entry.lastAttemptFailed !== "boolean") return null;
+  if (typeof entry.identityTag !== "string" || !/^[a-f0-9]{64}$/.test(entry.identityTag)) return null;
+  const slice = entry.slice == null ? null : officialSliceFromSnapshot(entry.slice);
+  if (entry.slice != null && !slice) return null;
+  return { ...entry, slice };
 }
 
 function newestClaudeEntry(
@@ -843,7 +911,15 @@ export async function readOfficialQuota(opts?: {
     }
   }
   if (antigravityKey) antigravityCacheKeyByHome.set(home, antigravityKey);
-  const antigravityHit = antigravityKey ? antigravityCache.get(antigravityKey) : undefined;
+  let antigravityHit = antigravityKey ? antigravityCache.get(antigravityKey) : undefined;
+  if (!antigravityHit && antigravityKey) {
+    const persisted = readAntigravitySnapshot(snapshotPath);
+    if (persisted && persisted.identityTag === identityTagFor(antigravityKey)) {
+      const { identityTag: _tag, updatedAt: _at, ...entry } = persisted;
+      antigravityHit = entry;
+      antigravityCache.set(antigravityKey, entry);
+    }
+  }
   const claudeFresh = Boolean(
     !opts?.skipCache && claudeHit && now - claudeHit.checkedAt < cacheMs,
   );
@@ -1034,33 +1110,39 @@ export async function readOfficialQuota(opts?: {
 
         if (fetchResult.slice) {
           if (antigravityKey) {
-            antigravityCache.set(antigravityKey, {
+            const entry: AntigravityCacheEntry = {
               checkedAt: now,
               loadedAt: now,
               slice: fetchResult.slice,
               lastAttemptFailed: false,
-            });
+            };
+            antigravityCache.set(antigravityKey, entry);
+            await writeAntigravitySnapshot(snapshotPath, antigravityKey, entry, now);
           }
           return fetchResult.slice;
         } else if (returnedKey == null && antigravityKey) {
           antigravityCacheKeyByHome.delete(home);
           const stale = staleOfficial(antigravityHit?.slice ?? null);
           if (antigravityHit && antigravityKey) {
-            antigravityCache.set(antigravityKey, {
+            const entry: AntigravityCacheEntry = {
               ...antigravityHit,
               checkedAt: now,
               lastAttemptFailed: true,
-            });
+            };
+            antigravityCache.set(antigravityKey, entry);
+            await writeAntigravitySnapshot(snapshotPath, antigravityKey, entry, now);
           }
           return stale;
         } else {
           const stale = staleOfficial(antigravityHit?.slice ?? null);
           if (antigravityHit && antigravityKey) {
-            antigravityCache.set(antigravityKey, {
+            const entry: AntigravityCacheEntry = {
               ...antigravityHit,
               checkedAt: now,
               lastAttemptFailed: true,
-            });
+            };
+            antigravityCache.set(antigravityKey, entry);
+            await writeAntigravitySnapshot(snapshotPath, antigravityKey, entry, now);
           }
           return stale;
         }

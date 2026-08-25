@@ -1388,6 +1388,74 @@ test("readOfficialQuota keeps Antigravity slice across identity churn when fetch
   assert.equal(reads, 2);
 });
 
+test("readOfficialQuota persists Antigravity official snapshot without identity secrets", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const snapshotPath = join(home, "state", "official-quota.json");
+  mkdirSync(join(home, "state"), { recursive: true, mode: 0o700 });
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  const identity = "agy-access-token-secret";
+  await readOfficialQuota({
+    home,
+    grokHome,
+    now,
+    snapshotPath,
+    skipCache: true,
+    fetchImpl: async (input) => {
+      if (String(input) === CLAUDE_USAGE_URL) {
+        return new Response(JSON.stringify({
+          five_hour: { utilization: 24, resets_at: "2026-08-25T15:00:00Z" },
+          seven_day: { utilization: 34, resets_at: "2026-09-01T10:00:00Z" },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify(LIVE), { status: 200 });
+    },
+    readClaudeAuth: async () => ({ accessToken: "never-write-this-token" }),
+    readAntigravityIdentity: async () => identity,
+    readAntigravity: async () => ({ slice: antigravity, identity }),
+  });
+  const raw = readFileSync(snapshotPath, "utf8");
+  const stored = JSON.parse(raw) as {
+    claude?: { slice?: { windowPct?: number } };
+    antigravity?: { slice?: { windowPct?: number }; identityTag?: string };
+  };
+  assert.equal(stored.claude?.slice?.windowPct, 24);
+  assert.equal(stored.antigravity?.slice?.windowPct, antigravity.windowPct);
+  assert.match(stored.antigravity?.identityTag ?? "", /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(raw, /agy-access-token-secret|never-write-this-token|authorization|access.?token|bearer/i);
+
+  clearOfficialCache();
+  const restored = await readOfficialQuota({
+    home,
+    grokHome,
+    now: now + 31_000,
+    snapshotPath,
+    skipCache: true,
+    fetchImpl: async () => new Response("nope", { status: 401 }),
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => identity,
+    readAntigravity: async () => ({ slice: null, identity }),
+  });
+  assert.equal(restored.antigravity?.windowPct, antigravity.windowPct);
+  assert.equal(restored.antigravity?.windowStale, true);
+
+  clearOfficialCache();
+  const other = await readOfficialQuota({
+    home,
+    grokHome,
+    now: now + 62_000,
+    snapshotPath,
+    skipCache: true,
+    fetchImpl: async () => new Response("nope", { status: 401 }),
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-b",
+    readAntigravity: async () => ({ slice: null, identity: "agy-session-b" }),
+  });
+  assert.equal(other.antigravity, null);
+});
+
 test("readOfficialQuota rolls an antigravity window whose reset already passed", async () => {
   clearOfficialCache();
   const home = mkdtempSync(join(tmpdir(), "balance-official-reset-"));
