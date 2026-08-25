@@ -411,6 +411,9 @@ export async function readAntigravityQuota(options: {
     if (!await refreshByCli()) return { slice: null, identity: null };
     credential = await safelyReadCredential(readCredential);
     if (!credential) return { slice: null, identity: null };
+    if (credential.expiresAt != null && credential.expiresAt <= now + 30_000) {
+      return { slice: null, identity: null };
+    }
   }
   lastUsedCredential = credential;
   const first = await fetchAntigravityQuota(credential, {

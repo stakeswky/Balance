@@ -469,3 +469,27 @@ test("session identity changes with the canonical executable or credential", asy
   assert.notEqual(await identity(first, "identity-unit-token-b"), a);
   assert.notEqual(await identity(second, "identity-unit-token-a"), a);
 });
+
+test("stale credential after CLI refresh does not fetch quota", async (t) => {
+  resetAntigravityCliRefreshBackoffForTests();
+  t.after(() => resetAntigravityCliRefreshBackoffForTests());
+  const now = 10_000;
+  let fetches = 0;
+  const execFileImpl: ExecFileText = async (_file, args) => {
+    if (args[0] === "--version") return { stdout: "agy 1.1.20" };
+    if (args[0] === "models") return { stdout: "" };
+    throw new Error("unexpected command");
+  };
+  const result = await readAntigravityQuota({
+    agyPath: "/tmp/agy",
+    now,
+    execFileImpl,
+    readCredential: async () => ({ accessToken: "expired-unit-token", expiresAt: now - 1_000 }),
+    fetchImpl: async () => {
+      fetches += 1;
+      return Response.json(ANTIGRAVITY_SUMMARY_FIXTURE);
+    },
+  });
+  assert.equal(fetches, 0);
+  assert.deepEqual(result, { slice: null, identity: null });
+});
