@@ -63,6 +63,10 @@ const CODEX_USAGE_IDS = [
   Buffer.from("pullCodexUsage").toString("base64url"),
   productionServerFnId("pullCodexUsage"),
 ].filter(Boolean);
+const ANTIGRAVITY_USAGE_IDS = [
+  Buffer.from("pullAntigravityUsage").toString("base64url"),
+  productionServerFnId("pullAntigravityUsage"),
+].filter(Boolean);
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 const E2E_NOW = Date.now();
 const VIEWPORTS = {
@@ -316,6 +320,48 @@ const SCENARIOS = {
       grok: null,
       codex: null,
       antigravity: antigravityOfficialSlice(),
+    },
+    antigravityUsage: {
+      events: [
+        {
+          ts: E2E_NOW - 60_000,
+          model: "gemini-3.7-flash-high",
+          quotaGroup: "gemini",
+          tokensIn: 1_000_000,
+          tokensOut: 1_000_000,
+          cacheRead: 100_000,
+          cacheWrite: 0,
+          thinkingTokens: 600_000,
+          responseTokens: 400_000,
+        },
+        {
+          ts: E2E_NOW - 50_000,
+          model: "claude-sonnet-4-6",
+          quotaGroup: "claude-gpt",
+          tokensIn: 1_000_000,
+          tokensOut: 1_000_000,
+          cacheRead: 100_000,
+          cacheWrite: 0,
+          thinkingTokens: 600_000,
+          responseTokens: 400_000,
+        },
+        {
+          ts: E2E_NOW - 40_000,
+          model: "gpt-oss-120b-medium",
+          quotaGroup: "claude-gpt",
+          tokensIn: 1_000_000,
+          tokensOut: 1_000_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          thinkingTokens: 500_000,
+          responseTokens: 500_000,
+        },
+      ],
+      databasesRead: 1,
+      filesSkipped: 0,
+      truncated: false,
+      fetchedAt: E2E_NOW,
+      source: "antigravity-conversation-db",
     },
     present: [],
     absent: [],
@@ -713,6 +759,7 @@ async function runScenario(browser, scenarioName, viewportName) {
   const held = [];
   let officialSeen = 0;
   let officialStage = 0;
+  let antigravityUsageSeen = 0;
   const serverFnRequests = [];
   const scannerBodies = [];
   const officialResponseBodies = [];
@@ -813,6 +860,24 @@ async function runScenario(browser, scenarioName, viewportName) {
       });
       return;
     }
+    if (isRequest(request, ANTIGRAVITY_USAGE_IDS, "pullAntigravityUsage")) {
+      antigravityUsageSeen += 1;
+      scannerBodies.push(request.postData() ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-tss-serialized": "true" },
+        body: serialized(scenario.antigravityUsage ?? {
+          events: [],
+          databasesRead: 0,
+          filesSkipped: 0,
+          truncated: false,
+          fetchedAt: E2E_NOW,
+          source: "antigravity-conversation-db",
+        }),
+      });
+      return;
+    }
     if (isRequest(request, OFFICIAL_IDS, "pullOfficialQuota")) {
       officialSeen += 1;
       if (scenario.mode === "error") {
@@ -899,6 +964,11 @@ async function runScenario(browser, scenarioName, viewportName) {
       }
     }
     if (scenario.antigravityGeek) {
+      await card.getByTestId("quota-antigravity-gemini-week-tokens").waitFor();
+      assert.equal(await card.getByTestId("quota-antigravity-gemini-week-tokens").textContent(), "2.1M token");
+      assert.equal(await card.getByTestId("quota-antigravity-gemini-week-cost").textContent(), "$4.51");
+      assert.equal(await card.getByTestId("quota-antigravity-claude-gpt-week-tokens").textContent(), "4.1M token");
+      assert.equal(await card.getByTestId("quota-antigravity-claude-gpt-week-cost").textContent(), "≥ $18.0");
       assert.equal(
         await card.getByTestId("quota-antigravity-gemini-remaining").textContent(),
         "45%",
@@ -937,7 +1007,12 @@ async function runScenario(browser, scenarioName, viewportName) {
           `missing ${label}; card=${JSON.stringify(await card.innerText())}`,
         );
       }
-      assert.equal(await card.getByText(/API 等价/).count(), 0);
+      await page.getByRole("region", { name: "Antigravity 本机逐模型用量" }).waitFor();
+      await card.getByText("Gemini 3.7 Flash · High", { exact: true }).waitFor();
+      await card.getByText("Claude Sonnet 4.6 · Thinking", { exact: true }).waitFor();
+      await card.getByText("GPT-OSS 120B · Medium", { exact: true }).waitFor();
+      await card.getByText("无官方单价", { exact: true }).first().waitFor();
+      assert.ok(antigravityUsageSeen > 0, "Antigravity usage fixture was not requested");
     }
     if (scenario.expectedSanitizedOfficial) {
       assert.ok(officialResponseBodies.length > 0);

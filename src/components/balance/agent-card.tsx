@@ -4,6 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardHint, CardTitle } from "@/components/ui/card";
 import { InlineHelp } from "@/components/ui/inline-help";
 import {
+  AntigravityGroupUsageInline,
+  AntigravityUsageDetails,
+} from "@/components/balance/antigravity-usage";
+import {
   formatDuration,
   formatTokens,
   formatUsd,
@@ -12,7 +16,10 @@ import {
 } from "@/components/balance/format";
 import { MeterBar } from "@/components/balance/meter-bar";
 import { agentFillClass } from "@/lib/quota/agent";
-import type { AntigravityUsageEvent } from "@/lib/quota/antigravity-usage";
+import {
+  aggregateAntigravityUsage,
+  type AntigravityUsageEvent,
+} from "@/lib/quota/antigravity-usage";
 import {
   inWindow,
   modelShares,
@@ -93,8 +100,8 @@ export function AgentCard({
   weekValue,
   windowValue,
   weekResetsAt,
-  antigravityUsageEvents: _antigravityUsageEvents,
-  antigravityUsageTruncated: _antigravityUsageTruncated,
+  antigravityUsageEvents,
+  antigravityUsageTruncated,
   events,
   now,
   onToggle,
@@ -132,6 +139,9 @@ export function AgentCard({
     ? antigravityQuotaGroupSummaries((quotaPools ?? []).map(({ pool }) => pool))
     : [];
   const splitAntigravityMinimal = minimalMode && officialOnly && antigravityGroups.length > 0;
+  const antigravityWeekUsage = officialOnly
+    ? aggregateAntigravityUsage(antigravityUsageEvents ?? [], now - WEEK_MS)
+    : null;
   const primaryKind = officialOnly
     ? officialPrimary?.kind ?? "weekly"
     : minimalMode || windowLabel === "本周额度"
@@ -345,6 +355,10 @@ export function AgentCard({
                     </time>
                   </p>
                 ) : null}
+                <AntigravityGroupUsageInline
+                  group={group.group}
+                  summary={antigravityWeekUsage?.groups.find((usage) => usage.group === group.group) ?? null}
+                />
               </section>
             );
           })}
@@ -531,6 +545,14 @@ export function AgentCard({
           </>
         )}
       </div>
+
+      {!minimalMode && officialOnly ? (
+        <AntigravityUsageDetails
+          events={antigravityUsageEvents ?? []}
+          now={now}
+          truncated={antigravityUsageTruncated ?? false}
+        />
+      ) : null}
 
       {!minimalMode && products?.some((p) => p.usagePercent != null) ? (
         <div className="mt-4 space-y-2">
