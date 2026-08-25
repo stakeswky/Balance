@@ -99,7 +99,7 @@ type ReadAntigravity = (options: {
   home?: string;
   fetchImpl?: FetchLike;
   now?: number;
-}) => Promise<OfficialSlice | null>;
+}) => Promise<{ slice: OfficialSlice | null; identity: string | null }>;
 type ExecFileText = (
   file: string,
   args: string[],
@@ -979,33 +979,49 @@ export async function readOfficialQuota(opts?: {
       : antigravityHit?.slice ?? null
     : null;
   if (!antigravityFresh) {
-    let fetched: OfficialSlice | null = null;
+    let fetchResult: { slice: OfficialSlice | null; identity: string | null } = {
+      slice: null,
+      identity: null,
+    };
     try {
-      fetched = await readAntigravity({ home, fetchImpl: opts?.fetchImpl, now });
+      fetchResult = await readAntigravity({ home, fetchImpl: opts?.fetchImpl, now });
     } catch {
-      fetched = null;
+      fetchResult = { slice: null, identity: null };
     }
-    const keyAfterRefresh = await currentAntigravityKey();
-    if (!antigravityKey || keyAfterRefresh !== antigravityKey) {
+    const returnedIdentity = fetchResult.identity;
+    const returnedKey = returnedIdentity ? `${home}\0${returnedIdentity}` : null;
+
+    if (returnedKey && returnedKey !== antigravityKey) {
+      // Identity changed during fetch. Update cache mapping to new key.
       if (antigravityKey) antigravityCache.delete(antigravityKey);
-      if (keyAfterRefresh) {
-        antigravityCacheKeyByHome.set(home, keyAfterRefresh);
-      } else if (antigravityCacheKeyByHome.get(home) === antigravityKey) {
-        antigravityCacheKeyByHome.delete(home);
+      antigravityCacheKeyByHome.set(home, returnedKey);
+      antigravityKey = returnedKey;
+    }
+
+    if (fetchResult.slice) {
+      if (antigravityKey) {
+        antigravityCache.set(antigravityKey, {
+          checkedAt: now,
+          loadedAt: now,
+          slice: fetchResult.slice,
+          lastAttemptFailed: false,
+        });
       }
-      antigravityKey = keyAfterRefresh;
-      antigravityLive = null;
-    } else if (fetched) {
-      antigravityCache.set(antigravityKey, {
-        checkedAt: now,
-        loadedAt: now,
-        slice: fetched,
-        lastAttemptFailed: false,
-      });
-      antigravityLive = fetched;
+      antigravityLive = fetchResult.slice;
+    } else if (returnedKey == null && antigravityKey) {
+      // identity became null; clear old mapping but keep stale data.
+      antigravityCacheKeyByHome.delete(home);
+      antigravityLive = staleOfficial(antigravityHit?.slice ?? null);
+      if (antigravityHit && antigravityKey) {
+        antigravityCache.set(antigravityKey, {
+          ...antigravityHit,
+          checkedAt: now,
+          lastAttemptFailed: true,
+        });
+      }
     } else {
       antigravityLive = staleOfficial(antigravityHit?.slice ?? null);
-      if (antigravityHit) {
+      if (antigravityHit && antigravityKey) {
         antigravityCache.set(antigravityKey, {
           ...antigravityHit,
           checkedAt: now,

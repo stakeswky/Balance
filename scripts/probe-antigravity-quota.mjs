@@ -43,7 +43,7 @@ async function main() {
     return;
   }
 
-  const quota = await readAntigravityQuota({ agyPath });
+  const { slice: quota } = await readAntigravityQuota({ agyPath });
   if (!quota) {
     fail("QUOTA_UNAVAILABLE");
     return;

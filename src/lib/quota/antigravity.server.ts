@@ -345,12 +345,12 @@ export async function readAntigravityQuota(options: {
   execFileImpl?: ExecFileText;
   readCredential?: ReadCredential;
   now?: number;
-} = {}): Promise<OfficialSlice | null> {
+} = {}): Promise<{ slice: OfficialSlice | null; identity: string | null }> {
   const home = options.home ?? homedir();
   const platform = options.platform ?? process.platform;
   const execFileImpl = options.execFileImpl ?? defaultExecFile;
   const agyPath = options.agyPath ?? findAgyExecutable({ home, platform, env: options.env });
-  if (!agyPath) return null;
+  if (!agyPath) return { slice: null, identity: null };
   let canonicalAgyPath: string;
   try {
     canonicalAgyPath = realpathSync(agyPath);
@@ -367,12 +367,13 @@ export async function readAntigravityQuota(options: {
       maxBuffer: MAX_CREDENTIAL_BYTES,
     })).stdout;
   } catch {
-    return null;
+    return { slice: null, identity: null };
   }
   const userAgent = antigravityUserAgent(version, platform, options.arch ?? process.arch);
-  if (!userAgent) return null;
+  if (!userAgent) return { slice: null, identity: null };
   const now = options.now ?? Date.now();
   let cliRefreshCount = 0;
+  let lastUsedCredential: AntigravityCredential | null = null;
   const refreshByCli = async (): Promise<boolean> => {
     if (cliRefreshCount >= 1) return false;
     const lastFailure = cliRefreshBackoff.get(canonicalAgyPath);
@@ -390,25 +391,42 @@ export async function readAntigravityQuota(options: {
       return false;
     }
   };
+  const computeIdentity = (): string | null => {
+    if (!lastUsedCredential) return null;
+    try {
+      return createHash("sha256")
+        .update(canonicalAgyPath)
+        .update("\0")
+        .update(lastUsedCredential.accessToken)
+        .digest("hex");
+    } catch {
+      return null;
+    }
+  };
   let credential = await safelyReadCredential(readCredential);
-  if (!credential) return null;
+  if (!credential) return { slice: null, identity: null };
   if (credential.expiresAt != null && credential.expiresAt <= now + 30_000) {
-    if (!await refreshByCli()) return null;
+    if (!await refreshByCli()) return { slice: null, identity: null };
     credential = await safelyReadCredential(readCredential);
-    if (!credential) return null;
+    if (!credential) return { slice: null, identity: null };
   }
+  lastUsedCredential = credential;
   const first = await fetchAntigravityQuota(credential, {
     fetchImpl: options.fetchImpl,
     now,
     userAgent,
   });
-  if (first.slice || first.status !== 401) return first.slice;
-  if (cliRefreshCount === 0 && !await refreshByCli()) return null;
+  if (first.slice || first.status !== 401) return { slice: first.slice, identity: computeIdentity() };
+  if (cliRefreshCount === 0 && !await refreshByCli()) return { slice: null, identity: null };
   const refreshed = await safelyReadCredential(readCredential);
-  if (!refreshed) return null;
-  return (await fetchAntigravityQuota(refreshed, {
-    fetchImpl: options.fetchImpl,
-    now,
-    userAgent,
-  })).slice;
+  if (!refreshed) return { slice: null, identity: null };
+  lastUsedCredential = refreshed;
+  return {
+    slice: (await fetchAntigravityQuota(refreshed, {
+      fetchImpl: options.fetchImpl,
+      now,
+      userAgent,
+    })).slice,
+    identity: computeIdentity(),
+  };
 }

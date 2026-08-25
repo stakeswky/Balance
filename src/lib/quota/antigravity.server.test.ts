@@ -207,7 +207,7 @@ test("401 invokes agy models once, rereads credentials, and retries once", async
     { accessToken: "new-unit-token", expiresAt: null },
   ];
   let fetchCount = 0;
-  const slice = await readAntigravityQuota({
+  const result = await readAntigravityQuota({
     agyPath: "/tmp/agy",
     platform: "darwin",
     arch: "arm64",
@@ -222,7 +222,7 @@ test("401 invokes agy models once, rereads credentials, and retries once", async
         : Response.json(ANTIGRAVITY_SUMMARY_FIXTURE);
     },
   });
-  assert.equal(slice?.agent, "antigravity");
+  assert.equal(result.slice?.agent, "antigravity");
   assert.equal(fetchCount, 2);
   assert.deepEqual(calls.filter((call) => call.args[0] === "models"), [{
     file: "/tmp/agy",
@@ -245,7 +245,7 @@ test("expired pre-refresh plus a 401 still executes models only once", async (t)
     }
     throw new Error("unexpected command");
   };
-  const slice = await readAntigravityQuota({
+  const result = await readAntigravityQuota({
     agyPath: "/tmp/agy",
     now: 10_000,
     execFileImpl,
@@ -260,7 +260,7 @@ test("expired pre-refresh plus a 401 still executes models only once", async (t)
         : Response.json(ANTIGRAVITY_SUMMARY_FIXTURE);
     },
   });
-  assert.equal(slice?.agent, "antigravity");
+  assert.equal(result.slice?.agent, "antigravity");
   assert.equal(modelCalls, 1);
   assert.equal(reads, 3);
   assert.equal(fetches, 2);
@@ -286,7 +286,7 @@ test("403 and invalid versions fail closed without refreshing or leaking tokens"
       return new Response("", { status: 403 });
     },
   });
-  assert.equal(result, null);
+  assert.equal(result.slice, null);
   assert.equal(modelCalls, 0);
   assert.equal(fetchCalls, 1);
   const invalid = await readAntigravityQuota({
@@ -297,8 +297,8 @@ test("403 and invalid versions fail closed without refreshing or leaking tokens"
       throw new Error(marker);
     },
   });
-  assert.equal(invalid, null);
-  assert.equal(JSON.stringify({ result, invalid }).includes(marker), false);
+  assert.equal(invalid.slice, null);
+  assert.equal(JSON.stringify({ result: result.slice, invalid: invalid.slice }).includes(marker), false);
 });
 
 test("429 and 5xx never invoke the CLI refresh path", async (t) => {
@@ -316,7 +316,7 @@ test("429 and 5xx never invoke the CLI refresh path", async (t) => {
       readCredential: async () => ({ accessToken: `status-unit-token-${status}`, expiresAt: null }),
       fetchImpl: async () => new Response("", { status }),
     });
-    assert.equal(result, null);
+    assert.equal(result.slice, null);
     assert.equal(modelCalls, 0);
   }
 });
@@ -339,7 +339,7 @@ test("a failed agy models refresh stops without a second request", async (t) => 
       return new Response("", { status: 401 });
     },
   });
-  assert.equal(result, null);
+  assert.equal(result.slice, null);
   assert.equal(models, 1);
   assert.equal(fetchCalls, 1);
 });
@@ -415,6 +415,38 @@ test("CLI refresh cooldown prevents repeated agy models calls for 5 minutes", as
     fetchImpl,
   });
   assert.equal(modelCalls, 2);
+});
+
+test("readAntigravityQuota returns identity alongside slice", async () => {
+  let readCount = 0;
+  const credentials = [
+    { accessToken: "identity-old-token", expiresAt: null },
+    { accessToken: "identity-new-token", expiresAt: null },
+  ];
+  const result = await readAntigravityQuota({
+    agyPath: "/tmp/agy",
+    platform: "darwin",
+    arch: "arm64",
+    execFileImpl: async (_file, args) => {
+      if (args[0] === "--version") return { stdout: "agy 1.1.19" };
+      if (args[0] === "models") return { stdout: "" };
+      throw new Error("unexpected");
+    },
+    readCredential: async () => {
+      readCount += 1;
+      return credentials.shift() ?? null;
+    },
+    fetchImpl: async (_input, init) => {
+      const auth = new Headers(init?.headers).get("authorization");
+      if (auth === "Bearer identity-old-token") {
+        return Response.json({ error: { code: 401 } }, { status: 401 });
+      }
+      return Response.json(ANTIGRAVITY_SUMMARY_FIXTURE);
+    },
+  });
+  assert.equal(result.slice?.agent, "antigravity");
+  assert.equal(typeof result.identity, "string");
+  assert.equal(result.identity?.length, 64);
 });
 
 test("session identity changes with the canonical executable or credential", async (t) => {
