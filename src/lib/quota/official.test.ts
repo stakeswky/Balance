@@ -12,6 +12,8 @@ import {
   parseClaudeUsagePayload,
   parseAntigravityQuotaSummary,
   quotaPoolsWithStale,
+  expireOfficialQuota,
+  expireOfficialSlice,
   slicesFromClaudeHistory,
   parseCodexRateLimitLog,
   parseCodexRateLimits,
@@ -20,6 +22,7 @@ import {
   parseGrokBillingLogAll,
   parseGrokBillingPayload,
   codexPlanIdFromLabel,
+  type OfficialSlice,
 } from "./official.ts";
 import { ANTIGRAVITY_SUMMARY_FIXTURE } from "./antigravity.test-fixture.ts";
 import { windowBounds } from "./quota-value.ts";
@@ -641,4 +644,139 @@ test("Antigravity quota parser rejects unknown groups, windows, and empty payloa
   assert.equal(parseAntigravityQuotaSummary({
     groups: [{ displayName: "Gemini Models", buckets: [{ window: "daily", remainingFraction: 0.5 }] }],
   }), null);
+});
+
+test("expireOfficialSlice zeroes an exhausted window whose reset time has passed", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const slice: OfficialSlice = {
+    agent: "antigravity",
+    windowPct: 100,
+    weekPct: 40,
+    windowResetsAt: now - 2 * 60 * 60 * 1000,
+    weekResetsAt: now + 3 * 24 * 60 * 60 * 1000,
+    weekStartedAt: null,
+    windowDurationMs: 5 * 60 * 60 * 1000,
+    weekDurationMs: 7 * 24 * 60 * 60 * 1000,
+    burnPctPerHour: 12,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    quotaPools: [
+      {
+        id: "3p-5h",
+        kind: "quota-window",
+        quotaGroup: "claude-gpt",
+        quotaWindow: "five_hour",
+        usagePercent: 100,
+        startsAt: null,
+        resetsAt: now - 2 * 60 * 60 * 1000,
+        durationMs: 5 * 60 * 60 * 1000,
+        models: [],
+        exactUsedUsd: null,
+        exactLimitUsd: null,
+        fetchedAt: now - 3 * 60 * 60 * 1000,
+      },
+      {
+        id: "3p-weekly",
+        kind: "quota-window",
+        quotaGroup: "claude-gpt",
+        quotaWindow: "weekly",
+        usagePercent: 40,
+        startsAt: null,
+        resetsAt: now + 3 * 24 * 60 * 60 * 1000,
+        durationMs: 7 * 24 * 60 * 60 * 1000,
+        models: [],
+        exactUsedUsd: null,
+        exactLimitUsd: null,
+        fetchedAt: now - 3 * 60 * 60 * 1000,
+      },
+    ],
+    source: "antigravity-quota-summary",
+    fetchedAt: now - 3 * 60 * 60 * 1000,
+    windowKind: "five_hour",
+  };
+  const aged = expireOfficialSlice(slice, now);
+  assert.ok(aged);
+  assert.equal(aged.windowPct, 0);
+  assert.equal(aged.windowStale, true);
+  assert.equal(aged.burnPctPerHour, 0);
+  assert.equal(aged.weekPct, 40);
+  assert.notEqual(aged.weekStale, true);
+  assert.equal(aged.quotaPools?.[0]?.usagePercent, 0);
+  assert.equal(aged.quotaPools?.[0]?.stale, true);
+  assert.equal(aged.quotaPools?.[1]?.usagePercent, 40);
+});
+
+test("expireOfficialSlice keeps windows inside the clock-skew grace period", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const slice: OfficialSlice = {
+    agent: "claude",
+    windowPct: 100,
+    weekPct: null,
+    windowResetsAt: now - 59_000,
+    weekResetsAt: null,
+    weekStartedAt: null,
+    windowDurationMs: null,
+    weekDurationMs: null,
+    burnPctPerHour: 0,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    source: "oauth-usage",
+    fetchedAt: now - 60 * 60 * 1000,
+    windowKind: "five_hour",
+  };
+  assert.equal(expireOfficialSlice(slice, now), slice);
+  const past = expireOfficialSlice(
+    { ...slice, windowResetsAt: now - 60_000 },
+    now,
+  );
+  assert.equal(past?.windowPct, 0);
+});
+
+test("expireOfficialSlice zeroes expired model week limits and weekly windows", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const slice: OfficialSlice = {
+    agent: "claude",
+    windowPct: null,
+    weekPct: 90,
+    windowResetsAt: null,
+    weekResetsAt: now - 24 * 60 * 60 * 1000,
+    weekStartedAt: now - 8 * 24 * 60 * 60 * 1000,
+    windowDurationMs: null,
+    weekDurationMs: 7 * 24 * 60 * 60 * 1000,
+    burnPctPerHour: 5,
+    planLabel: null,
+    products: [],
+    prepaidBalance: null,
+    onDemandUsed: null,
+    onDemandCap: null,
+    modelWeekLimits: {
+      fable: { usedPct: 88, resetsAt: now - 24 * 60 * 60 * 1000 },
+    },
+    source: "oauth-usage",
+    fetchedAt: now - 30 * 60 * 60 * 1000,
+    windowKind: "weekly",
+  };
+  const aged = expireOfficialSlice(slice, now);
+  assert.equal(aged?.weekPct, 0);
+  assert.equal(aged?.weekStale, true);
+  assert.equal(aged?.burnPctPerHour, 0);
+  assert.equal(aged?.modelWeekLimits?.fable?.usedPct, 0);
+  assert.equal(aged?.modelWeekLimitsStale, true);
+});
+
+test("expireOfficialQuota maps every provider and passes null through", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  assert.deepEqual(
+    expireOfficialQuota(
+      { claude: null, grok: null, codex: null, antigravity: null },
+      now,
+    ),
+    { claude: null, grok: null, codex: null, antigravity: null },
+  );
 });

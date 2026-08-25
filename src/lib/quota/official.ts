@@ -309,6 +309,77 @@ export function quotaPoolsWithStale(
   return pools?.map((pool) => ({ ...pool, stale }));
 }
 
+export const OFFICIAL_RESET_GRACE_MS = 60_000;
+
+function resetElapsed(resetsAt: number | null | undefined, now: number): boolean {
+  return resetsAt != null && Number.isFinite(resetsAt)
+    && resetsAt + OFFICIAL_RESET_GRACE_MS <= now;
+}
+
+/**
+ * When an official window's resetsAt has passed (plus a 60s clock-skew
+ * grace), treat that window as reset: zero usage and mark it stale until
+ * the next successful fetch. Do not invent the next resetsAt.
+ */
+export function expireOfficialSlice(
+  slice: OfficialSlice | null,
+  now: number,
+): OfficialSlice | null {
+  if (!slice) return null;
+  const windowExpired = slice.windowPct != null && resetElapsed(slice.windowResetsAt, now);
+  const weekExpired = slice.weekPct != null && resetElapsed(slice.weekResetsAt, now);
+  const modelWeekEntries = Object.entries(slice.modelWeekLimits ?? {}) as [
+    string,
+    OfficialModelWeekLimit | undefined,
+  ][];
+  const modelWeekExpired = modelWeekEntries.some(
+    ([, limit]) => limit != null && resetElapsed(limit.resetsAt, now),
+  );
+  const poolExpired = (slice.quotaPools ?? []).some(
+    (pool) => pool.usagePercent != null && resetElapsed(pool.resetsAt, now),
+  );
+  if (!windowExpired && !weekExpired && !modelWeekExpired && !poolExpired) return slice;
+  const next: OfficialSlice = { ...slice };
+  if (windowExpired) {
+    next.windowPct = 0;
+    next.windowStale = true;
+    next.burnPctPerHour = 0;
+  }
+  if (weekExpired) {
+    next.weekPct = 0;
+    next.weekStale = true;
+    if (slice.windowKind === "weekly") next.burnPctPerHour = 0;
+  }
+  if (modelWeekExpired) {
+    next.modelWeekLimits = Object.fromEntries(
+      modelWeekEntries.map(([model, limit]) => [
+        model,
+        limit != null && resetElapsed(limit.resetsAt, now)
+          ? { ...limit, usedPct: 0 }
+          : limit,
+      ]),
+    ) as OfficialModelWeekLimits;
+    next.modelWeekLimitsStale = true;
+  }
+  if (poolExpired) {
+    next.quotaPools = slice.quotaPools?.map((pool) =>
+      pool.usagePercent != null && resetElapsed(pool.resetsAt, now)
+        ? { ...pool, usagePercent: 0, stale: true }
+        : pool,
+    );
+  }
+  return next;
+}
+
+export function expireOfficialQuota(quota: OfficialQuota, now: number): OfficialQuota {
+  return {
+    claude: expireOfficialSlice(quota.claude, now),
+    grok: expireOfficialSlice(quota.grok, now),
+    codex: expireOfficialSlice(quota.codex, now),
+    antigravity: expireOfficialSlice(quota.antigravity, now),
+  };
+}
+
 function claudeLimit(
   root: Record<string, unknown>,
   kind: "session" | "weekly_all",
