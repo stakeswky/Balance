@@ -1,7 +1,7 @@
 # Antigravity CLI 本机逐模型用量规格
 
 日期：2026-08-25  
-状态：待实现  
+状态：已实现  
 关联规格：`docs/specs/2026-08-25-antigravity-cli-quota.md`
 
 ## 目标

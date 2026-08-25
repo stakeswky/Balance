@@ -1,7 +1,7 @@
 # Antigravity 官方额度运行时修复规格
 
 日期：2026-08-25
-状态：待实现
+状态：已实现
 主规格：`docs/specs/2026-08-25-antigravity-cli-quota.md`
 
 ## 根因
