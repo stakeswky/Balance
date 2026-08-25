@@ -1356,6 +1356,38 @@ test("readOfficialQuota refreshes all four providers in parallel", async () => {
   assert.deepEqual(result.antigravity, antigravity);
 });
 
+test("readOfficialQuota keeps Antigravity slice across identity churn when fetch fails", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-agy-churn-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  const identities = ["agy-session-a", "agy-session-b"];
+  let reads = 0;
+  const readAt = (at: number) => readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: at,
+    cacheMs: 30_000,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => identities.shift() ?? null,
+    readAntigravity: async () => {
+      reads += 1;
+      return reads === 1
+        ? { slice: antigravity, identity: "agy-session-a" }
+        : { slice: null, identity: null };
+    },
+  });
+
+  const first = await readAt(now);
+  assert.equal(first.antigravity?.windowPct, antigravity.windowPct);
+  const second = await readAt(now + 31_000);
+  assert.equal(second.antigravity?.windowPct, antigravity.windowPct);
+  assert.equal(second.antigravity?.windowStale, true);
+  assert.equal(reads, 2);
+});
+
 test("readOfficialQuota rolls an antigravity window whose reset already passed", async () => {
   clearOfficialCache();
   const home = mkdtempSync(join(tmpdir(), "balance-official-reset-"));

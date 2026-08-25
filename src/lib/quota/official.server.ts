@@ -836,7 +836,11 @@ export async function readOfficialQuota(opts?: {
   let antigravityKey = await currentAntigravityKey();
   const previousAntigravityKey = antigravityCacheKeyByHome.get(home);
   if (antigravityKey && previousAntigravityKey && previousAntigravityKey !== antigravityKey) {
+    const previousEntry = antigravityCache.get(previousAntigravityKey);
     antigravityCache.delete(previousAntigravityKey);
+    if (previousEntry && !antigravityCache.has(antigravityKey)) {
+      antigravityCache.set(antigravityKey, previousEntry);
+    }
   }
   if (antigravityKey) antigravityCacheKeyByHome.set(home, antigravityKey);
   const antigravityHit = antigravityKey ? antigravityCache.get(antigravityKey) : undefined;
@@ -1017,7 +1021,13 @@ export async function readOfficialQuota(opts?: {
         const returnedKey = returnedIdentity ? `${home}\0${returnedIdentity}` : null;
 
         if (returnedKey && returnedKey !== antigravityKey) {
-          if (antigravityKey) antigravityCache.delete(antigravityKey);
+          if (antigravityKey) {
+            const previousEntry = antigravityCache.get(antigravityKey);
+            antigravityCache.delete(antigravityKey);
+            if (previousEntry && !antigravityCache.has(returnedKey)) {
+              antigravityCache.set(returnedKey, previousEntry);
+            }
+          }
           antigravityCacheKeyByHome.set(home, returnedKey);
           antigravityKey = returnedKey;
         }
