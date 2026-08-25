@@ -425,6 +425,8 @@ function mergeClaudeOfficial(
   if (!history) return live;
   const useHistoryWindow = Boolean(live.windowStale && history.windowPct != null);
   const useHistoryWeek = Boolean(live.weekStale && history.weekPct != null);
+  const useLiveWindow = !useHistoryWindow && live.windowPct != null;
+  const useLiveWeek = !useHistoryWeek && live.weekPct != null;
   const liveModelLimits = live.modelWeekLimits != null;
   return {
     agent: history.agent,
@@ -468,6 +470,12 @@ function mergeClaudeOfficial(
       : history.modelWeekLimitsStale,
     source: useHistoryWindow || useHistoryWeek ? history.source : live.source,
     fetchedAt: Math.max(live.fetchedAt, history.fetchedAt),
+    windowFetchedAt: useLiveWindow
+      ? live.windowFetchedAt ?? live.fetchedAt
+      : history.windowFetchedAt ?? history.fetchedAt,
+    weekFetchedAt: useLiveWeek
+      ? live.weekFetchedAt ?? live.fetchedAt
+      : history.weekFetchedAt ?? history.fetchedAt,
     windowKind: live.windowKind,
   };
 }
@@ -1137,31 +1145,40 @@ export function mergeClaudeStatusline(
     onDemandUsed: null,
     onDemandCap: null,
   };
-  const windowFetchedAt = statusWindow
-    ? statusline!.fetchedAt
-    : base.windowFetchedAt ?? base.fetchedAt;
-  const weekFetchedAt = statusWeek
-    ? statusline!.fetchedAt
-    : base.weekFetchedAt ?? base.fetchedAt;
+  const baseWindowFetchedAt = base.windowFetchedAt ?? base.fetchedAt;
+  const baseWeekFetchedAt = base.weekFetchedAt ?? base.fetchedAt;
+  const statusWindowFetchedAt = statusline?.windowFetchedAt ?? statusline?.fetchedAt ?? -1;
+  const statusWeekFetchedAt = statusline?.weekFetchedAt ?? statusline?.fetchedAt ?? -1;
+  const useStatusWindow = Boolean(
+    statusWindow
+    && (base.windowPct == null || statusWindowFetchedAt >= baseWindowFetchedAt),
+  );
+  const useStatusWeek = Boolean(
+    statusWeek
+    && (base.weekPct == null || statusWeekFetchedAt >= baseWeekFetchedAt),
+  );
+  const windowFetchedAt = useStatusWindow ? statusWindowFetchedAt : baseWindowFetchedAt;
+  const weekFetchedAt = useStatusWeek ? statusWeekFetchedAt : baseWeekFetchedAt;
+  const usesStatusline = useStatusWindow || useStatusWeek;
   return {
     ...base,
-    windowPct: statusWindow ? statusline!.windowPct : base.windowPct,
-    weekPct: statusWeek ? statusline!.weekPct : base.weekPct,
-    windowResetsAt: statusWindow ? statusline!.windowResetsAt : base.windowResetsAt,
-    weekResetsAt: statusWeek ? statusline!.weekResetsAt : base.weekResetsAt,
-    weekStartedAt: statusWeek ? statusline!.weekStartedAt : base.weekStartedAt,
-    windowDurationMs: statusWindow ? statusline!.windowDurationMs : base.windowDurationMs,
-    weekDurationMs: statusWeek ? statusline!.weekDurationMs : base.weekDurationMs,
-    windowKind: statusWindow ? statusline!.windowKind : base.windowKind,
+    windowPct: useStatusWindow ? statusline!.windowPct : base.windowPct,
+    weekPct: useStatusWeek ? statusline!.weekPct : base.weekPct,
+    windowResetsAt: useStatusWindow ? statusline!.windowResetsAt : base.windowResetsAt,
+    weekResetsAt: useStatusWeek ? statusline!.weekResetsAt : base.weekResetsAt,
+    weekStartedAt: useStatusWeek ? statusline!.weekStartedAt : base.weekStartedAt,
+    windowDurationMs: useStatusWindow ? statusline!.windowDurationMs : base.windowDurationMs,
+    weekDurationMs: useStatusWeek ? statusline!.weekDurationMs : base.weekDurationMs,
+    windowKind: useStatusWindow ? statusline!.windowKind : base.windowKind,
     windowFetchedAt,
     weekFetchedAt,
     fetchedAt: Math.max(windowFetchedAt, weekFetchedAt),
-    source: statusWindow || statusWeek
+    source: usesStatusline
       ? oauth
         ? "claude-statusline+oauth"
         : "claude-statusline"
       : base.source,
-    windowStale: statusWindow ? false : base.windowStale,
-    weekStale: statusWeek ? false : base.weekStale,
+    windowStale: useStatusWindow ? false : base.windowStale,
+    weekStale: useStatusWeek ? false : base.weekStale,
   };
 }

@@ -898,7 +898,7 @@ test("statusline snapshot merges fresh decimal windows without OAuth", async () 
   assert.equal(q.claude?.source, "claude-statusline");
 });
 
-test("statusline precedence keeps OAuth week windows and quota pools", async () => {
+test("newer OAuth windows replace an older statusline snapshot after quota refresh", async () => {
   clearOfficialCache();
   const { home, grokHome } = fixtureHome();
   const now = Date.parse("2026-08-21T12:00:00Z");
@@ -906,14 +906,17 @@ test("statusline precedence keeps OAuth week windows and quota pools", async () 
   mkdirSync(join(home, "state"), { recursive: true });
   writeFileSync(statuslineSnapshotPath, `${JSON.stringify({
     fetchedAt: now - 30_000,
-    rate_limits: { five_hour: { used_percentage: 12.5, resets_at: now + 3_600_000 } },
+    rate_limits: {
+      five_hour: { used_percentage: 100, resets_at: now + 3_600_000 },
+      seven_day: { used_percentage: 100, resets_at: now + 4 * 24 * 3_600_000 },
+    },
   })}\n`);
   const fetchImpl: typeof fetch = async (input) => {
     if (String(input) === CLAUDE_USAGE_URL) {
       return new Response(JSON.stringify({
-        five_hour: { utilization: 24, resets_at: "2026-08-21T13:30:00Z" },
-        seven_day: { utilization: 40.25, resets_at: "2026-08-25T00:00:00Z" },
-        seven_day_sonnet: { utilization: 75.5, resets_at: "2026-08-25T00:00:00Z" },
+        five_hour: { utilization: 0, resets_at: "2026-08-21T13:30:00Z" },
+        seven_day: { utilization: 0, resets_at: "2026-08-25T00:00:00Z" },
+        seven_day_sonnet: { utilization: 0, resets_at: "2026-08-25T00:00:00Z" },
       }), { status: 200 });
     }
     return new Response(JSON.stringify(LIVE), { status: 200 });
@@ -927,18 +930,12 @@ test("statusline precedence keeps OAuth week windows and quota pools", async () 
     statuslineSnapshotPath,
     readClaudeAuth: async () => ({ accessToken: "claude-token" }),
   });
-  assert.equal(q.claude?.windowPct, 12.5);
-  assert.equal(q.claude?.windowResetsAt, now + 3_600_000);
-  assert.equal(q.claude?.windowFetchedAt, now - 30_000);
-  assert.equal(q.claude?.windowStale, false);
-  assert.equal(q.claude?.weekPct, 40.25);
-  assert.equal(q.claude?.weekResetsAt, Date.parse("2026-08-25T00:00:00Z"));
+  assert.equal(q.claude?.windowPct, 0);
+  assert.equal(q.claude?.weekPct, 0);
+  assert.equal(q.claude?.windowFetchedAt, now);
   assert.equal(q.claude?.weekFetchedAt, now);
-  assert.equal(q.claude?.source, "claude-statusline+oauth");
-  assert.equal(q.claude?.modelWeekLimits?.sonnet?.usedPct, 75.5);
-  const sonnetPool = q.claude?.quotaPools?.find((pool) => pool.id === "seven_day_sonnet");
-  assert.equal(sonnetPool?.stale, false);
-  assert.equal(sonnetPool?.fetchedAt, now);
+  assert.equal(q.claude?.source, "oauth-usage");
+  assert.equal(q.claude?.modelWeekLimits?.sonnet?.usedPct, 0);
 });
 
 test("statusline precedence rejects a percent-only window and survives the cache fast path", async () => {
