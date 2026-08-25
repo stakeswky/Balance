@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "app": "balance",
-  "packVersion": "0.3.4",
+  "packVersion": "0.3.5",
   "minNativeVersion": "0.3.0"
 }
