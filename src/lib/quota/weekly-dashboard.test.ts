@@ -127,7 +127,7 @@ test("weekly dashboard includes Claude Fable week limit when official reports it
     official: {
       claude: official({
         weekPct: 80,
-        modelWeekLimits: { fable: { usedPct: 91, resetsAt: 9 } },
+        modelWeekLimits: { fable: { usedPct: 91, resetsAt: 9_000 } },
       }),
       grok: null,
       codex: null,
@@ -197,4 +197,36 @@ test("weekly dashboard shows Antigravity official quota without a fake Codex pla
   assert.equal(rows[0]?.windowUsedPct, 55);
   assert.equal(rows[0]?.usedPct, 62);
   assert.equal(preferredSubscriptionHint(rows[0]!, rows).title, "现在用 Antigravity");
+});
+
+test("weekly dashboard zeroes an official week whose reset already passed", () => {
+  const now = Date.parse("2026-08-25T12:00:00Z");
+  const rows = weeklyQuotaRows({
+    events: [],
+    availability: { claude: false, grok: false, codex: false, antigravity: true },
+    demoMode: false,
+    official: {
+      claude: null,
+      grok: null,
+      codex: null,
+      antigravity: official({
+        agent: "antigravity",
+        planLabel: null,
+        windowPct: 12,
+        weekPct: 90,
+        windowResetsAt: now + 60 * 60 * 1000,
+        weekResetsAt: now - 24 * 60 * 60 * 1000,
+        source: "antigravity-quota-summary",
+      }),
+    },
+    claudePlanId: "claude-max-20x",
+    grokPlanId: "grok-super",
+    codexPlanId: "chatgpt-plus",
+    weekBoostPct: 0,
+    now,
+  });
+  assert.equal(rows[0]?.usedPct, 0);
+  assert.equal(rows[0]?.remainPct, 100);
+  assert.equal(rows[0]?.windowUsedPct, 12);
+  assert.equal(rows[0]?.source, "official-stale");
 });

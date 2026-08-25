@@ -13,7 +13,7 @@ import {
   modelWeekLimitFor,
   type MeterDataSource,
 } from "./engine.ts";
-import type { OfficialQuota } from "./official.ts";
+import { expireOfficialSlice, type OfficialQuota } from "./official.ts";
 import { planById } from "./plans.ts";
 import { isUsageAgentId, type AgentId, type MeterSnapshot, type UsageEvent } from "./types.ts";
 
@@ -52,7 +52,7 @@ export function weeklyQuotaRows(opts: {
   const agents = visibleAgentIds(opts.availability, opts.demoMode, opts.events);
   const events = eventsForAgents(opts.events, agents);
   return agents.map((agent) => {
-    const official = opts.official[agent];
+    const official = expireOfficialSlice(opts.official[agent], opts.now);
     if (!isUsageAgentId(agent)) {
       const meter = applyOfficial(emptyMeter(agent, opts.now), official);
       const usedPct = meter.weekPct;

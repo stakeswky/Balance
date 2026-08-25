@@ -26,7 +26,7 @@ import {
   type MeterDataSources,
 } from "@/lib/quota/engine";
 import { inferCodexProPlanId } from "@/lib/quota/estimate";
-import type { OfficialSlice } from "@/lib/quota/official";
+import { expireOfficialQuota, type OfficialSlice } from "@/lib/quota/official";
 import { planById } from "@/lib/quota/plans";
 import {
   officialPrimaryMeterWindow,
@@ -129,6 +129,7 @@ export function Dashboard() {
     const checkAlerts = (t = Date.now()) => {
       const state = useQuota.getState();
       if (state.demoMode) return;
+      const official = expireOfficialQuota(state.official, t);
       const activeAgents = visibleAgentIds(
         state.agentAvailability,
         state.demoMode,
@@ -186,29 +187,29 @@ export function Dashboard() {
 
       const claudeMeter = applyOfficial(
         meterFor(activeEvents, "claude", planById(state.claudePlanId), t, state.weekBoostPct),
-        state.official.claude,
+        official.claude,
       );
       const claudeFableLimit = modelWeekLimitFor(
         planById(state.claudePlanId),
-        state.official.claude,
+        official.claude,
         "fable",
       );
       const grokMeter = applyOfficial(
         meterFor(activeEvents, "grok", planById(state.grokPlanId), t, state.weekBoostPct),
-        state.official.grok,
+        official.grok,
       );
       const codexMeter = applyOfficial(
         meterFor(activeEvents, "codex", planById(state.codexPlanId), t, state.weekBoostPct),
-        state.official.codex,
+        official.codex,
       );
       const antigravityMeter = applyOfficial(
         emptyMeter("antigravity", t),
-        state.official.antigravity,
+        official.antigravity,
       );
-      const claudeSources = meterDataSources(state.official.claude);
-      const grokSources = meterDataSources(state.official.grok);
-      const codexSources = meterDataSources(state.official.codex);
-      const antigravitySources = meterDataSources(state.official.antigravity);
+      const claudeSources = meterDataSources(official.claude);
+      const grokSources = meterDataSources(official.grok);
+      const codexSources = meterDataSources(official.codex);
+      const antigravitySources = meterDataSources(official.antigravity);
       const claudeDecisionMeter = state.demoMode
         ? claudeMeter
         : officialOnlyMeter(claudeMeter, claudeSources);
@@ -227,7 +228,7 @@ export function Dashboard() {
           check(
             "claude",
             claudeDecisionMeter,
-            state.official.claude?.windowKind ?? "five_hour",
+            official.claude?.windowKind ?? "five_hour",
             state.demoMode ? null : claudeSources,
             "claudeWin",
             "claudeWeek",
@@ -235,7 +236,7 @@ export function Dashboard() {
           );
         }
         const fableAvailable = claudeFableLimit != null &&
-          (state.demoMode || !state.official.claude?.modelWeekLimitsStale);
+          (state.demoMode || !official.claude?.modelWeekLimitsStale);
         const fableTriggered = fableAvailable
           ? state.claimAlertLatch(
               "claudeFable",
@@ -245,7 +246,7 @@ export function Dashboard() {
           : false;
         if (
           claudeFableLimit &&
-          (state.demoMode || !state.official.claude?.modelWeekLimitsStale) &&
+          (state.demoMode || !official.claude?.modelWeekLimitsStale) &&
           fableTriggered
         ) {
           const message = `Claude Code Fable 5 周额度已用 ${claudeFableLimit.usedPct.toFixed(0)}%`;
@@ -257,7 +258,7 @@ export function Dashboard() {
         check(
           "grok",
           grokDecisionMeter,
-          state.official.grok?.windowKind ?? "five_hour",
+          official.grok?.windowKind ?? "five_hour",
           state.demoMode ? null : grokSources,
           "grokWin",
           "grokWeek",
@@ -268,7 +269,7 @@ export function Dashboard() {
         check(
           "codex",
           codexDecisionMeter,
-          state.official.codex?.windowKind ?? "five_hour",
+          official.codex?.windowKind ?? "five_hour",
           state.demoMode ? null : codexSources,
           "codexWin",
           "codexWeek",
@@ -279,7 +280,7 @@ export function Dashboard() {
         check(
           "antigravity",
           antigravityDecisionMeter,
-          state.official.antigravity?.windowKind ?? "five_hour",
+          official.antigravity?.windowKind ?? "five_hour",
           antigravitySources,
           "antigravityWin",
           "antigravityWeek",
@@ -387,7 +388,11 @@ export function Dashboard() {
   const claudePlan = planById(claudePlanId);
   const grokPlan = planById(grokPlanId);
   const codexPlan = planById(codexPlanId);
-  const official = useQuota((s) => s.official);
+  const rawOfficial = useQuota((s) => s.official);
+  const official = useMemo(
+    () => (demoMode ? rawOfficial : expireOfficialQuota(rawOfficial, now)),
+    [rawOfficial, now, demoMode],
+  );
   const quotaSamples = useQuota((s) => s.quotaSamples);
   const calibrationTruncatedBeforeMs = useQuota((s) => s.calibrationTruncatedBeforeMs);
   const claudeMeter = useMemo(
