@@ -135,10 +135,20 @@ function antigravityOfficialSlice(partial = {}) {
   const fetchedAt = E2E_NOW;
   const weekReset = E2E_NOW + 4 * 24 * 60 * 60 * 1000;
   const fiveHourReset = E2E_NOW + 3 * 60 * 60 * 1000;
-  const quotaPool = (id, label, usagePercent, resetsAt, durationMs) => ({
+  const quotaPool = (
+    id,
+    label,
+    quotaGroup,
+    quotaWindow,
+    usagePercent,
+    resetsAt,
+    durationMs,
+  ) => ({
     id,
     label,
     kind: "quota-window",
+    quotaGroup,
+    quotaWindow,
     usagePercent,
     startsAt: resetsAt - durationMs,
     resetsAt,
@@ -159,10 +169,10 @@ function antigravityOfficialSlice(partial = {}) {
     planLabel: null,
     modelWeekLimits: undefined,
     quotaPools: [
-      quotaPool("gemini-weekly", "Gemini Models · 每周", 28, weekReset, 7 * 24 * 60 * 60 * 1000),
-      quotaPool("gemini-5h", "Gemini Models · 5 小时", 55, fiveHourReset, 5 * 60 * 60 * 1000),
-      quotaPool("3p-weekly", "Claude and GPT models · 每周", 62, weekReset, 7 * 24 * 60 * 60 * 1000),
-      quotaPool("3p-5h", "Claude and GPT models · 5 小时", 20, fiveHourReset, 5 * 60 * 60 * 1000),
+      quotaPool("gemini-weekly", "Gemini Models · 每周", "gemini", "weekly", 28, weekReset, 7 * 24 * 60 * 60 * 1000),
+      quotaPool("gemini-5h", "Gemini Models · 5 小时", "gemini", "five_hour", 55, fiveHourReset, 5 * 60 * 60 * 1000),
+      quotaPool("3p-weekly", "Claude and GPT models · 每周", "claude-gpt", "weekly", 62, weekReset, 7 * 24 * 60 * 60 * 1000),
+      quotaPool("3p-5h", "Claude and GPT models · 5 小时", "claude-gpt", "five_hour", 20, fiveHourReset, 5 * 60 * 60 * 1000),
     ],
     source: "antigravity-quota-summary",
     fetchedAt,
@@ -889,14 +899,19 @@ async function runScenario(browser, scenarioName, viewportName) {
       }
     }
     if (scenario.antigravityGeek) {
-      const minimalPrimary = await card
-        .getByTestId("quota-antigravity-primary-remaining")
-        .textContent();
-      assert.equal(minimalPrimary, "38%");
+      assert.equal(
+        await card.getByTestId("quota-antigravity-gemini-remaining").textContent(),
+        "45%",
+      );
+      assert.equal(
+        await card.getByTestId("quota-antigravity-claude-gpt-remaining").textContent(),
+        "38%",
+      );
       assert.equal(
         await page.getByTestId("tightest-quota-remaining").textContent(),
-        minimalPrimary,
+        "38%",
       );
+      assert.equal(await card.getByTestId("quota-antigravity-primary-remaining").count(), 0);
       assert.equal(await card.getByRole("button", { name: /采集|暂停/ }).count(), 0);
       await page.getByRole("button", { name: "设置" }).click();
       const officialPlan = page.getByRole("status", {
@@ -908,7 +923,7 @@ async function runScenario(browser, scenarioName, viewportName) {
       await page.getByRole("button", { name: "监控" }).click();
       assert.equal(
         await card.getByTestId("quota-antigravity-primary-remaining").textContent(),
-        minimalPrimary,
+        "38%",
       );
       for (const label of [
         "Gemini Models · 每周（官方）",

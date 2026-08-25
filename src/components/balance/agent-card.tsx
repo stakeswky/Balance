@@ -22,6 +22,7 @@ import {
 import { grokProductLabel, type OfficialProductShare } from "@/lib/quota/official";
 import { parallelTaskSummary } from "@/lib/quota/parallel-tasks";
 import {
+  antigravityQuotaGroupSummaries,
   apiEquivalentSections,
   displayWeekTokens,
   effectiveQuotaStatus,
@@ -122,6 +123,10 @@ export function AgentCard({
   const usageAgent = isUsageAgentId(meter.agent) ? meter.agent : null;
   const shares = usageAgent ? modelShares(events, usageAgent, now, WEEK_MS) : [];
   const officialPrimary = officialPrimaryMeterWindow(meter, quotaSources);
+  const antigravityGroups = officialOnly
+    ? antigravityQuotaGroupSummaries((quotaPools ?? []).map(({ pool }) => pool))
+    : [];
+  const splitAntigravityMinimal = minimalMode && officialOnly && antigravityGroups.length > 0;
   const primaryKind = officialOnly
     ? officialPrimary?.kind ?? "weekly"
     : minimalMode || windowLabel === "本周额度"
@@ -278,73 +283,136 @@ export function AgentCard({
         ) : null}
       </CardHeader>
 
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <p className="text-xs text-mute">
-            {minimalMode ? (weeklyView ? "本周剩余" : `${windowLabel}剩余`) : primaryRemainingLabel}
-          </p>
-          <p
-            data-testid={
-              officialOnly
-                ? `quota-${meter.agent}-primary-remaining`
-                : minimalMode
-                  ? `quota-${meter.agent}-${weeklyView ? "week" : "window"}-remaining`
-                  : undefined
-            }
-            aria-label={
-              minimalMode
-                ? officialUnavailable
-                  ? "暂无官方余量"
-                  : `${weeklyView ? "本周" : windowLabel}剩余 ${remain.toFixed(0)}%，${statusCopy[minimalStatus]}`
-                : undefined
-            }
-            className={cn(
-              "mt-1 font-mono leading-none font-medium tracking-tight tabular",
-              minimalMode ? "text-3xl" : "text-4xl",
-              minimalMode && minimalStatus === "ok" && "text-ok",
-              minimalMode && minimalStatus === "watch" && "text-warn",
-              minimalMode && minimalStatus === "critical" && "text-crit",
-            )}
-          >
-            {officialUnavailable ? "—" : remain.toFixed(0)}
-            {!officialUnavailable ? <span className="ml-1 text-lg text-mute">%</span> : null}
-          </p>
-        </div>
-        {!minimalMode && !officialUnavailable ? (
-          <div className="text-right text-xs text-mute">
-            {weeklyView ? (
-              <>
-                <p>
-                  {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
-                  <span className="text-faint"> %</span>
-                </p>
-                {!officialOnly ? (
-                  <p className="mt-1">
-                    {meter.agent !== "codex" ? "API 等价按公开价折算" : "credit 按公开价等价折算"}
+      {splitAntigravityMinimal ? (
+        <div className="mt-1 w-full space-y-3" aria-label="Antigravity 分类额度">
+          {antigravityGroups.map((group) => {
+            const groupRemain = Math.max(0, 100 - group.usedPct);
+            const groupStatus = group.usedPct >= 88
+              ? "critical"
+              : group.usedPct >= 72
+                ? "watch"
+                : "ok";
+            const groupResetHint = formatWeekResetHint(group.resetsAt, now);
+            return (
+              <section key={group.group} className="rounded-xl bg-raised px-3 py-3">
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-mute">{group.label}剩余</p>
+                    <p
+                      data-testid={`quota-antigravity-${group.group}-remaining`}
+                      aria-label={`${group.label}剩余 ${groupRemain.toFixed(0)}%，${statusCopy[groupStatus]}`}
+                      className={cn(
+                        "mt-1 font-mono text-2xl leading-none font-medium tracking-tight tabular",
+                        groupStatus === "ok" && "text-ok",
+                        groupStatus === "watch" && "text-warn",
+                        groupStatus === "critical" && "text-crit",
+                      )}
+                    >
+                      {groupRemain.toFixed(0)}<span className="ml-1 text-base text-mute">%</span>
+                    </p>
+                  </div>
+                  <span className="text-xs text-faint">
+                    {group.kind === "weekly" ? "本周额度" : "5 小时窗"}
+                    {group.stale ? " · 快照" : ""}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface">
+                  <div
+                    className={cn(
+                      "h-full rounded-full",
+                      groupStatus === "critical"
+                        ? "bg-crit"
+                        : groupStatus === "watch"
+                          ? "bg-warn"
+                          : "bg-ok",
+                    )}
+                    style={{ width: `${Math.max(0, Math.min(100, group.usedPct))}%` }}
+                  />
+                </div>
+                {groupResetHint ? (
+                  <p className="mt-1.5 text-xs text-faint">
+                    <time
+                      dateTime={groupResetHint.dateTime}
+                      title={groupResetHint.title}
+                      aria-label={`${groupResetHint.label}，${groupResetHint.title}`}
+                    >
+                      {groupResetHint.label}
+                    </time>
                   </p>
                 ) : null}
-              </>
-            ) : (
-              <>
-                <p>
-                  {primarySource === "official"
-                    ? "燃烧"
-                    : primarySource === "official-stale"
-                      ? "快照燃烧"
-                      : "估算燃烧"}{" "}
-                  {meter.burnPctPerHour.toFixed(1)}
-                  <span className="text-faint"> %/时</span>
-                </p>
-                <p className="mt-1">
-                  {meter.etaMs != null && meter.etaMs < 6 * 60 * 60 * 1000
-                    ? `预计 ${formatDuration(meter.etaMs)} 耗尽`
-                    : "当前速率可撑过本窗"}
-                </p>
-              </>
-            )}
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="text-xs text-mute">
+              {minimalMode ? (weeklyView ? "本周剩余" : `${windowLabel}剩余`) : primaryRemainingLabel}
+            </p>
+            <p
+              data-testid={
+                officialOnly
+                  ? `quota-${meter.agent}-primary-remaining`
+                  : minimalMode
+                    ? `quota-${meter.agent}-${weeklyView ? "week" : "window"}-remaining`
+                    : undefined
+              }
+              aria-label={
+                minimalMode
+                  ? officialUnavailable
+                    ? "暂无官方余量"
+                    : `${weeklyView ? "本周" : windowLabel}剩余 ${remain.toFixed(0)}%，${statusCopy[minimalStatus]}`
+                  : undefined
+              }
+              className={cn(
+                "mt-1 font-mono leading-none font-medium tracking-tight tabular",
+                minimalMode ? "text-3xl" : "text-4xl",
+                minimalMode && minimalStatus === "ok" && "text-ok",
+                minimalMode && minimalStatus === "watch" && "text-warn",
+                minimalMode && minimalStatus === "critical" && "text-crit",
+              )}
+            >
+              {officialUnavailable ? "—" : remain.toFixed(0)}
+              {!officialUnavailable ? <span className="ml-1 text-lg text-mute">%</span> : null}
+            </p>
           </div>
-        ) : null}
-      </div>
+          {!minimalMode && !officialUnavailable ? (
+            <div className="text-right text-xs text-mute">
+              {weeklyView ? (
+                <>
+                  <p>
+                    {primaryUsedLabel} {meter.weekPct.toFixed(meter.weekPct >= 10 ? 0 : 1)}
+                    <span className="text-faint"> %</span>
+                  </p>
+                  {!officialOnly ? (
+                    <p className="mt-1">
+                      {meter.agent !== "codex" ? "API 等价按公开价折算" : "credit 按公开价等价折算"}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <p>
+                    {primarySource === "official"
+                      ? "燃烧"
+                      : primarySource === "official-stale"
+                        ? "快照燃烧"
+                        : "估算燃烧"}{" "}
+                    {meter.burnPctPerHour.toFixed(1)}
+                    <span className="text-faint"> %/时</span>
+                  </p>
+                  <p className="mt-1">
+                    {meter.etaMs != null && meter.etaMs < 6 * 60 * 60 * 1000
+                      ? `预计 ${formatDuration(meter.etaMs)} 耗尽`
+                      : "当前速率可撑过本窗"}
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {!minimalMode && displayedSourceMessage ? (
         <p className="mt-4 rounded-xl bg-raised px-3 py-2 text-xs leading-relaxed text-mute">
@@ -358,31 +426,33 @@ export function AgentCard({
             暂未读取到官方额度
           </p>
         ) : minimalMode ? (
-          <div>
-            <MeterBar
-              value={primaryPct}
-              tone={
-                minimalStatus === "critical"
-                  ? "crit"
-                  : minimalStatus === "watch"
-                    ? "warn"
-                    : "ok"
-              }
-              label={weeklyView ? "本周额度" : windowLabel}
-            />
-            {primaryResetHint ? (
-              <p className="mt-1.5 text-xs text-faint">
-                <time
-                  data-testid={`quota-${meter.agent}-${weeklyView ? "week" : "window"}-reset`}
-                  dateTime={primaryResetHint.dateTime}
-                  title={primaryResetHint.title}
-                  aria-label={`${primaryResetHint.label}，${primaryResetHint.title}`}
-                >
-                  {primaryResetHint.label}
-                </time>
-              </p>
-            ) : null}
-          </div>
+          splitAntigravityMinimal ? null : (
+            <div>
+              <MeterBar
+                value={primaryPct}
+                tone={
+                  minimalStatus === "critical"
+                    ? "crit"
+                    : minimalStatus === "watch"
+                      ? "warn"
+                      : "ok"
+                }
+                label={weeklyView ? "本周额度" : windowLabel}
+              />
+              {primaryResetHint ? (
+                <p className="mt-1.5 text-xs text-faint">
+                  <time
+                    data-testid={`quota-${meter.agent}-${weeklyView ? "week" : "window"}-reset`}
+                    dateTime={primaryResetHint.dateTime}
+                    title={primaryResetHint.title}
+                    aria-label={`${primaryResetHint.label}，${primaryResetHint.title}`}
+                  >
+                    {primaryResetHint.label}
+                  </time>
+                </p>
+              ) : null}
+            </div>
+          )
         ) : officialOnly ? (
           <>
             <MeterBar
