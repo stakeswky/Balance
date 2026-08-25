@@ -1253,3 +1253,84 @@ test("officialFilesMtime watches every Antigravity credential fallback", () => {
     assert.equal(officialFilesMtime(home), statSync(path).mtimeMs);
   }
 });
+
+test("readOfficialQuota refreshes all four providers in parallel", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const codexHome = join(home, ".codex");
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(
+    join(codexHome, "auth.json"),
+    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "codex-token", account_id: "acct-1" } }),
+  );
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+
+  let startedCount = 0;
+  let barrierResolve: (() => void) | null = null;
+  const barrier = new Promise<void>((resolve) => {
+    barrierResolve = resolve;
+  });
+  const registerStart = () => {
+    startedCount += 1;
+    if (startedCount >= 4) barrierResolve?.();
+  };
+
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url === CLAUDE_USAGE_URL) {
+      registerStart();
+      await barrier;
+      return new Response(JSON.stringify({
+        five_hour: { utilization: 24, resets_at: "2026-08-25T15:00:00Z" },
+        seven_day: { utilization: 34, resets_at: "2026-09-01T10:00:00Z" },
+      }), { status: 200 });
+    }
+    if (url === GROK_BILLING_URL) {
+      registerStart();
+      await barrier;
+      return new Response(JSON.stringify(LIVE), { status: 200 });
+    }
+    if (url === CODEX_USAGE_URL) {
+      registerStart();
+      await barrier;
+      return new Response(JSON.stringify({
+        plan_type: "pro",
+        rate_limit: {
+          primary_window: { used_percent: 57, limit_window_seconds: 604800, reset_at: 1787209839 },
+          secondary_window: null,
+        },
+      }), { status: 200 });
+    }
+    return new Response("unknown", { status: 404 });
+  };
+
+  const result = await Promise.race([
+    readOfficialQuota({
+      home,
+      grokHome,
+      codexHome,
+      now,
+      snapshotPath,
+      fetchImpl,
+      skipCache: true,
+      readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+      readAntigravityIdentity: async () => "agy-session-a",
+      readAntigravity: async () => {
+        registerStart();
+        await barrier;
+        return { slice: antigravity, identity: "agy-session-a" };
+      },
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("parallel barrier deadlock: only " + startedCount + " of 4 providers started")), 2000),
+    ),
+  ]);
+
+  assert.equal(result.claude?.windowPct, 24);
+  assert.equal(result.grok?.weekPct, 15);
+  assert.equal(result.codex?.weekPct, 57);
+  assert.deepEqual(result.antigravity, antigravity);
+});
