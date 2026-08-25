@@ -574,14 +574,42 @@ test("Antigravity quota summary keeps four official pools and selects the tighte
   assert.equal(parsed.weekPct, 62);
   assert.equal(parsed.weekResetsAt, Date.parse("2026-08-30T08:00:00Z"));
   assert.deepEqual(
-    parsed.quotaPools?.map((pool) => [pool.id, pool.label, pool.usagePercent]),
+    parsed.quotaPools?.map((pool) => [
+      pool.id,
+      pool.label,
+      pool.quotaGroup,
+      pool.quotaWindow,
+      pool.usagePercent,
+    ]),
     [
-      ["gemini-weekly", "Gemini Models · 每周", 28],
-      ["gemini-5h", "Gemini Models · 5 小时", 55],
-      ["3p-weekly", "Claude and GPT models · 每周", 62],
-      ["3p-5h", "Claude and GPT models · 5 小时", 20],
+      ["gemini-weekly", "Gemini Models · 每周", "gemini", "weekly", 28],
+      ["gemini-5h", "Gemini Models · 5 小时", "gemini", "five_hour", 55],
+      ["3p-weekly", "Claude and GPT models · 每周", "claude-gpt", "weekly", 62],
+      ["3p-5h", "Claude and GPT models · 5 小时", "claude-gpt", "five_hour", 20],
     ],
   );
+});
+
+test("Antigravity quota groups do not depend on remote bucket ids", () => {
+  const parsed = parseAntigravityQuotaSummary({
+    groups: [{
+      displayName: "Gemini Models",
+      buckets: [{
+        bucketId: "server-renamed-this-id",
+        window: "weekly",
+        remainingFraction: 0.75,
+      }],
+    }],
+  }, { fetchedAt: 100 });
+  assert.deepEqual(parsed?.quotaPools?.map((pool) => ({
+    id: pool.id,
+    quotaGroup: pool.quotaGroup,
+    quotaWindow: pool.quotaWindow,
+  })), [{
+    id: "server-renamed-this-id",
+    quotaGroup: "gemini",
+    quotaWindow: "weekly",
+  }]);
 });
 
 test("Antigravity quota parser clamps remaining fractions and ignores malformed buckets", () => {

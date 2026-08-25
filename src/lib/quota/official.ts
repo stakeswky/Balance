@@ -11,11 +11,14 @@ export interface OfficialModelWeekLimit {
 }
 
 export type OfficialModelWeekLimits = Partial<Record<ModelId, OfficialModelWeekLimit>>;
+export type AntigravityQuotaGroup = "gemini" | "claude-gpt";
 
 export interface OfficialQuotaPool {
   id: string;
   label?: string;
   kind: "model-week" | "extra-usage" | "product-share" | "quota-window";
+  quotaGroup?: AntigravityQuotaGroup;
+  quotaWindow?: "five_hour" | "weekly";
   usagePercent: number | null;
   startsAt: number | null;
   resetsAt: number | null;
@@ -129,11 +132,18 @@ interface ParsedAntigravityBucket {
   pool: OfficialQuotaPool;
 }
 
-function antigravityGroupName(raw: unknown): "Gemini Models" | "Claude and GPT models" | null {
+interface AntigravityGroup {
+  id: AntigravityQuotaGroup;
+  label: "Gemini Models" | "Claude and GPT models";
+}
+
+function antigravityGroup(raw: unknown): AntigravityGroup | null {
   if (typeof raw !== "string") return null;
   const name = raw.trim().toLowerCase();
-  if (name === "gemini models") return "Gemini Models";
-  if (name === "claude and gpt models") return "Claude and GPT models";
+  if (name === "gemini models") return { id: "gemini", label: "Gemini Models" };
+  if (name === "claude and gpt models") {
+    return { id: "claude-gpt", label: "Claude and GPT models" };
+  }
   return null;
 }
 
@@ -153,7 +163,7 @@ function antigravityWindowKind(raw: Record<string, unknown>): AntigravityWindowK
 
 function antigravityPool(
   raw: unknown,
-  groupName: string,
+  group: AntigravityGroup,
   fetchedAt: number,
 ): ParsedAntigravityBucket | null {
   const bucket = record(raw);
@@ -163,7 +173,7 @@ function antigravityPool(
   if (!kind || remaining == null) return null;
   const durationMs = kind === "weekly" ? ANTIGRAVITY_WEEK_MS : ANTIGRAVITY_FIVE_HOUR_MS;
   const resetsAt = timestampMs(bucket.resetTime);
-  const fallbackId = `${groupName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${kind}`;
+  const fallbackId = `${group.label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${kind}`;
   const id = typeof bucket.bucketId === "string" && bucket.bucketId.trim()
     ? bucket.bucketId.trim()
     : fallbackId;
@@ -174,8 +184,10 @@ function antigravityPool(
     kind,
     pool: {
       id,
-      label: `${groupName} · ${kind === "weekly" ? "每周" : "5 小时"}`,
+      label: `${group.label} · ${kind === "weekly" ? "每周" : "5 小时"}`,
       kind: "quota-window",
+      quotaGroup: group.id,
+      quotaWindow: kind,
       usagePercent,
       startsAt: resetsAt == null ? null : resetsAt - durationMs,
       resetsAt,
@@ -200,10 +212,10 @@ export function parseAntigravityQuotaSummary(
   for (const groupRaw of groups) {
     const group = record(groupRaw);
     if (!group || !Array.isArray(group.buckets)) continue;
-    const groupName = antigravityGroupName(group.displayName);
-    if (!groupName) continue;
+    const quotaGroup = antigravityGroup(group.displayName);
+    if (!quotaGroup) continue;
     for (const bucket of group.buckets) {
-      const value = antigravityPool(bucket, groupName, fetchedAt);
+      const value = antigravityPool(bucket, quotaGroup, fetchedAt);
       if (value) parsed.push(value);
     }
   }
