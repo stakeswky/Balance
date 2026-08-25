@@ -218,7 +218,7 @@ test("cross-site top-level GET navigation has no quota RPC exception", async () 
 test("all local quota RPC handlers invoke the zero-arg request guard", async () => {
   const source = await readFile(new URL("./watch.ts", import.meta.url), "utf8");
   const calls = source.match(/assertQuotaRequestAllowed\(\)/g) ?? [];
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 9);
 });
 
 test("xForwardedFor:true is never used in local-request.server.ts code", async () => {

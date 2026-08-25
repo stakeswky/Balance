@@ -43,7 +43,11 @@ import { useQuota } from "@/lib/quota/store";
 import { isUsageAgentId, type AgentId, type MeterSnapshot } from "@/lib/quota/types";
 import { useTheme } from "@/lib/theme";
 import { AGENT_LABEL } from "@/lib/quota/agent";
+import type { AntigravityUsageScanResult } from "@/lib/quota/antigravity-usage";
+import { pollAntigravityUsage } from "@/lib/quota/antigravity-usage-poll";
+import { WEEK_MS } from "@/lib/quota/types";
 import {
+  pullAntigravityUsage,
   pullClaudeUsage,
   pullCodexUsage,
   pullGrokUsage,
@@ -71,6 +75,9 @@ export function Dashboard() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [officialLoadState, setOfficialLoadState] = useState<OfficialLoadState>("loading");
   const historyLoaded = useRef(false);
+  const [antigravityUsage, setAntigravityUsage] = useState<AntigravityUsageScanResult | null>(null);
+  const lastAntigravityUsagePull = useRef<number | null>(null);
+  const antigravityUsageSnapshot = useRef<AntigravityUsageScanResult | null>(null);
 
   const events = useQuota((s) => s.events);
   const realEvents = useQuota((s) => s.realEvents);
@@ -301,6 +308,19 @@ export function Dashboard() {
       inFlight = true;
       try {
         await pullOfficial();
+        const antigravityPullNow = Date.now();
+        const antigravityPoll = await pollAntigravityUsage({
+          available: state.agentAvailability.antigravity,
+          now: antigravityPullNow,
+          since: antigravityPullNow - WEEK_MS,
+          lastPulledAt: lastAntigravityUsagePull.current,
+          previous: antigravityUsageSnapshot.current,
+          pull: pullAntigravityUsage,
+        });
+        lastAntigravityUsagePull.current = antigravityPoll.lastPulledAt;
+        if (cancelled) return;
+        antigravityUsageSnapshot.current = antigravityPoll.snapshot;
+        setAntigravityUsage(antigravityPoll.snapshot);
         let added = 0;
         if (state.liveClaude) {
           const res = await pullClaudeUsage({ data: { since: state.claudeCursor } });
@@ -824,6 +844,8 @@ export function Dashboard() {
                   quotaNote={official.antigravity ? "Google 官方 quota summary" : undefined}
                   quotaPools={antigravityPoolViews}
                   weekResetsAt={official.antigravity?.weekResetsAt ?? null}
+                  antigravityUsageEvents={antigravityUsage?.events ?? []}
+                  antigravityUsageTruncated={antigravityUsage?.truncated ?? false}
                   events={[]}
                   now={now}
                 />

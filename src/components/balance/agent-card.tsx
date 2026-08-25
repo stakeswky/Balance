@@ -12,6 +12,7 @@ import {
 } from "@/components/balance/format";
 import { MeterBar } from "@/components/balance/meter-bar";
 import { agentFillClass } from "@/lib/quota/agent";
+import type { AntigravityUsageEvent } from "@/lib/quota/antigravity-usage";
 import {
   inWindow,
   modelShares,
@@ -92,6 +93,8 @@ export function AgentCard({
   weekValue,
   windowValue,
   weekResetsAt,
+  antigravityUsageEvents: _antigravityUsageEvents,
+  antigravityUsageTruncated: _antigravityUsageTruncated,
   events,
   now,
   onToggle,
@@ -115,6 +118,8 @@ export function AgentCard({
   weekValue?: QuotaValue;
   windowValue?: QuotaValue;
   weekResetsAt?: number | null;
+  antigravityUsageEvents?: AntigravityUsageEvent[];
+  antigravityUsageTruncated?: boolean;
   events: UsageEvent[];
   now: number;
   onToggle?: () => void;

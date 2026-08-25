@@ -7,6 +7,7 @@ import { detectAgentAvailability } from "./agent-availability.server";
 import { scanClaudeUsage } from "./claude-log.server";
 import { scanCodexUsage } from "./codex-log.server";
 import { scanGrokUsage } from "./grok-log.server";
+import { scanAntigravityUsage } from "./antigravity-usage.server";
 import { assertQuotaRequestAllowed } from "./local-request.server.ts";
 import {
   quotaResumeCursors,
@@ -92,6 +93,13 @@ export const pullCodexUsage = createServerFn({ method: "POST" })
       ...response
     } = scanned;
     return response;
+  });
+
+export const pullAntigravityUsage = createServerFn({ method: "POST" })
+  .validator((data: unknown) => inputSchema.parse(data))
+  .handler(({ data }) => {
+    assertQuotaRequestAllowed();
+    return scanAntigravityUsage(data.since);
   });
 
 export const pullOfficialQuota = createServerFn({ method: "GET" }).handler(async () => {
