@@ -3,7 +3,7 @@ import {
   type MeterDataSource,
   type MeterDataSources,
 } from "./engine.ts";
-import type { OfficialQuotaPool } from "./official.ts";
+import type { AntigravityQuotaGroup, OfficialQuotaPool } from "./official.ts";
 import type { ProductQuotaValue, QuotaValue } from "./quota-value.ts";
 import type { AgentId, MeterSnapshot } from "./types.ts";
 
@@ -192,6 +192,45 @@ export function officialPrimaryMeterWindow(
     meter,
     freshKinds.length ? freshKinds : kindsFor("official-stale"),
   );
+}
+
+export interface AntigravityQuotaGroupSummary {
+  group: AntigravityQuotaGroup;
+  label: "Gemini 模型" | "Claude / GPT 模型";
+  kind: PrimaryWindowKind;
+  usedPct: number;
+  resetsAt: number | null;
+  stale: boolean;
+}
+
+const ANTIGRAVITY_GROUPS = [
+  { group: "gemini", label: "Gemini 模型" },
+  { group: "claude-gpt", label: "Claude / GPT 模型" },
+] as const;
+
+export function antigravityQuotaGroupSummaries(
+  pools: readonly OfficialQuotaPool[],
+): AntigravityQuotaGroupSummary[] {
+  return ANTIGRAVITY_GROUPS.flatMap(({ group, label }) => {
+    const candidates = pools.filter((pool) =>
+      pool.quotaGroup === group
+      && pool.quotaWindow != null
+      && pool.usagePercent != null
+      && Number.isFinite(pool.usagePercent),
+    );
+    const fresh = candidates.filter((pool) => !pool.stale);
+    const selected = [...(fresh.length ? fresh : candidates)]
+      .sort((left, right) => (right.usagePercent ?? -1) - (left.usagePercent ?? -1))[0];
+    if (!selected || !selected.quotaWindow || selected.usagePercent == null) return [];
+    return [{
+      group,
+      label,
+      kind: selected.quotaWindow,
+      usedPct: selected.usagePercent,
+      resetsAt: selected.resetsAt,
+      stale: Boolean(selected.stale),
+    }];
+  });
 }
 
 export function effectiveQuotaStatus(

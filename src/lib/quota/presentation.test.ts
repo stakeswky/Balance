@@ -4,6 +4,7 @@ import { applyOfficial, routingAdvice } from "./engine.ts";
 import { AGENT_LABEL } from "./agent.ts";
 import type { OfficialSlice } from "./official.ts";
 import {
+  antigravityQuotaGroupSummaries,
   apiEquivalentSections,
   displayWeekTokens,
   effectiveQuotaStatus,
@@ -294,6 +295,59 @@ test("official primary prefers fresh data before comparing stale snapshots", () 
     ),
     null,
   );
+});
+
+test("Antigravity groups independently select their tightest fresh window", () => {
+  const pool = (
+    id: string,
+    quotaGroup: "gemini" | "claude-gpt",
+    quotaWindow: "five_hour" | "weekly",
+    usagePercent: number,
+    stale = false,
+  ) => ({
+    id,
+    kind: "quota-window" as const,
+    quotaGroup,
+    quotaWindow,
+    usagePercent,
+    startsAt: null,
+    resetsAt: usagePercent,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt: 1,
+    stale,
+  });
+  assert.deepEqual(antigravityQuotaGroupSummaries([
+    pool("gemini-week", "gemini", "weekly", 28),
+    pool("gemini-window", "gemini", "five_hour", 55),
+    pool("other-week", "claude-gpt", "weekly", 62),
+    pool("other-window", "claude-gpt", "five_hour", 20),
+  ]), [
+    { group: "gemini", label: "Gemini 模型", kind: "five_hour", usedPct: 55, resetsAt: 55, stale: false },
+    { group: "claude-gpt", label: "Claude / GPT 模型", kind: "weekly", usedPct: 62, resetsAt: 62, stale: false },
+  ]);
+});
+
+test("Antigravity groups prefer fresh windows and fall back to stale snapshots", () => {
+  const base = {
+    kind: "quota-window" as const,
+    startsAt: null,
+    durationMs: null,
+    models: [],
+    exactUsedUsd: null,
+    exactLimitUsd: null,
+    fetchedAt: 1,
+  };
+  assert.deepEqual(antigravityQuotaGroupSummaries([
+    { ...base, id: "fresh", quotaGroup: "gemini", quotaWindow: "weekly", usagePercent: 20, resetsAt: 20, stale: false },
+    { ...base, id: "stale", quotaGroup: "gemini", quotaWindow: "five_hour", usagePercent: 90, resetsAt: 90, stale: true },
+    { ...base, id: "other-stale", quotaGroup: "claude-gpt", quotaWindow: "weekly", usagePercent: 70, resetsAt: 70, stale: true },
+  ]), [
+    { group: "gemini", label: "Gemini 模型", kind: "weekly", usedPct: 20, resetsAt: 20, stale: false },
+    { group: "claude-gpt", label: "Claude / GPT 模型", kind: "weekly", usedPct: 70, resetsAt: 70, stale: true },
+  ]);
 });
 
 test("Antigravity has stable labels and routing advice never calls it Codex", () => {
