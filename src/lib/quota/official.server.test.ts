@@ -28,7 +28,7 @@ import { parseAntigravityQuotaSummary } from "./official.ts";
 const readOfficialQuota: typeof readOfficialQuotaImpl = (options) => readOfficialQuotaImpl({
   ...options,
   readAntigravityIdentity: options?.readAntigravityIdentity ?? (async () => null),
-  readAntigravity: options?.readAntigravity ?? (async () => null),
+  readAntigravity: options?.readAntigravity ?? (async () => ({ slice: null, identity: null })),
 });
 
 function fixtureHome() {
@@ -1041,7 +1041,7 @@ test("readOfficialQuota returns Antigravity without blocking existing providers"
     fetchImpl: async () => new Response("nope", { status: 401 }),
     readClaudeAuth: async () => null,
     readAntigravityIdentity: async () => "agy-session-a",
-    readAntigravity: async () => antigravity,
+    readAntigravity: async () => ({ slice: antigravity, identity: "agy-session-a" }),
   });
 
   assert.deepEqual(quota.antigravity, antigravity);
@@ -1065,7 +1065,7 @@ test("readOfficialQuota reuses the fresh Antigravity cache", async () => {
     readAntigravityIdentity: async () => "agy-session-a",
     readAntigravity: async () => {
       reads += 1;
-      return antigravity;
+      return { slice: antigravity, identity: "agy-session-a" };
     },
   });
 
@@ -1091,7 +1091,9 @@ test("readOfficialQuota marks same-session Antigravity fallback stale", async ()
     readAntigravityIdentity: async () => "agy-session-a",
     readAntigravity: async () => {
       reads += 1;
-      return reads === 1 ? antigravity : null;
+      return reads === 1
+        ? { slice: antigravity, identity: "agy-session-a" }
+        : { slice: null, identity: "agy-session-a" };
     },
   });
 
@@ -1101,15 +1103,19 @@ test("readOfficialQuota marks same-session Antigravity fallback stale", async ()
   assert.equal(reads, 2);
 });
 
-test("readOfficialQuota discards Antigravity data when identity changes during refresh", async () => {
+test("readOfficialQuota keeps Antigravity data when identity changes during fetch", async () => {
   clearOfficialCache();
   const home = mkdtempSync(join(tmpdir(), "balance-antigravity-switch-"));
   const now = Date.parse("2026-08-25T10:00:00Z");
   const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
   assert.ok(antigravity);
-  const identities = ["agy-session-a", "agy-session-a", "agy-session-a", "agy-session-b", "agy-session-b", "agy-session-b"];
+  const identities = [
+    "agy-session-a",       // pre-check call 1
+    "agy-session-a",       // pre-check call 2 (second readOfficialQuota)
+    "agy-session-a",       // pre-check call 3 (third readOfficialQuota)
+  ];
   let reads = 0;
-  const readAt = (at: number) => readOfficialQuota({
+  const readAt = (at: number, returnedIdentity: string) => readOfficialQuota({
     home,
     grokHome: join(home, ".grok-missing"),
     codexHome: join(home, ".codex-missing"),
@@ -1119,13 +1125,16 @@ test("readOfficialQuota discards Antigravity data when identity changes during r
     readAntigravityIdentity: async () => identities.shift() ?? null,
     readAntigravity: async () => {
       reads += 1;
-      return antigravity;
+      return { slice: antigravity, identity: returnedIdentity };
     },
   });
 
-  assert.deepEqual((await readAt(now)).antigravity, antigravity);
-  assert.equal((await readAt(now + 31_000)).antigravity, null);
-  assert.deepEqual((await readAt(now + 62_000)).antigravity, antigravity);
+  // First call: pre-check identity=A, fetch returns identity=A. Stored.
+  assert.deepEqual((await readAt(now, "agy-session-a")).antigravity, antigravity);
+  // Second call: pre-check identity=A, fetch returns identity=B. Should KEEP data.
+  assert.deepEqual((await readAt(now + 31_000, "agy-session-b")).antigravity, antigravity);
+  // Third call: pre-check identity=A, fetch returns identity=A again.
+  assert.deepEqual((await readAt(now + 62_000, "agy-session-a")).antigravity, antigravity);
   assert.equal(reads, 3);
 });
 
@@ -1174,14 +1183,60 @@ test("readOfficialQuota refreshes Antigravity when only its cache is missing", a
     readAntigravityIdentity: async () => identity,
     readAntigravity: async () => {
       reads += 1;
-      return antigravity;
+      return { slice: antigravity, identity: identity ?? "agy-session-a" };
     },
   });
 
-  assert.equal((await readAt(now)).antigravity, null);
+  // When pre-check identity is null, readAntigravity still returns data with
+  // an identity. The returned identity is used to cache the result.
+  assert.deepEqual((await readAt(now)).antigravity, antigravity);
   identity = "agy-session-a";
+  // Cache hit under the identity key set during the first call.
   assert.deepEqual((await readAt(now + 5_000)).antigravity, antigravity);
-  assert.equal(reads, 2);
+  assert.equal(reads, 1);
+});
+
+test("readOfficialQuota keeps Antigravity data when identity changes during token refresh", async () => {
+  clearOfficialCache();
+  const home = mkdtempSync(join(tmpdir(), "balance-antigravity-keep-"));
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+  const identities = ["agy-session-a", "agy-session-b"];
+  let reads = 0;
+  const quota = await readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now,
+    skipCache: true,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => identities.shift() ?? null,
+    readAntigravity: async () => {
+      reads += 1;
+      return { slice: antigravity, identity: "agy-session-b" };
+    },
+  });
+
+  assert.deepEqual(quota.antigravity, antigravity);
+  assert.equal(reads, 1);
+
+  // Second call within cache window should hit cache under the new key.
+  const cached = await readOfficialQuota({
+    home,
+    grokHome: join(home, ".grok-missing"),
+    codexHome: join(home, ".codex-missing"),
+    now: now + 5_000,
+    cacheMs: 30_000,
+    readClaudeAuth: async () => null,
+    readAntigravityIdentity: async () => "agy-session-b",
+    readAntigravity: async () => {
+      reads += 1;
+      return { slice: antigravity, identity: "agy-session-b" };
+    },
+  });
+  assert.deepEqual(cached.antigravity, antigravity);
+  assert.equal(reads, 1);
 });
 
 test("officialFilesMtime watches every Antigravity credential fallback", () => {
@@ -1197,4 +1252,85 @@ test("officialFilesMtime watches every Antigravity credential fallback", () => {
     writeFileSync(path, "fixture");
     assert.equal(officialFilesMtime(home), statSync(path).mtimeMs);
   }
+});
+
+test("readOfficialQuota refreshes all four providers in parallel", async () => {
+  clearOfficialCache();
+  const { home, grokHome } = fixtureHome();
+  const codexHome = join(home, ".codex");
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(
+    join(codexHome, "auth.json"),
+    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "codex-token", account_id: "acct-1" } }),
+  );
+  const now = Date.parse("2026-08-25T10:00:00Z");
+  const snapshotPath = join(home, "state", "official-quota.json");
+  const antigravity = parseAntigravityQuotaSummary(ANTIGRAVITY_SUMMARY_FIXTURE, { fetchedAt: now });
+  assert.ok(antigravity);
+
+  let startedCount = 0;
+  let barrierResolve: (() => void) | null = null;
+  const barrier = new Promise<void>((resolve) => {
+    barrierResolve = resolve;
+  });
+  const registerStart = () => {
+    startedCount += 1;
+    if (startedCount >= 4) barrierResolve?.();
+  };
+
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url === CLAUDE_USAGE_URL) {
+      registerStart();
+      await barrier;
+      return new Response(JSON.stringify({
+        five_hour: { utilization: 24, resets_at: "2026-08-25T15:00:00Z" },
+        seven_day: { utilization: 34, resets_at: "2026-09-01T10:00:00Z" },
+      }), { status: 200 });
+    }
+    if (url === GROK_BILLING_URL) {
+      registerStart();
+      await barrier;
+      return new Response(JSON.stringify(LIVE), { status: 200 });
+    }
+    if (url === CODEX_USAGE_URL) {
+      registerStart();
+      await barrier;
+      return new Response(JSON.stringify({
+        plan_type: "pro",
+        rate_limit: {
+          primary_window: { used_percent: 57, limit_window_seconds: 604800, reset_at: 1787209839 },
+          secondary_window: null,
+        },
+      }), { status: 200 });
+    }
+    return new Response("unknown", { status: 404 });
+  };
+
+  const result = await Promise.race([
+    readOfficialQuota({
+      home,
+      grokHome,
+      codexHome,
+      now,
+      snapshotPath,
+      fetchImpl,
+      skipCache: true,
+      readClaudeAuth: async () => ({ accessToken: "claude-token" }),
+      readAntigravityIdentity: async () => "agy-session-a",
+      readAntigravity: async () => {
+        registerStart();
+        await barrier;
+        return { slice: antigravity, identity: "agy-session-a" };
+      },
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("parallel barrier deadlock: only " + startedCount + " of 4 providers started")), 2000),
+    ),
+  ]);
+
+  assert.equal(result.claude?.windowPct, 24);
+  assert.equal(result.grok?.weekPct, 15);
+  assert.equal(result.codex?.weekPct, 57);
+  assert.deepEqual(result.antigravity, antigravity);
 });

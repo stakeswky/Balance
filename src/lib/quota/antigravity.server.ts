@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -9,8 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
-import { promisify } from "node:util";
+import { basename, delimiter, join } from "node:path";
 import { parseAntigravityQuotaSummary, type OfficialSlice } from "./official.ts";
 
 export const ANTIGRAVITY_QUOTA_URL =
@@ -34,11 +33,66 @@ export type ExecFileText = (
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 type ReadCredential = () => Promise<AntigravityCredential | null>;
 
-const execFileAsync = promisify(execFile);
-const defaultExecFile: ExecFileText = async (file, args, options) => {
-  const result = await execFileAsync(file, args, options);
-  return { stdout: String(result.stdout) };
-};
+export const defaultSpawnExecFile: ExecFileText = (file, args, options) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let killed = false;
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill();
+      reject(new Error(`spawn timeout: ${basename(file)} ${args.join(" ")}`));
+    }, options.timeout);
+
+    child.stdout.setEncoding(options.encoding);
+    child.stderr.setEncoding(options.encoding);
+
+    child.stdout.on("data", (chunk: string) => {
+      if (killed) return;
+      stdoutBytes += Buffer.byteLength(chunk, options.encoding);
+      if (stdoutBytes > options.maxBuffer) {
+        killed = true;
+        child.kill();
+        clearTimeout(timer);
+        reject(new Error(`stdout maxBuffer exceeded: ${basename(file)}`));
+        return;
+      }
+      stdout += chunk;
+    });
+
+    child.stderr.on("data", (chunk: string) => {
+      stderrBytes += Buffer.byteLength(chunk, options.encoding);
+      if (stderrBytes > options.maxBuffer) {
+        killed = true;
+        child.kill();
+        clearTimeout(timer);
+        reject(new Error(`stderr maxBuffer exceeded: ${basename(file)}`));
+        return;
+      }
+    });
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      if (!killed) reject(error);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (killed) return;
+      if (code !== 0) {
+        reject(new Error(`${basename(file)} exited with code ${code}`));
+        return;
+      }
+      resolve({ stdout });
+    });
+  });
+
+const defaultExecFile: ExecFileText = defaultSpawnExecFile;
 
 function credentialFromUnknown(raw: unknown): AntigravityCredential | null {
   if (!raw || typeof raw !== "object") return null;
@@ -276,6 +330,13 @@ async function safelyReadCredential(readCredential: ReadCredential): Promise<Ant
   }
 }
 
+const CLI_REFRESH_COOLDOWN_MS = 5 * 60_000;
+const cliRefreshBackoff = new Map<string, number>();
+
+export function resetAntigravityCliRefreshBackoffForTests(): void {
+  cliRefreshBackoff.clear();
+}
+
 export async function readAntigravityQuota(options: {
   home?: string;
   platform?: NodeJS.Platform;
@@ -286,12 +347,18 @@ export async function readAntigravityQuota(options: {
   execFileImpl?: ExecFileText;
   readCredential?: ReadCredential;
   now?: number;
-} = {}): Promise<OfficialSlice | null> {
+} = {}): Promise<{ slice: OfficialSlice | null; identity: string | null }> {
   const home = options.home ?? homedir();
   const platform = options.platform ?? process.platform;
   const execFileImpl = options.execFileImpl ?? defaultExecFile;
   const agyPath = options.agyPath ?? findAgyExecutable({ home, platform, env: options.env });
-  if (!agyPath) return null;
+  if (!agyPath) return { slice: null, identity: null };
+  let canonicalAgyPath: string;
+  try {
+    canonicalAgyPath = realpathSync(agyPath);
+  } catch {
+    canonicalAgyPath = agyPath;
+  }
   const readCredential = options.readCredential ?? (() =>
     readAntigravityCredential({ home, platform, execFileImpl }));
   let version: string;
@@ -302,14 +369,17 @@ export async function readAntigravityQuota(options: {
       maxBuffer: MAX_CREDENTIAL_BYTES,
     })).stdout;
   } catch {
-    return null;
+    return { slice: null, identity: null };
   }
   const userAgent = antigravityUserAgent(version, platform, options.arch ?? process.arch);
-  if (!userAgent) return null;
+  if (!userAgent) return { slice: null, identity: null };
   const now = options.now ?? Date.now();
   let cliRefreshCount = 0;
+  let lastUsedCredential: AntigravityCredential | null = null;
   const refreshByCli = async (): Promise<boolean> => {
     if (cliRefreshCount >= 1) return false;
+    const lastFailure = cliRefreshBackoff.get(canonicalAgyPath);
+    if (lastFailure != null && now - lastFailure < CLI_REFRESH_COOLDOWN_MS) return false;
     cliRefreshCount += 1;
     try {
       await execFileImpl(agyPath, ["models"], {
@@ -319,28 +389,46 @@ export async function readAntigravityQuota(options: {
       });
       return true;
     } catch {
+      cliRefreshBackoff.set(canonicalAgyPath, now);
       return false;
     }
   };
+  const computeIdentity = (): string | null => {
+    if (!lastUsedCredential) return null;
+    try {
+      return createHash("sha256")
+        .update(canonicalAgyPath)
+        .update("\0")
+        .update(lastUsedCredential.accessToken)
+        .digest("hex");
+    } catch {
+      return null;
+    }
+  };
   let credential = await safelyReadCredential(readCredential);
-  if (!credential) return null;
+  if (!credential) return { slice: null, identity: null };
   if (credential.expiresAt != null && credential.expiresAt <= now + 30_000) {
-    if (!await refreshByCli()) return null;
+    if (!await refreshByCli()) return { slice: null, identity: null };
     credential = await safelyReadCredential(readCredential);
-    if (!credential) return null;
+    if (!credential) return { slice: null, identity: null };
   }
+  lastUsedCredential = credential;
   const first = await fetchAntigravityQuota(credential, {
     fetchImpl: options.fetchImpl,
     now,
     userAgent,
   });
-  if (first.slice || first.status !== 401) return first.slice;
-  if (cliRefreshCount === 0 && !await refreshByCli()) return null;
+  if (first.slice || first.status !== 401) return { slice: first.slice, identity: computeIdentity() };
+  if (cliRefreshCount === 0 && !await refreshByCli()) return { slice: null, identity: null };
   const refreshed = await safelyReadCredential(readCredential);
-  if (!refreshed) return null;
-  return (await fetchAntigravityQuota(refreshed, {
-    fetchImpl: options.fetchImpl,
-    now,
-    userAgent,
-  })).slice;
+  if (!refreshed) return { slice: null, identity: null };
+  lastUsedCredential = refreshed;
+  return {
+    slice: (await fetchAntigravityQuota(refreshed, {
+      fetchImpl: options.fetchImpl,
+      now,
+      userAgent,
+    })).slice,
+    identity: computeIdentity(),
+  };
 }

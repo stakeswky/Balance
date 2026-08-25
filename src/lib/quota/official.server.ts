@@ -99,7 +99,7 @@ type ReadAntigravity = (options: {
   home?: string;
   fetchImpl?: FetchLike;
   now?: number;
-}) => Promise<OfficialSlice | null>;
+}) => Promise<{ slice: OfficialSlice | null; identity: string | null }>;
 type ExecFileText = (
   file: string,
   args: string[],
@@ -862,158 +862,204 @@ export async function readOfficialQuota(opts?: {
     };
   }
 
-  let claudeLive: OfficialSlice | null = claudeFresh
-    ? claudeHit?.lastAttemptFailed
-      ? staleOfficial(usableClaudeSlice(claudeHit, now))
-      : claudeHit?.slice ?? null
-    : null;
-  if (!claudeFresh) {
-    const observedUpdatedAt = claudeHit?.updatedAt ?? -1;
-    const refreshClaude = async (
-      base: ClaudeCacheEntry | undefined,
-      persist: boolean,
-    ): Promise<OfficialSlice | null> => {
-      if (base && now < base.nextAllowedAt) {
-        const stale = usableClaudeSlice(base, now);
-        claudeCache.set(home, {
-          ...base,
-          checkedAt: now,
-          loadedAt: stale ? base.loadedAt : 0,
-          slice: stale,
-        });
-        return staleOfficial(stale);
+  const [claudeLive, grokLive, codexLive, antigravityLive] = await Promise.all([
+    // Claude refresh
+    (async (): Promise<OfficialSlice | null> => {
+      if (claudeFresh) {
+        return claudeHit?.lastAttemptFailed
+          ? staleOfficial(usableClaudeSlice(claudeHit, now))
+          : claudeHit?.slice ?? null;
       }
-      const readAuth = opts?.readClaudeAuth ?? readClaudeOauthAuth;
-      const auth = await readAuth(home, now);
-      if (!auth) {
-        const stale = usableClaudeSlice(base, now);
-        if (base) {
-          claudeCache.set(home, {
-            ...base,
+      try {
+        const observedUpdatedAt = claudeHit?.updatedAt ?? -1;
+        const refreshClaude = async (
+          base: ClaudeCacheEntry | undefined,
+          persist: boolean,
+        ): Promise<OfficialSlice | null> => {
+          if (base && now < base.nextAllowedAt) {
+            const stale = usableClaudeSlice(base, now);
+            claudeCache.set(home, {
+              ...base,
+              checkedAt: now,
+              loadedAt: stale ? base.loadedAt : 0,
+              slice: stale,
+            });
+            return staleOfficial(stale);
+          }
+          const readAuth = opts?.readClaudeAuth ?? readClaudeOauthAuth;
+          const auth = await readAuth(home, now);
+          if (!auth) {
+            const stale = usableClaudeSlice(base, now);
+            if (base) {
+              claudeCache.set(home, {
+                ...base,
+                checkedAt: now,
+                loadedAt: stale ? base.loadedAt : 0,
+                slice: stale,
+              });
+            }
+            return staleOfficial(stale);
+          }
+          const result = await fetchClaudeUsageResult(auth, { fetchImpl: opts?.fetchImpl, now });
+          if (result.slice) {
+            const entry: ClaudeCacheEntry = {
+              checkedAt: now,
+              loadedAt: now,
+              slice: result.slice,
+              failureCount: 0,
+              nextAllowedAt: 0,
+              updatedAt: now,
+              lastAttemptFailed: false,
+            };
+            claudeCache.set(home, entry);
+            if (persist) writeClaudeSnapshot(snapshotPath, entry);
+            return result.slice;
+          }
+          const stale = usableClaudeSlice(base, now);
+          const failureCount = (base?.failureCount ?? 0) + 1;
+          const entry: ClaudeCacheEntry = {
             checkedAt: now,
-            loadedAt: stale ? base.loadedAt : 0,
+            loadedAt: stale ? (base?.loadedAt ?? 0) : 0,
             slice: stale,
-          });
-        }
-        return staleOfficial(stale);
-      }
-      const result = await fetchClaudeUsageResult(auth, { fetchImpl: opts?.fetchImpl, now });
-      if (result.slice) {
-        const entry: ClaudeCacheEntry = {
-          checkedAt: now,
-          loadedAt: now,
-          slice: result.slice,
-          failureCount: 0,
-          nextAllowedAt: 0,
-          updatedAt: now,
-          lastAttemptFailed: false,
+            failureCount,
+            nextAllowedAt: now + claudeBackoffMs(failureCount, result.retryAfterMs),
+            updatedAt: now,
+            lastAttemptFailed: true,
+          };
+          claudeCache.set(home, entry);
+          if (persist) writeClaudeSnapshot(snapshotPath, entry);
+          return staleOfficial(stale);
         };
-        claudeCache.set(home, entry);
-        if (persist) writeClaudeSnapshot(snapshotPath, entry);
-        return result.slice;
-      }
-      const stale = usableClaudeSlice(base, now);
-      const failureCount = (base?.failureCount ?? 0) + 1;
-      const entry: ClaudeCacheEntry = {
-        checkedAt: now,
-        loadedAt: stale ? (base?.loadedAt ?? 0) : 0,
-        slice: stale,
-        failureCount,
-        nextAllowedAt: now + claudeBackoffMs(failureCount, result.retryAfterMs),
-        updatedAt: now,
-        lastAttemptFailed: true,
-      };
-      claudeCache.set(home, entry);
-      if (persist) writeClaudeSnapshot(snapshotPath, entry);
-      return staleOfficial(stale);
-    };
 
-    const locked = await withClaudeSnapshotLock(snapshotPath, async () => {
-      const lockedHit = newestClaudeEntry(
-        claudeCache.get(home),
-        readClaudeSnapshot(snapshotPath),
-      );
-      if (
-        lockedHit
-        && lockedHit.updatedAt > observedUpdatedAt
-        && now - lockedHit.checkedAt < cacheMs
-      ) {
-        claudeCache.set(home, lockedHit);
-        return lockedHit.lastAttemptFailed
-          ? staleOfficial(usableClaudeSlice(lockedHit, now))
-          : lockedHit.slice;
-      }
-      return refreshClaude(lockedHit, true);
-    });
-    if (locked.state === "acquired") {
-      claudeLive = locked.value;
-    } else if (locked.state === "busy") {
-      const latest = newestClaudeEntry(
-        claudeCache.get(home),
-        readClaudeSnapshot(snapshotPath),
-      );
-      if (latest) claudeCache.set(home, latest);
-      claudeLive = staleOfficial(usableClaudeSlice(latest, now));
-    } else {
-      claudeLive = await refreshClaude(claudeHit, false);
-    }
-  }
-
-  let grokLive: OfficialSlice | null = grokFresh ? (grokHit?.slice ?? null) : null;
-  if (!grokFresh) {
-    const token = readGrokToken(grokHome);
-    if (token) grokLive = await fetchGrokBilling(token, { fetchImpl: opts?.fetchImpl, now });
-    grokCache.set(grokHome, { at: now, slice: grokLive });
-  }
-
-  let codexLive: OfficialSlice | null = codexFresh ? (codexHit?.slice ?? null) : null;
-  if (!codexFresh) {
-    const auth = readCodexToken(codexHome);
-    if (auth) codexLive = await fetchCodexUsage(auth, { fetchImpl: opts?.fetchImpl, now });
-    codexCache.set(codexHome, { at: now, slice: codexLive });
-  }
-
-  let antigravityLive: OfficialSlice | null = antigravityFresh
-    ? antigravityHit?.lastAttemptFailed
-      ? staleOfficial(antigravityHit.slice)
-      : antigravityHit?.slice ?? null
-    : null;
-  if (!antigravityFresh) {
-    let fetched: OfficialSlice | null = null;
-    try {
-      fetched = await readAntigravity({ home, fetchImpl: opts?.fetchImpl, now });
-    } catch {
-      fetched = null;
-    }
-    const keyAfterRefresh = await currentAntigravityKey();
-    if (!antigravityKey || keyAfterRefresh !== antigravityKey) {
-      if (antigravityKey) antigravityCache.delete(antigravityKey);
-      if (keyAfterRefresh) {
-        antigravityCacheKeyByHome.set(home, keyAfterRefresh);
-      } else if (antigravityCacheKeyByHome.get(home) === antigravityKey) {
-        antigravityCacheKeyByHome.delete(home);
-      }
-      antigravityKey = keyAfterRefresh;
-      antigravityLive = null;
-    } else if (fetched) {
-      antigravityCache.set(antigravityKey, {
-        checkedAt: now,
-        loadedAt: now,
-        slice: fetched,
-        lastAttemptFailed: false,
-      });
-      antigravityLive = fetched;
-    } else {
-      antigravityLive = staleOfficial(antigravityHit?.slice ?? null);
-      if (antigravityHit) {
-        antigravityCache.set(antigravityKey, {
-          ...antigravityHit,
-          checkedAt: now,
-          lastAttemptFailed: true,
+        const locked = await withClaudeSnapshotLock(snapshotPath, async () => {
+          const lockedHit = newestClaudeEntry(
+            claudeCache.get(home),
+            readClaudeSnapshot(snapshotPath),
+          );
+          if (
+            lockedHit
+            && lockedHit.updatedAt > observedUpdatedAt
+            && now - lockedHit.checkedAt < cacheMs
+          ) {
+            claudeCache.set(home, lockedHit);
+            return lockedHit.lastAttemptFailed
+              ? staleOfficial(usableClaudeSlice(lockedHit, now))
+              : lockedHit.slice;
+          }
+          return refreshClaude(lockedHit, true);
         });
+        if (locked.state === "acquired") {
+          return locked.value;
+        } else if (locked.state === "busy") {
+          const latest = newestClaudeEntry(
+            claudeCache.get(home),
+            readClaudeSnapshot(snapshotPath),
+          );
+          if (latest) claudeCache.set(home, latest);
+          return staleOfficial(usableClaudeSlice(latest, now));
+        } else {
+          return refreshClaude(claudeHit, false);
+        }
+      } catch {
+        return claudeHit?.lastAttemptFailed
+          ? staleOfficial(usableClaudeSlice(claudeHit, now))
+          : claudeHit?.slice ?? null;
       }
-    }
-  }
+    })(),
+
+    // Grok refresh
+    (async (): Promise<OfficialSlice | null> => {
+      if (grokFresh) return grokHit?.slice ?? null;
+      try {
+        let live: OfficialSlice | null = null;
+        const token = readGrokToken(grokHome);
+        if (token) live = await fetchGrokBilling(token, { fetchImpl: opts?.fetchImpl, now });
+        grokCache.set(grokHome, { at: now, slice: live });
+        return live;
+      } catch {
+        return grokHit?.slice ?? null;
+      }
+    })(),
+
+    // Codex refresh
+    (async (): Promise<OfficialSlice | null> => {
+      if (codexFresh) return codexHit?.slice ?? null;
+      try {
+        let live: OfficialSlice | null = null;
+        const auth = readCodexToken(codexHome);
+        if (auth) live = await fetchCodexUsage(auth, { fetchImpl: opts?.fetchImpl, now });
+        codexCache.set(codexHome, { at: now, slice: live });
+        return live;
+      } catch {
+        return codexHit?.slice ?? null;
+      }
+    })(),
+
+    // Antigravity refresh
+    (async (): Promise<OfficialSlice | null> => {
+      if (antigravityFresh) {
+        return antigravityHit?.lastAttemptFailed
+          ? staleOfficial(antigravityHit.slice)
+          : antigravityHit?.slice ?? null;
+      }
+      try {
+        let fetchResult: { slice: OfficialSlice | null; identity: string | null } = {
+          slice: null,
+          identity: null,
+        };
+        try {
+          fetchResult = await readAntigravity({ home, fetchImpl: opts?.fetchImpl, now });
+        } catch {
+          fetchResult = { slice: null, identity: null };
+        }
+        const returnedIdentity = fetchResult.identity;
+        const returnedKey = returnedIdentity ? `${home}\0${returnedIdentity}` : null;
+
+        if (returnedKey && returnedKey !== antigravityKey) {
+          if (antigravityKey) antigravityCache.delete(antigravityKey);
+          antigravityCacheKeyByHome.set(home, returnedKey);
+          antigravityKey = returnedKey;
+        }
+
+        if (fetchResult.slice) {
+          if (antigravityKey) {
+            antigravityCache.set(antigravityKey, {
+              checkedAt: now,
+              loadedAt: now,
+              slice: fetchResult.slice,
+              lastAttemptFailed: false,
+            });
+          }
+          return fetchResult.slice;
+        } else if (returnedKey == null && antigravityKey) {
+          antigravityCacheKeyByHome.delete(home);
+          const stale = staleOfficial(antigravityHit?.slice ?? null);
+          if (antigravityHit && antigravityKey) {
+            antigravityCache.set(antigravityKey, {
+              ...antigravityHit,
+              checkedAt: now,
+              lastAttemptFailed: true,
+            });
+          }
+          return stale;
+        } else {
+          const stale = staleOfficial(antigravityHit?.slice ?? null);
+          if (antigravityHit && antigravityKey) {
+            antigravityCache.set(antigravityKey, {
+              ...antigravityHit,
+              checkedAt: now,
+              lastAttemptFailed: true,
+            });
+          }
+          return stale;
+        }
+      } catch {
+        return antigravityHit?.lastAttemptFailed
+          ? staleOfficial(antigravityHit.slice)
+          : antigravityHit?.slice ?? null;
+      }
+    })(),
+  ]);
 
   return {
     claude: mergeClaudeSources(claudeLive),

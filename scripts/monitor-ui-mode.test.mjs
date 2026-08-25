@@ -96,3 +96,15 @@ test("Antigravity uses an official-only card with its own visual tone", () => {
   assert.match(styles, /--color-antigravity:/);
   assert.match(styles, /--antigravity:/);
 });
+
+test("antigravity usage wiring connects watch, dashboard, and agent card", () => {
+  const watch = read("src/lib/quota/watch.ts");
+  const dashboard = read("src/components/balance/dashboard.tsx");
+  const agentCard = read("src/components/balance/agent-card.tsx");
+  assert.match(watch, /export const pullAntigravityUsage/);
+  assert.match(dashboard, /pullAntigravityUsage/);
+  assert.match(dashboard, /pollAntigravityUsage/);
+  assert.match(dashboard, /antigravityUsageEvents=/);
+  assert.match(agentCard, /antigravityUsageEvents\?: AntigravityUsageEvent\[\]/);
+  assert.match(agentCard, /antigravityUsageTruncated\?: boolean/);
+});
