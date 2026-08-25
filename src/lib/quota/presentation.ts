@@ -1,4 +1,8 @@
-import { formatDuration } from "./engine.ts";
+import {
+  formatDuration,
+  type MeterDataSource,
+  type MeterDataSources,
+} from "./engine.ts";
 import type { OfficialQuotaPool } from "./official.ts";
 import type { ProductQuotaValue, QuotaValue } from "./quota-value.ts";
 import type { AgentId, MeterSnapshot } from "./types.ts";
@@ -147,6 +151,47 @@ export function primaryWindowLabel(kind: PrimaryWindowKind): "5 小时窗" | "�
 
 export function primaryWindowResetsAt(meter: MeterSnapshot, kind: PrimaryWindowKind): number {
   return kind === "weekly" ? meter.weekResetsAt : meter.windowResetsAt;
+}
+
+export interface PrimaryMeterWindow {
+  kind: PrimaryWindowKind;
+  pct: number;
+  resetsAt: number;
+}
+
+export function tightestMeterWindow(
+  meter: MeterSnapshot,
+  kinds: readonly PrimaryWindowKind[] = ["five_hour", "weekly"],
+): PrimaryMeterWindow | null {
+  const first = kinds[0];
+  if (!first) return null;
+  const kind = kinds.slice(1).reduce(
+    (selected, candidate) =>
+      primaryUsagePercent(meter, candidate) >= primaryUsagePercent(meter, selected)
+        ? candidate
+        : selected,
+    first,
+  );
+  return {
+    kind,
+    pct: primaryUsagePercent(meter, kind),
+    resetsAt: primaryWindowResetsAt(meter, kind),
+  };
+}
+
+export function officialPrimaryMeterWindow(
+  meter: MeterSnapshot,
+  sources: MeterDataSources,
+): PrimaryMeterWindow | null {
+  const kindsFor = (source: MeterDataSource): PrimaryWindowKind[] => [
+    ...(sources.window === source ? ["five_hour" as const] : []),
+    ...(sources.week === source ? ["weekly" as const] : []),
+  ];
+  const freshKinds = kindsFor("official");
+  return tightestMeterWindow(
+    meter,
+    freshKinds.length ? freshKinds : kindsFor("official-stale"),
+  );
 }
 
 export function effectiveQuotaStatus(

@@ -131,7 +131,7 @@ function officialSlice(partial = {}) {
   };
 }
 
-function antigravityOfficialSlice() {
+function antigravityOfficialSlice(partial = {}) {
   const fetchedAt = E2E_NOW;
   const weekReset = E2E_NOW + 4 * 24 * 60 * 60 * 1000;
   const fiveHourReset = E2E_NOW + 3 * 60 * 60 * 1000;
@@ -166,7 +166,26 @@ function antigravityOfficialSlice() {
     ],
     source: "antigravity-quota-summary",
     fetchedAt,
+    ...partial,
   });
+}
+
+function antigravityAlertScenario(slice) {
+  return {
+    persistVersion: 3,
+    cardHeading: "Antigravity",
+    availability: { claude: false, grok: false, codex: false, antigravity: true },
+    state: {
+      minimalMode: true,
+      alertWindowPct: 80,
+      alertWeekPct: 85,
+      agentAvailability: { claude: false, grok: false, codex: false, antigravity: true },
+      captureEnabled: { claude: false, grok: false, codex: false, antigravity: false },
+    },
+    official: { claude: null, grok: null, codex: null, antigravity: slice },
+    present: [],
+    absent: [],
+  };
 }
 
 function cachedQuotaEvent(event) {
@@ -290,6 +309,47 @@ const SCENARIOS = {
     },
     present: [],
     absent: [],
+  },
+  "antigravity-alert-five-hour": {
+    ...antigravityAlertScenario(antigravityOfficialSlice({
+      windowPct: 90,
+      weekPct: 34,
+      quotaPools: [],
+    })),
+    expectedAlertMessage: "Antigravity 5 小时窗已用 90%",
+    expectedAlertLatch: "antigravityWin",
+    expectedInactiveAlertLatch: "antigravityWeek",
+  },
+  "antigravity-alert-week": {
+    ...antigravityAlertScenario(antigravityOfficialSlice({
+      windowPct: 10,
+      weekPct: 90,
+      quotaPools: [],
+    })),
+    expectedAlertMessage: "Antigravity 本周额度已用 90%",
+    expectedAlertLatch: "antigravityWeek",
+    expectedInactiveAlertLatch: "antigravityWin",
+  },
+  "antigravity-alert-week-only": {
+    ...antigravityAlertScenario(antigravityOfficialSlice({
+      windowKind: "weekly",
+      windowPct: null,
+      weekPct: 90,
+      quotaPools: [],
+    })),
+    expectedAlertMessage: "Antigravity 本周额度已用 90%",
+    expectedAlertLatch: "antigravityWeek",
+    expectedInactiveAlertLatch: "antigravityWin",
+  },
+  "antigravity-alert-stale": {
+    ...antigravityAlertScenario(antigravityOfficialSlice({
+      windowPct: 90,
+      weekPct: 90,
+      windowStale: true,
+      weekStale: true,
+      quotaPools: [],
+    })),
+    expectNoAlerts: true,
   },
   partial: {
     official: {
@@ -829,14 +889,22 @@ async function runScenario(browser, scenarioName, viewportName) {
       }
     }
     if (scenario.antigravityGeek) {
+      const minimalPrimary = await card
+        .getByTestId("quota-antigravity-primary-remaining")
+        .textContent();
+      assert.equal(minimalPrimary, "38%");
       assert.equal(
-        await card.getByTestId("quota-antigravity-week-remaining").textContent(),
-        "38%",
+        await page.getByTestId("tightest-quota-remaining").textContent(),
+        minimalPrimary,
       );
       assert.equal(await card.getByRole("button", { name: /采集|暂停/ }).count(), 0);
       await page.getByRole("button", { name: "设置" }).click();
       await page.getByRole("switch", { name: "极客模式" }).click();
       await page.getByRole("button", { name: "监控" }).click();
+      assert.equal(
+        await card.getByTestId("quota-antigravity-primary-remaining").textContent(),
+        minimalPrimary,
+      );
       for (const label of [
         "Gemini Models · 每周（官方）",
         "Gemini Models · 5 小时（官方）",

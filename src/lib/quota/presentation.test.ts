@@ -11,6 +11,7 @@ import {
   formatCredits,
   formatWeekResetHint,
   formatWeekResetLabel,
+  officialPrimaryMeterWindow,
   primaryUsagePercent,
   primaryWindowLabel,
   primaryWindowResetsAt,
@@ -18,6 +19,7 @@ import {
   quotaAlertLatch,
   quotaPoolLabel,
   tightestQuota,
+  tightestMeterWindow,
 } from "./presentation.ts";
 import type { QuotaValue } from "./quota-value.ts";
 import type { MeterSnapshot } from "./types.ts";
@@ -210,6 +212,88 @@ test("tightest quota includes a stricter Fable sub-limit", () => {
     { label: "Claude Fable 5", pct: 80, resetsAt: 20 },
   ]);
   assert.deepEqual(result, { label: "Claude Fable 5", pct: 80, resetsAt: 20 });
+});
+
+test("tightest meter window selects one shared Antigravity primary", () => {
+  assert.deepEqual(
+    tightestMeterWindow(
+      meter({
+        agent: "antigravity",
+        windowPct: 0.1,
+        weekPct: 15,
+        windowResetsAt: 10,
+        weekResetsAt: 20,
+      }),
+      ["five_hour", "weekly"],
+    ),
+    { kind: "weekly", pct: 15, resetsAt: 20 },
+  );
+  assert.deepEqual(
+    tightestMeterWindow(
+      meter({
+        agent: "antigravity",
+        windowPct: 88,
+        weekPct: 15,
+        windowResetsAt: 10,
+        weekResetsAt: 20,
+      }),
+      ["five_hour", "weekly"],
+    ),
+    { kind: "five_hour", pct: 88, resetsAt: 10 },
+  );
+});
+
+test("tightest meter window respects the official windows that actually exist", () => {
+  assert.equal(
+    tightestMeterWindow(
+      meter({ agent: "antigravity", windowPct: 0, weekPct: 0 }),
+      ["five_hour"],
+    )?.kind,
+    "five_hour",
+  );
+  assert.equal(
+    tightestMeterWindow(
+      meter({ agent: "antigravity", windowPct: 90, weekPct: 80 }),
+      [],
+    ),
+    null,
+  );
+});
+
+test("official primary prefers fresh data before comparing stale snapshots", () => {
+  assert.deepEqual(
+    officialPrimaryMeterWindow(
+      meter({
+        agent: "antigravity",
+        windowPct: 90,
+        weekPct: 15,
+        windowResetsAt: 10,
+        weekResetsAt: 20,
+      }),
+      { window: "official-stale", week: "official" },
+    ),
+    { kind: "weekly", pct: 15, resetsAt: 20 },
+  );
+  assert.deepEqual(
+    officialPrimaryMeterWindow(
+      meter({
+        agent: "antigravity",
+        windowPct: 90,
+        weekPct: 15,
+        windowResetsAt: 10,
+        weekResetsAt: 20,
+      }),
+      { window: "official-stale", week: "official-stale" },
+    ),
+    { kind: "five_hour", pct: 90, resetsAt: 10 },
+  );
+  assert.equal(
+    officialPrimaryMeterWindow(
+      meter({ agent: "antigravity", windowPct: 90, weekPct: 15 }),
+      { window: "local-estimate", week: "local-estimate" },
+    ),
+    null,
+  );
 });
 
 test("Antigravity has stable labels and routing advice never calls it Codex", () => {

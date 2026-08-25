@@ -29,6 +29,7 @@ import { inferCodexProPlanId } from "@/lib/quota/estimate";
 import type { OfficialSlice } from "@/lib/quota/official";
 import { planById } from "@/lib/quota/plans";
 import {
+  officialPrimaryMeterWindow,
   primaryUsagePercent,
   primaryWindowResetsAt,
   quotaAlertDecision,
@@ -490,13 +491,21 @@ export function Dashboard() {
   }[];
   const primaryMeters = allPrimaryMeters.filter(({ meter }) => visibleAgents.includes(meter.agent));
   const primaryLimits = primaryMeters.flatMap(({ meter, kind, sources }) => {
-    const primarySource = kind === "weekly" ? sources.week : sources.window;
+    const selected = meter.agent === "antigravity"
+      ? officialPrimaryMeterWindow(meter, sources)
+      : {
+          kind,
+          pct: primaryUsagePercent(meter, kind),
+          resetsAt: primaryWindowResetsAt(meter, kind),
+        };
+    if (!selected) return [];
+    const primarySource = selected.kind === "weekly" ? sources.week : sources.window;
     if (!demoMode && primarySource !== "official") return [];
     return [
       {
         label: AGENT_LABEL[meter.agent],
-        pct: primaryUsagePercent(meter, kind),
-        resetsAt: primaryWindowResetsAt(meter, kind),
+        pct: selected.pct,
+        resetsAt: selected.resetsAt,
       },
     ];
   });
@@ -625,7 +634,10 @@ export function Dashboard() {
                 <Card className="flex h-full flex-col justify-between gap-5">
                   <div className="flex flex-col gap-2">
                     <p className="text-xs text-mute">更紧的窗口</p>
-                    <p className="font-mono text-4xl leading-none font-medium tracking-tight tabular">
+                    <p
+                      data-testid="tightest-quota-remaining"
+                      className="font-mono text-4xl leading-none font-medium tracking-tight tabular"
+                    >
                       {Math.max(0, 100 - tighterPct).toFixed(0)}
                       <span className="ml-1 text-lg text-mute">%</span>
                     </p>

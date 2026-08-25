@@ -29,6 +29,8 @@ import {
   formatCredits,
   formatWeekResetHint,
   formatWeekResetLabel,
+  officialPrimaryMeterWindow,
+  primaryUsagePercent,
   quotaPoolLabel,
   type QuotaPoolView,
 } from "@/lib/quota/presentation";
@@ -119,13 +121,17 @@ export function AgentCard({
   const tone = meter.agent;
   const usageAgent = isUsageAgentId(meter.agent) ? meter.agent : null;
   const shares = usageAgent ? modelShares(events, usageAgent, now, WEEK_MS) : [];
-  const weeklyView = minimalMode
-    ? officialOnly
-      ? meter.weekPct >= meter.windowPct
-      : true
-    : windowLabel === "本周额度";
+  const officialPrimary = officialPrimaryMeterWindow(meter, quotaSources);
+  const primaryKind = officialOnly
+    ? officialPrimary?.kind ?? "weekly"
+    : minimalMode || windowLabel === "本周额度"
+      ? "weekly"
+      : "five_hour";
+  const weeklyView = primaryKind === "weekly";
   const weekMeterLabel = minimalMode ? "本周额度" : quotaSourceLabel("本周额度", quotaSources.week);
-  const primaryPct = weeklyView ? meter.weekPct : meter.windowPct;
+  const primaryPct = officialOnly
+    ? officialPrimary?.pct ?? 0
+    : primaryUsagePercent(meter, primaryKind);
   const remain = Math.max(0, 100 - primaryPct);
   const weighted = (usageAgent ? inWindow(events, now, WINDOW_MS, usageAgent) : []).reduce(
     (s, e) => s + weightedTokens(e),
@@ -141,7 +147,6 @@ export function AgentCard({
     weekWeightedTokens: weekWeighted,
     weekValue,
   });
-  const primaryKind = weeklyView ? "weekly" : "five_hour";
   const primarySource = primaryKind === "weekly" ? quotaSources.week : quotaSources.window;
   const freshMeter = officialOnlyMeter(meter, quotaSources);
   const freshPoolPcts = (quotaPools ?? []).flatMap(({ valuation }) => {
@@ -229,7 +234,10 @@ export function AgentCard({
   const creditL1 = formatCreditL1(weekValue);
   const parallel = parallelTaskSummary(activeTasks ?? [], live);
   const weekReset = formatWeekResetLabel(weekResetsAt, now);
-  const weekResetHint = formatWeekResetHint(weekResetsAt, now);
+  const primaryResetHint = formatWeekResetHint(
+    officialPrimary?.resetsAt ?? (weeklyView ? weekResetsAt : meter.windowResetsAt),
+    now,
+  );
   const estimatedWeekUsage =
     weekValue && weekValue.confidence !== "none"
       ? formatUsdRange(weekValue.totalLowUsd, weekValue.totalHighUsd)
@@ -276,7 +284,13 @@ export function AgentCard({
             {minimalMode ? (weeklyView ? "本周剩余" : `${windowLabel}剩余`) : primaryRemainingLabel}
           </p>
           <p
-            data-testid={minimalMode ? `quota-${meter.agent}-${weeklyView ? "week" : "window"}-remaining` : undefined}
+            data-testid={
+              officialOnly
+                ? `quota-${meter.agent}-primary-remaining`
+                : minimalMode
+                  ? `quota-${meter.agent}-${weeklyView ? "week" : "window"}-remaining`
+                  : undefined
+            }
             aria-label={
               minimalMode
                 ? officialUnavailable
@@ -343,26 +357,71 @@ export function AgentCard({
           <p className="rounded-xl bg-raised px-3 py-3 text-sm text-mute">
             暂未读取到官方额度
           </p>
+        ) : minimalMode ? (
+          <div>
+            <MeterBar
+              value={primaryPct}
+              tone={
+                minimalStatus === "critical"
+                  ? "crit"
+                  : minimalStatus === "watch"
+                    ? "warn"
+                    : "ok"
+              }
+              label={weeklyView ? "本周额度" : windowLabel}
+            />
+            {primaryResetHint ? (
+              <p className="mt-1.5 text-xs text-faint">
+                <time
+                  data-testid={`quota-${meter.agent}-${weeklyView ? "week" : "window"}-reset`}
+                  dateTime={primaryResetHint.dateTime}
+                  title={primaryResetHint.title}
+                  aria-label={`${primaryResetHint.label}，${primaryResetHint.title}`}
+                >
+                  {primaryResetHint.label}
+                </time>
+              </p>
+            ) : null}
+          </div>
+        ) : officialOnly ? (
+          <>
+            <MeterBar
+              value={meter.windowPct}
+              tone={
+                quotaSources.window === "official"
+                  ? meter.windowPct >= 88
+                    ? "crit"
+                    : meter.windowPct >= 68
+                      ? "warn"
+                      : tone
+                  : tone
+              }
+              label={quotaSourceLabel(windowLabel, quotaSources.window)}
+            />
+            <MeterBar
+              value={meter.weekPct}
+              tone={
+                quotaSources.week === "official"
+                  ? meter.weekPct >= 88
+                    ? "crit"
+                    : meter.weekPct >= 72
+                      ? "warn"
+                      : tone
+                  : tone
+              }
+              label={weekMeterLabel}
+              detail={weekReset}
+            />
+            <QuotaPoolRows rows={quotaPools ?? []} tone={tone} now={now} />
+          </>
         ) : weeklyView ? (
           <div>
             <MeterBar
               value={meter.weekPct}
               tone={weeklyTone}
-              label={minimalMode ? "本周额度" : weekMeterLabel}
-              detail={minimalMode ? null : weekReset}
+              label={weekMeterLabel}
+              detail={weekReset}
             />
-            {minimalMode && weekResetHint ? (
-              <p className="mt-1.5 text-xs text-faint">
-                <time
-                  data-testid={`quota-${meter.agent}-week-reset`}
-                  dateTime={weekResetHint.dateTime}
-                  title={weekResetHint.title}
-                  aria-label={`${weekResetHint.label}，${weekResetHint.title}`}
-                >
-                  {weekResetHint.label}
-                </time>
-              </p>
-            ) : null}
           </div>
         ) : (
           <>
